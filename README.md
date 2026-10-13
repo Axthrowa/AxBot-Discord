@@ -52,6 +52,7 @@ MEE6, Carl-bot ve Ticket Tool'un temel özelliklerini tek, hafif bir Rust botund
 | Takviye teşekkürü | (panelden, Topluluk) | Sunucuya takviye yapana seçilen kanalda teşekkür mesajı ({kullanıcı}, {sayı}…) ve isteğe bağlı ek rol |
 | Roller | `/rol otomatik · panel · bilgi · süreli-ver · süreli-al · süreliler` | Yeni üyelere otomatik rol, butonlu rol paneli, rol bilgisi; **süreli rol**: süre dolunca kendiliğinden geri alınır (bot kapalıyken dolanlar açılışta) |
 | Çekiliş | `/çekiliş başlat · bitir · yeniden-çek` · (panelden) | Butonla katılım, süre dolunca otomatik çekiliş; katılım şartları (gereken rol, en az seviye, hesap yaşı) ve katılımı 2 kez sayılan ek şans rolü |
+| Film / dizi / oyun önerisi | `/tavsiye film · dizi · oyun · ara` | feelm.org'dan (SvelteKit `__data.json`) tür, yıl ve en düşük puana göre popüler ilk 210 içinden rastgele öneri; Türkçeye çevrilmiş özet, IMDb/TMDB/IGDB puanı, süre/sezon, çıkış tarihi; 🎲 Başka öner butonu; kanalda son 30 öneri tekrar edilmez; yetişkin içerik atlanır |
 | Vurgu bildirimi | `/vurgu ekle · sil · liste` | Üyenin seçtiği kelime (en fazla 10) görebildiği bir kanalda geçince özelden haber verilir; o kanalda son 5 dk'da yazdıysa ya da 5 dk içinde bildirim aldıysa verilmez |
 | Moderatör notları | `/üye-notu ekle · liste · sil` | Üyeye bildirilmeyen, yalnızca yetkililerin gördüğü notlar |
 | Klip kanalı (AxT Capture) | `/eğlence klipler` · (panelden) | Seçilen kanala gönderilen videolar sayılır ve sıralanır; AxT Capture'ın Discord webhook ayarına o kanalın webhook adresi yazılınca klipler tek tıkla gelir |

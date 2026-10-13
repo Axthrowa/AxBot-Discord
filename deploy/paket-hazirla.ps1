@@ -54,8 +54,10 @@ foreach ($item in @('.env', '.dockerignore', 'docker-compose.yml', 'Dockerfile',
 }
 New-Item -ItemType Directory -Force (Join-Path $pkg 'deploy') | Out-Null
 Copy-Item (Join-Path $root 'deploy\docker-compose.sunucu.yml') (Join-Path $pkg 'deploy')
+Copy-Item (Join-Path $root 'deploy\docker-compose.ipv6.yml') (Join-Path $pkg 'deploy')
 Copy-Item (Join-Path $root 'deploy\paket\kur.sh') $pkg
 Copy-Item (Join-Path $root 'deploy\paket\BENIOKU.txt') $pkg
+Copy-Item (Join-Path $root 'deploy\paket\youtube-test.sh') $pkg
 
 Step 'Paketleniyor'
 & $tar -czf $archive -C $dist 'AxBot-sunucu'

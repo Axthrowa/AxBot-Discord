@@ -1,0 +1,14 @@
+# İsteğe bağlı: YouTube sunucunun IPv4 adresini engelleyip IPv6'yı engellemiyorsa (youtube-test.sh söyler).
+# /opt/axbot/ipv6-acik dosyası varsa kur.sh bunu da kullanır. Bota ayrı bir IPv6 ağı eklenir (mevcut ağ
+# değişmez) ve yt-dlp YouTube'a IPv6 ile gider. Docker Engine 27 veya yenisi gerekir.
+networks:
+  v6:
+    enable_ipv6: true
+
+services:
+  bot:
+    networks:
+      - default
+      - v6
+    environment:
+      YTDLP_FORCE_IPV6: "1"

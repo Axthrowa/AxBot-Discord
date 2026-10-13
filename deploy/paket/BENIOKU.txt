@@ -24,6 +24,12 @@ YARARLI KOMUTLAR (önce: cd /opt/axbot)
   Durdur:          docker compose stop bot
   Tekrar başlat:   docker compose start bot
 
+MÜZİK / YOUTUBE ENGELİ
+  Müzik "YouTube bu sunucunun IP adresini bot sanıp engelledi" derse:
+      cd /opt/axbot && sudo bash youtube-test.sh
+  Betik botu durdurmadan hangi yöntemin (YouTube istemcisi, IPv6, çerez) çalıştığını dener ve
+  ne yapılacağını yazar.
+
 GÜNCELLEME
   Yeni gelen paketi aynı şekilde açıp "sudo bash kur.sh" çalıştır. Veriler korunur.
 

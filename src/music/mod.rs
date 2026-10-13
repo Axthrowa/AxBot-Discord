@@ -111,6 +111,15 @@ pub struct Shared {
 #[derive(Clone)]
 pub struct Music(Arc<Shared>);
 
+impl Shared {
+    /// yt-dlp'ye verilen ortak argümanlar + (bulunduysa) engeli aşan YouTube istemcisi.
+    fn args(&self) -> Vec<String> {
+        let mut args = self.ytdlp_args.clone();
+        args.extend(client_args(preferred_client().as_deref()));
+        args
+    }
+}
+
 impl Deref for Music {
     type Target = Shared;
     fn deref(&self) -> &Shared {
@@ -143,6 +152,29 @@ pub fn is_playlist_url(query: &str) -> bool {
     (youtube && q.contains("list=")) || (q.contains("soundcloud.com/") && q.contains("/sets/"))
 }
 
+/// "Bot musun" engelinde sırayla denenen YouTube istemcileri. yt-dlp'nin PO Token rehberi `mweb` + PO token
+/// önerir; diğerleri farklı uçlar kullandığı için bazı veri merkezi IP'lerinde engele takılmaz.
+const FALLBACK_CLIENTS: [&str; 4] = ["mweb", "tv_simply", "web_embedded", "android_vr"];
+
+/// İşe yarayan istemci (bulunduysa); bütün yt-dlp çağrılarında kullanılır. `YTDLP_YOUTUBE_CLIENT` ile başlangıç değeri verilebilir.
+static PREFERRED_CLIENT: std::sync::LazyLock<std::sync::RwLock<Option<String>>> = std::sync::LazyLock::new(|| {
+    std::sync::RwLock::new(std::env::var("YTDLP_YOUTUBE_CLIENT").ok().map(|c| c.trim().to_owned()).filter(|c| !c.is_empty()))
+});
+
+fn preferred_client() -> Option<String> {
+    PREFERRED_CLIENT.read().ok().and_then(|c| c.clone())
+}
+
+fn set_preferred_client(client: &str) {
+    if let Ok(mut current) = PREFERRED_CLIENT.write() {
+        *current = Some(client.to_owned());
+    }
+}
+
+fn client_args(client: Option<&str>) -> Vec<String> {
+    client.map(|c| vec!["--extractor-args".to_owned(), format!("youtube:player_client={c}")]).unwrap_or_default()
+}
+
 /// yt-dlp hatası YouTube'un bot engeli mi? (veri merkezi IP'lerinde sık görülür)
 fn is_bot_block(error: &str) -> bool {
     error.contains("Sign in to confirm") || error.contains("not a bot")
@@ -161,6 +193,10 @@ fn server_ytdlp_args() -> Vec<String> {
     }
     if let Some(url) = var("YTDLP_POT_URL") {
         args.extend(["--extractor-args".to_owned(), format!("youtubepot-bgutilhttp:base_url={url}")]);
+    }
+    // Sunucunun IPv6 adresi engellenmemişse YouTube'a IPv6 ile gidilir (kapsayıcıda IPv6 açık olmalı).
+    if var("YTDLP_FORCE_IPV6").is_some_and(|v| v == "1") {
+        args.push("--force-ipv6".to_owned());
     }
     // Dosya konmadıysa sessizce geçilir (çerez isteğe bağlı).
     if let Some(path) = var("YTDLP_COOKIES").filter(|p| Path::new(p).is_file()) {
@@ -302,7 +338,7 @@ impl Music {
             .map(|t| {
                 let query = format!("{} - {}", t.artists, t.title);
                 let input: Input = YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), query.clone())
-                    .user_args(self.ytdlp_args.clone())
+                    .user_args(self.args())
                     .into();
                 let info = TrackInfo {
                     guild_id,
@@ -342,7 +378,7 @@ impl Music {
                     Some(url) => YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), url.clone()),
                     None => YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), t.title.clone()),
                 };
-                let input: Input = source.user_args(self.ytdlp_args.clone()).into();
+                let input: Input = source.user_args(self.args()).into();
                 let info = TrackInfo { guild_id, title: t.title, url, duration: None, thumbnail: None, requester, announce: false, spotify_url: None };
                 (input, info)
             })
@@ -454,13 +490,38 @@ impl Music {
     }
 
     /// yt-dlp'yi bir kez çalıştırır (sonuç çalarken de kullanılır, bkz. `prefetch`). Hata metni yt-dlp'ninkidir.
+    /// YouTube "bot musun" engeli verirse diğer istemciler sırayla denenir; işe yarayan hatırlanır.
     async fn fetch(&self, target: &str, search: bool) -> Result<(Input, songbird::input::AuxMetadata), String> {
+        let first = self.fetch_with(target, search, self.args()).await;
+        let Err(error) = first else { return first };
+        if !is_bot_block(&error) {
+            return Err(error);
+        }
+        let current = preferred_client();
+        for client in FALLBACK_CLIENTS.iter().filter(|c| current.as_deref() != Some(**c)) {
+            let mut args = self.ytdlp_args.clone();
+            args.extend(client_args(Some(client)));
+            match self.fetch_with(target, search, args).await {
+                Ok(found) => {
+                    info!(client, "YouTube bot engeli bu istemciyle aşıldı; bundan sonra o kullanılacak");
+                    set_preferred_client(client);
+                    return Ok(found);
+                }
+                Err(e) if is_bot_block(&e) => warn!(client, "YouTube istemcisi de engellendi"),
+                // Başka bir hata (bulunamadı vb.): engel aşılmış demektir, hata kullanıcıya gösterilir.
+                Err(e) => return Err(e),
+            }
+        }
+        Err(error)
+    }
+
+    async fn fetch_with(&self, target: &str, search: bool, args: Vec<String>) -> Result<(Input, songbird::input::AuxMetadata), String> {
         let source = if search {
             YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), target.to_owned())
         } else {
             YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), target.to_owned())
         }
-        .user_args(self.ytdlp_args.clone());
+        .user_args(args);
         prefetch::Prefetched::resolve(source).await.map_err(|e| e.to_string())
     }
 
@@ -502,7 +563,7 @@ impl Music {
         let output = tokio::time::timeout(
             PLAYLIST_TIMEOUT,
             Command::new(self.ytdlp)
-                .args(&self.ytdlp_args)
+                .args(self.args())
                 // Bir fazlası istenir: liste sınırdan uzun mu anlamak için.
                 .args(["--flat-playlist", "-J", "--no-warnings", "--playlist-end", &(limit + 1).to_string()])
                 .arg(url.trim())
@@ -530,7 +591,7 @@ impl Music {
             .into_iter()
             .map(|entry| {
                 let input: Input = YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), entry.url.clone())
-                    .user_args(self.ytdlp_args.clone())
+                    .user_args(self.args())
                     .into();
                 let info = TrackInfo {
                     guild_id,
@@ -555,7 +616,7 @@ impl Music {
         let output = tokio::time::timeout(
             SEARCH_TIMEOUT,
             Command::new(self.ytdlp)
-                .args(&self.ytdlp_args)
+                .args(self.args())
                 .args(["--flat-playlist", "-J", "--no-warnings"])
                 .arg(target)
                 .kill_on_drop(true)
@@ -970,7 +1031,7 @@ impl Shared {
             return;
         };
         let recent: Vec<String> = this.history.get(&guild_id).map(|h| h.iter().cloned().collect()).unwrap_or_default();
-        let next = match extra::related_track(this.ytdlp, &this.ytdlp_args, &seed, &recent).await {
+        let next = match extra::related_track(this.ytdlp, &this.args(), &seed, &recent).await {
             Ok(Some(next)) => next,
             Ok(None) => return,
             Err(e) => {
@@ -979,7 +1040,7 @@ impl Shared {
             }
         };
         let input: Input = YoutubeDl::new_ytdl_like(this.ytdlp, this.http.clone(), next.url.clone())
-            .user_args(this.ytdlp_args.clone())
+            .user_args(this.args())
             .into();
         let info = TrackInfo {
             guild_id,

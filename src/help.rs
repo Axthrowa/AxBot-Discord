@@ -88,6 +88,7 @@ pub const PAGES: &[Page] = &[
         body: "**`/oyun`**: `xox` · `dört-bağla` (rakip seçmezsen botla) · `adam-asmaca` (kanala harf yaz) · `bilgi-yarışması` · \
 `müzik-yarışması` (ses kanalında şarkıyı ilk bilen kazanır)\n\
 **`/eğlence`**: `8top soru:…` · `zar` · `seç seçenekler:pizza, döner` · `doğruluk-cesaret` · `anket` · `klipler`\n\
+**`/tavsiye`** (feelm.org): `film` · `dizi` · `oyun` — tür, yıl ve puana göre rastgele öneri, **🎲 Başka öner** butonu · `ara sorgu:…`\n\
 **`/hayvan`**: ayarlı kanalda arada bir hayvan belirir, **Yakala!** butonuna ilk basan alır → `koleksiyon` · `sıralama` · `liste`\n\
 **Kanal oyunları** (sunucu açtıysa): sayma oyunu (sırayla 1, 2, 3…), kelime zinciri (kelime öncekinin son harfiyle başlar)\n\
 **Diğer:** `/itiraf metin:…` adın görünmeden itiraf · `/öneri` sunucuya öneri gönder, diğerleri oylar",

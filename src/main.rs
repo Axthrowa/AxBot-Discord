@@ -26,6 +26,7 @@ mod error;
 mod eventlog;
 mod events;
 mod feeds;
+mod feelm;
 mod games;
 mod giveaway;
 mod greetings;

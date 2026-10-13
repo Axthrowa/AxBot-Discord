@@ -199,6 +199,8 @@ pub async fn handle(
                 crate::music::card::handle_button(ctx, &data.music, component).await?;
             } else if id.starts_with(crate::rsvp::PREFIX) {
                 crate::rsvp::handle_component(ctx, data, component).await?;
+            } else if id.starts_with(crate::commands::FEELM_PREFIX) {
+                crate::commands::handle_feelm(ctx, data, component).await?;
             } else if id.starts_with(crate::commands::TOD_PREFIX) {
                 crate::commands::handle_tod(ctx, component).await?;
             }

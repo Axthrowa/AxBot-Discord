@@ -13,6 +13,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DIR=/opt/axbot
 DC="docker compose -f docker-compose.yml -f deploy/docker-compose.sunucu.yml"
+# youtube-test.sh "yalnızca IPv6 çalışıyor" derse: touch /opt/axbot/ipv6-acik ve kur.sh yeniden.
+[ -f "$DIR/ipv6-acik" ] && DC="$DC -f deploy/docker-compose.ipv6.yml"
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31mHATA: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -107,6 +109,7 @@ docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES
 find yedekler -name 'bot-*.dump' -mtime +7 -delete
 EOF
 chmod 700 "$DIR/yedek-al.sh"
+chmod 700 "$DIR/youtube-test.sh" 2>/dev/null || true
 if command -v crontab >/dev/null 2>&1; then
     ( crontab -l 2>/dev/null | grep -v '/opt/axbot/yedek-al.sh' || true
       echo "30 3 * * * /opt/axbot/yedek-al.sh >/dev/null 2>&1" ) | crontab -

@@ -22,6 +22,7 @@ mod panel;
 mod ping;
 mod planning;
 mod profile;
+mod recommend;
 mod roles;
 mod search;
 mod server;
@@ -41,6 +42,7 @@ use crate::data::Data;
 use crate::error::Error;
 
 pub use fun::{handle_tod, TOD_PREFIX};
+pub use recommend::{handle_component as handle_feelm, PREFIX as FEELM_PREFIX};
 
 pub fn all() -> Vec<poise::Command<Data, Error>> {
     let mut commands = every();
@@ -120,6 +122,7 @@ fn every() -> Vec<poise::Command<Data, Error>> {
         community::karsilama(),
         roles::rol(),
         highlight::vurgu(),
+        recommend::tavsiye(),
         community::koruma(),
         giveaway::cekilis(),
         utility::hatirlat(),
