@@ -383,9 +383,9 @@ impl Music {
     pub async fn resolve(&self, query: &str, requester: UserId, guild_id: GuildId) -> Result<(Input, TrackInfo), String> {
         let query = query.trim();
         let is_url = query.starts_with("http://") || query.starts_with("https://");
-        if is_url && !extra::is_public_url(query).await {
-            warn!(query, "Yerel ağ / geçersiz bağlantı reddedildi");
-            return Err("❌ Bu bağlantı çalınamaz. YouTube, Spotify, SoundCloud gibi herkese açık bir bağlantı ver.".to_owned());
+        if is_url && !(extra::is_media_site(query) && extra::is_public_url(query).await) {
+            warn!(query, "Desteklenmeyen / yerel ağ bağlantısı reddedildi");
+            return Err("❌ Bu bağlantı çalınamaz. YouTube, Spotify, SoundCloud, Bandcamp, Twitch gibi bilinen bir müzik/video sitesinin bağlantısını ver ya da şarkının adını yaz.".to_owned());
         }
 
         let source = if is_url {
@@ -458,7 +458,7 @@ impl Music {
 
     /// Çalma listesindeki parçaları okur (en fazla `limit` tane). Hata mesajı kullanıcıya gösterilir.
     pub async fn playlist(&self, url: &str, requester: UserId, guild_id: GuildId, limit: usize) -> Result<Playlist, String> {
-        if !extra::is_public_url(url).await {
+        if !(extra::is_media_site(url) && extra::is_public_url(url).await) {
             return Err("❌ Bu bağlantı okunamaz. Herkese açık bir YouTube / SoundCloud listesi ver.".to_owned());
         }
         let output = tokio::time::timeout(

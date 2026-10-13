@@ -125,16 +125,8 @@ pub async fn can_manage(state: &WebState, user: UserId, guild_id: GuildId) -> bo
             return entry.0;
         }
     }
-    let member = match state.cache.guild(guild_id).and_then(|g| g.members.get(&user).cloned()) {
-        Some(m) => Some(m),
-        None => guild_id.member(&state.http, user).await.ok(),
-    };
-    let mut allowed = member.as_ref().is_some_and(|m| {
-        state.cache.guild(guild_id).is_some_and(|g| {
-            use poise::serenity_prelude::Permissions;
-            g.owner_id == user || g.member_permissions(m).intersects(Permissions::ADMINISTRATOR | Permissions::MANAGE_GUILD)
-        })
-    });
+    let member = fetch_member(state, user, guild_id).await;
+    let mut allowed = member.as_ref().is_some_and(|m| is_admin_member(state, user, guild_id, m));
     // Panelden tanımlanan "bot yöneticisi" rolleri.
     if !allowed {
         if let (Some(member), Ok(settings)) = (&member, state.settings.get::<crate::community::CommunitySettings>(&state.db, guild_id).await) {
@@ -144,6 +136,33 @@ pub async fn can_manage(state: &WebState, user: UserId, guild_id: GuildId) -> bo
     state.panel.perm_cache.insert((user, guild_id), (allowed, Instant::now()));
     allowed
 }
+
+async fn fetch_member(state: &WebState, user: UserId, guild_id: GuildId) -> Option<poise::serenity_prelude::Member> {
+    match state.cache.guild(guild_id).and_then(|g| g.members.get(&user).cloned()) {
+        Some(m) => Some(m),
+        None => guild_id.member(&state.http, user).await.ok(),
+    }
+}
+
+fn is_admin_member(state: &WebState, user: UserId, guild_id: GuildId, member: &poise::serenity_prelude::Member) -> bool {
+    use poise::serenity_prelude::Permissions;
+    state.cache.guild(guild_id).is_some_and(|g| {
+        g.owner_id == user || g.member_permissions(member).intersects(Permissions::ADMINISTRATOR | Permissions::MANAGE_GUILD)
+    })
+}
+
+/// Yalnızca gerçek yöneticiler (bot sahibi, sunucu sahibi, Yönetici / Sunucuyu Yönet). "Bot yöneticisi" rolleri
+/// burada sayılmaz: kendi yetkilerini genişletebilecekleri ayarlar (yönetici rolleri, yıkım koruması) bunu kullanır.
+/// Önbelleğe alınmaz; bu sayfalar seyrek açılır ve yetki alındığında hemen etkili olmalı.
+pub async fn is_guild_admin(state: &WebState, user: UserId, guild_id: GuildId) -> bool {
+    if state.panel.is_owner(user) {
+        return state.cache.guild(guild_id).is_some();
+    }
+    fetch_member(state, user, guild_id).await.is_some_and(|m| is_admin_member(state, user, guild_id, &m))
+}
+
+/// Yalnızca gerçek yöneticilerin açabileceği eklenti sayfaları.
+pub const ADMIN_ONLY_PLUGINS: &[&str] = &["ayarlar", "yikim-korumasi"];
 
 pub fn router() -> Router<WebState> {
     Router::new()

@@ -61,7 +61,7 @@ MEE6, Carl-bot ve Ticket Tool'un temel özelliklerini tek, hafif bir Rust botund
 | Kişisel rütbe kartı | `/kartım ayarla · sıfırla` | Üye kendi `/seviye` kartının vurgu rengini, arka plan resmini ve yazı tipini seçer; yöneticiler başkasınınkini sıfırlayabilir |
 | Bot profili | (panelden) | Botun sunucuya özel takma adı, avatarı, afişi ve hakkında yazısı; durum ve etkinlik yazısı (bot sahibi, Sistem sayfası) |
 | Yayın | `/yayın ekle · sil · liste` | Twitch / Kick canlı yayın duyurusu |
-| Müzik | `/çal · geç · durdur · duraklat · devam · şimdi · sıra · ses · döngü · karıştır · ayrıl` | YouTube araması/bağlantısı, Spotify (şarkı/albüm/liste → YouTube'da aranır), SoundCloud, çalma listeleri (100 şarkıya kadar); 5 dk boşta kalınca veya kanal boşalınca ayrılır |
+| Müzik | `/çal · geç · durdur · duraklat · devam · şimdi · sıra · ses · döngü · karıştır · ayrıl` | YouTube araması/bağlantısı, Spotify (şarkı/albüm/liste → YouTube'da aranır), SoundCloud; bağlantılar güvenlik için yalnızca bilinen müzik/video sitelerinden (YouTube, Spotify, SoundCloud, Bandcamp, Twitch, Vimeo…) kabul edilir; çalma listeleri (100 şarkıya kadar); 5 dk boşta kalınca veya kanal boşalınca ayrılır |
 | Müzik+ | `/müzik 7-24 · otomatik · radyo · sözler · sar · sil · taşı · dj-rol · liste-kaydet · liste-çal · listelerim · liste-sil` | 7/24 modu, benzer şarkılarla otomatik çalma (YouTube Mix), 7 canlı radyo, lrclib şarkı sözleri; DJ rolü (kontrol komutlarını role kısıtlar); kişiye özel kayıtlı çalma listeleri (10 liste, 50'şer şarkı); `/müzik söyle` yazdığını ses kanalında sesli okur (200 karakter) |
 
 ## Çalıştırma

@@ -414,7 +414,10 @@ async fn send_tag(ctx: &serenity::Context, data: &Data, guild_id: GuildId, msg: 
     }
     match data.tags.for_message(&data.db, guild_id, &msg.content).await {
         Ok(Some(content)) => {
-            if let Err(e) = msg.channel_id.say(&ctx.http, content).await {
+            // Etiketi "Mesajları Yönet" izni olan biri yazar; @everyone / rol etiketi bot üzerinden çalışmasın
+            // (yazanın kendi etiketleme izni olmayabilir) ve herkes `!ad` ile tekrar tekrar tetikleyebilir.
+            let message = serenity::CreateMessage::new().content(content).allowed_mentions(serenity::CreateAllowedMentions::new());
+            if let Err(e) = msg.channel_id.send_message(&ctx.http, message).await {
                 debug!(channel = %msg.channel_id, error = %e, "Etiket gönderilemedi");
             }
             true
@@ -490,6 +493,25 @@ async fn award_xp(ctx: &serenity::Context, data: &Data, guild_id: GuildId, msg: 
         }
     }
 
+    // Rol sonradan yönetici yetkisi almış olabilir: verirken yeniden denetlenir (önbellek kilidi `await`'ten önce bırakılır).
+    let earned: Vec<RoleId> = {
+        let roles: Vec<serenity::Role> = ctx
+            .cache
+            .guild(guild_id)
+            .map(|g| earned.iter().filter_map(|r| g.roles.get(r).cloned()).collect())
+            .unwrap_or_default();
+        roles
+            .into_iter()
+            .filter(|role| match crate::rolepanel::check_role(ctx, guild_id, role) {
+                Ok(()) => true,
+                Err(reason) => {
+                    warn!(guild = %guild_id, role = %role.id, reason, "Seviye ödülü verilmedi");
+                    false
+                }
+            })
+            .map(|role| role.id)
+            .collect()
+    };
     let mut granted = Vec::new();
     for role in earned {
         match ctx

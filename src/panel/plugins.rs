@@ -692,7 +692,9 @@ pub async fn page(
     let (Some(guild_id), Some(plugin)) = (parse_guild(guild), find(&slug)) else {
         return forbidden();
     };
-    if !can_manage(&state, session.user, guild_id).await {
+    if !can_manage(&state, session.user, guild_id).await
+        || (super::ADMIN_ONLY_PLUGINS.contains(&plugin.slug) && !super::is_guild_admin(&state, session.user, guild_id).await)
+    {
         return forbidden();
     }
     let Some(options) = Options::load(&state, guild_id) else {
@@ -857,7 +859,9 @@ pub async fn save(
     let (Some(guild_id), Some(plugin)) = (parse_guild(guild), find(&slug)) else {
         return forbidden();
     };
-    if !can_manage(&state, session.user, guild_id).await {
+    if !can_manage(&state, session.user, guild_id).await
+        || (super::ADMIN_ONLY_PLUGINS.contains(&plugin.slug) && !super::is_guild_admin(&state, session.user, guild_id).await)
+    {
         return forbidden();
     }
     let back = |code: &str| Redirect::to(&format!("/panel/sunucu/{guild_id}/eklenti/{}?durum={code}", plugin.slug)).into_response();

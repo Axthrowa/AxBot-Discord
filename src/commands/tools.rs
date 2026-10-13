@@ -112,6 +112,9 @@ async fn duyuru_gonder(
     if let Some(problem) = cannot_send(ctx_any, &kanal) {
         return reply_private(ctx_any, problem).await;
     }
+    if let Some(problem) = author_problem(ctx_any, kanal.id, role.as_ref()).await {
+        return reply_private(ctx_any, problem).await;
+    }
     let colour = match renk.as_deref() {
         None => serenity::Colour::BLURPLE,
         Some(raw) => match parse_colour(raw) {
@@ -133,6 +136,32 @@ async fn duyuru_gonder(
         Err(e) => return reply_private(ctx_any, format!("❌ Gönderilemedi: {e}")).await,
     };
     reply_private(ctx_any, format!("✅ Duyuru gönderildi: {}\n_Düzenlemek için `/duyuru düzenle` ile bu bağlantıyı kullan._", sent.link())).await
+}
+
+/// Komutu kullanan üye bu kanala KENDİSİ yazabiliyor mu, rolü kendisi etiketleyebiliyor mu?
+/// Bot daha yetkili olduğundan bu denetlenmezse "Mesajları Yönet" izni olan biri göremediği kanallara
+/// bot adına yazabilir, oradaki bot mesajlarını okuyup değiştirebilir ya da etiketlenemeyen rolleri etiketletebilir.
+async fn author_problem(ctx: Context<'_>, channel: serenity::ChannelId, role: Option<&serenity::Role>) -> Option<String> {
+    let Some(member) = ctx.author_member().await else {
+        return Some("❌ Üyelik bilgin alınamadı, tekrar dene.".to_owned());
+    };
+    let guild = ctx.guild()?;
+    let Some(target) = guild.channels.get(&channel) else {
+        return Some("❌ Bu kanal bu sunucuda bulunamadı.".to_owned());
+    };
+    let perms = guild.user_permissions_in(target, &member);
+    if !perms.contains(serenity::Permissions::VIEW_CHANNEL | serenity::Permissions::SEND_MESSAGES) {
+        return Some(format!("❌ {} kanalına senin yazma iznin yok.", channel.mention()));
+    }
+    if let Some(role) = role {
+        if !role.mentionable && !perms.contains(serenity::Permissions::MENTION_EVERYONE) {
+            return Some(format!(
+                "❌ {} rolünü etiketleme iznin yok (rol etiketlenebilir değil ve sende “@everyone, @here ve Tüm Rollerden Bahset” izni yok).",
+                role.id.mention()
+            ));
+        }
+    }
+    None
 }
 
 /// "https://discord.com/channels/<sunucu>/<kanal>/<mesaj>" → (kanal, mesaj)
@@ -157,6 +186,10 @@ async fn duyuru_duzenle(
     let Some((channel, message_id)) = parse_message_link(&link) else {
         return reply_private(ctx_any, "❌ Geçerli bir mesaj bağlantısı değil.").await;
     };
+    // Mesaj okunmadan önce: başka sunucunun ya da üyenin göremediği bir kanalın içeriği gösterilmez.
+    if let Some(problem) = author_problem(ctx_any, channel, None).await {
+        return reply_private(ctx_any, problem).await;
+    }
     let message = match channel.message(ctx, message_id).await {
         Ok(m) => m,
         Err(_) => return reply_private(ctx_any, "❌ Mesaj bulunamadı (silinmiş veya göremediğim bir kanalda olabilir).").await,

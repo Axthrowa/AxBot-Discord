@@ -178,6 +178,10 @@ async fn odul_ekle(
     if rol.id == guild_id.everyone_role() {
         return reply(ctx, "❌ @everyone ödül olarak verilemez.".to_owned()).await;
     }
+    // Yönetici/moderasyon yetkili bir rol XP kasılarak elde edilmesin (panel de aynı rolleri gizler).
+    if let Err(reason) = crate::rolepanel::check_role(ctx.serenity_context(), guild_id, &rol) {
+        return reply(ctx, format!("❌ {reason}")).await;
+    }
 
     let data = ctx.data();
     data.leveling.set_reward(&data.db, guild_id, seviye, rol.id).await?;

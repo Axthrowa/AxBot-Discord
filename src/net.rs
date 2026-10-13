@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use hickory_resolver::config::{LookupIpStrategy, ResolverConfig};
-use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::{system_conf, TokioResolver};
 use poise::serenity_prelude as serenity;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
@@ -43,18 +43,18 @@ impl Resolve for Ipv4FirstResolver {
 fn resolver() -> anyhow::Result<TokioResolver> {
     let (system, mut options) = system_conf::read_system_conf().context("sistem DNS ayarları okunamadı")?;
     let mut config = ResolverConfig::from_parts(system.domain().cloned(), system.search().to_vec(), vec![]);
-    for server in system.name_servers().iter().filter(|s| s.socket_addr.is_ipv4()) {
+    for server in system.name_servers().iter().filter(|s| s.ip.is_ipv4()) {
         config.add_name_server(server.clone());
     }
     if config.name_servers().is_empty() {
-        config = ResolverConfig::cloudflare();
+        config = ResolverConfig::udp_and_tcp(&hickory_resolver::config::CLOUDFLARE);
     }
     options.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
     options.timeout = Duration::from_secs(2);
 
-    let mut builder = TokioResolver::builder_with_config(config, TokioConnectionProvider::default());
+    let mut builder = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default());
     *builder.options_mut() = options;
-    Ok(builder.build())
+    builder.build().context("DNS çözücü kurulamadı")
 }
 
 /// Tüm süreçte tek çözücü: önbelleği HTTP istemcisiyle ortaktır.

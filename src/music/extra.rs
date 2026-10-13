@@ -418,6 +418,27 @@ fn is_public_ip(ip: std::net::IpAddr) -> bool {
     }
 }
 
+/// `/çal` bağlantılarında kabul edilen siteler (alt alan adları dahil).
+/// yt-dlp yönlendirmeleri kendisi izler; rastgele bir adres herkese açık görünüp sonra iç ağa
+/// (ör. bulut sunucusunun 169.254.169.254 bilgi servisine) yönlendirebilir. Bu yüzden yalnızca bilinen müzik/video siteleri.
+pub const MEDIA_HOSTS: &[&str] = &[
+    "youtube.com", "youtu.be", "youtube-nocookie.com", "soundcloud.com", "spotify.com", "spotify.link", "bandcamp.com",
+    "vimeo.com", "twitch.tv", "kick.com", "mixcloud.com", "dailymotion.com", "deezer.com", "audiomack.com",
+    "tiktok.com", "x.com", "twitter.com", "instagram.com", "reddit.com", "archive.org", "bilibili.com", "nicovideo.jp",
+];
+
+/// Bağlantı `MEDIA_HOSTS` listesindeki bir siteye mi ait?
+pub fn is_media_site(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
+        return false;
+    };
+    let Some(url::Host::Domain(host)) = parsed.host() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    MEDIA_HOSTS.iter().any(|known| host == *known || host.ends_with(&format!(".{known}")))
+}
+
 /// Kullanıcının verdiği bağlantı yt-dlp'ye verilebilir mi? Sadece http(s) ve sadece herkese açık
 /// adresler: aksi halde biri `/çal http://127.0.0.1:...` ile botun iç servislerine istek attırabilir.
 pub async fn is_public_url(url: &str) -> bool {
@@ -448,6 +469,30 @@ pub async fn is_public_url(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_only_known_media_sites() {
+        for good in [
+            "https://www.youtube.com/watch?v=abc",
+            "https://youtu.be/abc",
+            "https://music.youtube.com/watch?v=abc",
+            "https://open.spotify.com/track/1",
+            "https://soundcloud.com/a/b",
+            "https://artist.bandcamp.com/track/x",
+        ] {
+            assert!(is_media_site(good), "{good} kabul edilmeliydi");
+        }
+        for bad in [
+            "https://evil.example/redirect",
+            "https://youtube.com.evil.example/",
+            "https://notyoutube.com/x",
+            "http://169.254.169.254/latest",
+            "https://127.0.0.1/a",
+            "çal bunu",
+        ] {
+            assert!(!is_media_site(bad), "{bad} reddedilmeliydi");
+        }
+    }
 
     #[tokio::test]
     async fn rejects_private_urls() {
