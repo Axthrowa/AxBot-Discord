@@ -25,6 +25,8 @@ use tracing::{debug, info, warn};
 use crate::settings::{PluginConfig, PluginSettings};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// Çevrilemeyen haber en fazla bu kadar tur (10 dk arayla ≈ 1 saat) yeniden denenir; sonra gönderilmez.
+const MAX_TRANSLATE_TRIES: u8 = 6;
 /// Kaynak başına bir turda en fazla bu kadar yeni haber işlenir.
 const MAX_NEW_PER_SOURCE: usize = 3;
 /// Bundan eski haberler (yayın tarihine göre) duyurulmaz.
@@ -705,6 +707,7 @@ async fn poll(news: &NewsContext) {
     }
     let (_, hour, today, _) = turkey_now();
     for (guild_id, settings) in &guilds {
+        retry_untranslated(news, *guild_id, settings).await;
         if hour == settings.digest_hour {
             crate::newsprefs::daily_digests(news, *guild_id, &today).await;
         }
@@ -901,7 +904,8 @@ pub async fn render(news: &NewsContext, item: &NewsItem, target: Option<&str>, d
     // Yalnızca çeviri gerekiyorsa (özet istenmiyor) doğrudan Google Çeviri: hızlı ve yeterli.
     if !details {
         let Some(code) = translate else { return original };
-        let rendered = machine_rendered(item, code).await.unwrap_or(original);
+        // Çeviri başarısızsa önbelleğe yazılmaz; bir sonraki denemede yeniden çevrilir.
+        let Some(rendered) = machine_rendered(item, code).await else { return original };
         cache_rendered(news, &key, &rendered).await;
         return rendered;
     }
@@ -953,20 +957,47 @@ async fn machine_rendered(item: &NewsItem, target: &str) -> Option<Rendered> {
 /// Botun genel istemcisi (HTTP/2) Google'a "otomatik trafik" görünüp 429 alıyor; tarayıcı gibi istemci kullanılır.
 pub async fn machine_translate(text: &str, target: &str) -> Option<String> {
     let text: String = text.chars().take(1500).collect();
-    let response = crate::net::plain_client()
-        .ok()?
+    // Ücretsiz uç ara sıra 429 / zaman aşımı veriyor: kısa aralıklarla üç deneme.
+    let mut last_error = String::new();
+    for (attempt, wait) in [0u64, 2, 5].into_iter().enumerate() {
+        if wait > 0 {
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+        }
+        match google_translate(&text, target).await {
+            Ok(Some(translated)) => return Some(translated),
+            Ok(None) => return None,
+            Err(e) => {
+                debug!(attempt, error = %e, "Google Çeviri yanıt vermedi, yeniden denenecek");
+                last_error = e.to_string();
+            }
+        }
+    }
+    warn!(error = %last_error, "Google Çeviri üç denemede de yanıt vermedi");
+    None
+}
+
+/// Tek çeviri isteği. `Ok(None)`: yanıt geldi ama çeviri boş.
+async fn google_translate(text: &str, target: &str) -> anyhow::Result<Option<String>> {
+    let response = crate::net::plain_client()?
         .get("https://translate.googleapis.com/translate_a/single")
-        .query(&[("client", "gtx"), ("sl", "auto"), ("tl", target), ("dt", "t"), ("q", text.as_str())])
+        .query(&[("client", "gtx"), ("sl", "auto"), ("tl", target), ("dt", "t"), ("q", text)])
         .timeout(Duration::from_secs(10))
         .send()
-        .await
-        .ok()?
-        .error_for_status()
-        .ok()?;
-    let value: serde_json::Value = response.json().await.ok()?;
-    let translated: String = value.get(0)?.as_array()?.iter().filter_map(|part| part.get(0)?.as_str()).collect();
+        .await?
+        .error_for_status()?;
+    let value: serde_json::Value = response.json().await?;
+    let translated: String = value
+        .get(0)
+        .and_then(|v| v.as_array())
+        .map(|parts| parts.iter().filter_map(|part| part.get(0)?.as_str()).collect())
+        .unwrap_or_default();
     let translated = translated.trim().to_owned();
-    (!translated.is_empty()).then_some(translated)
+    Ok((!translated.is_empty()).then_some(translated))
+}
+
+/// Haberin çevrilmesi gerekiyordu ama çevrilemedi mi? (o zaman yabancı dilde gönderilmez, sonra yeniden denenir)
+pub fn untranslated(item: &NewsItem, target: Option<&str>, rendered: &Rendered) -> bool {
+    target.is_some_and(|t| t != item.lang && !item.lang.is_empty()) && rendered.translated_to.is_empty()
 }
 
 /// Yapay zekâ cevabı: ilk satır başlık, gerisi özet.
@@ -1025,7 +1056,8 @@ pub fn news_embed(category: &Category, source: &str, item: &NewsItem, rendered: 
         Style::Full => {
             let body = match &rendered.summary {
                 Some(text) => text.clone(),
-                None if item.excerpt.is_empty() => String::new(),
+                // Başlık çevrildi ama açıklama çevrilemedi: yabancı dildeki açıklama konmaz.
+                None if item.excerpt.is_empty() || !rendered.translated_to.is_empty() => String::new(),
                 None => item.excerpt.clone(),
             };
             let mut description = body;
@@ -1069,8 +1101,18 @@ async fn deliver(news: &NewsContext, guild_id: GuildId, settings: &NewsSettings,
 
 /// Haberi hemen gönderir (anlık gönderim ve ilk açılış örneği).
 async fn send_now(news: &NewsContext, guild_id: GuildId, settings: &NewsSettings, category: &Category, source: &str, item: &NewsItem) {
-    let Some(channel) = settings.channel_for(category.key) else { return };
     let rendered = render(news, item, settings.target_language(), settings.ai_details && settings.style == Style::Full, Duration::from_secs(15)).await;
+    if untranslated(item, settings.target_language(), &rendered) {
+        queue_retry(news, guild_id, category, source, item, 0).await;
+        return;
+    }
+    post(news, guild_id, settings, category, source, item, &rendered).await;
+}
+
+/// Hazırlanmış haberi kanala gönderir.
+async fn post(news: &NewsContext, guild_id: GuildId, settings: &NewsSettings, category: &Category, source: &str, item: &NewsItem, rendered: &Rendered) {
+    let Some(channel) = settings.channel_for(category.key) else { return };
+    let rendered = rendered.clone();
     let embed = news_embed(category, source, item, &rendered, settings.style);
     let mut message = CreateMessage::new().embed(embed).allowed_mentions(CreateAllowedMentions::new());
     if let Some(role) = settings.role_for(category.key) {
@@ -1093,6 +1135,15 @@ struct Pending {
 async fn queue_for_digest(news: &NewsContext, guild_id: GuildId, settings: &NewsSettings, category: &Category, source: &str, item: &NewsItem) {
     // Toplu listede yalnızca başlık gerekir; çeviri istenmişse başlık (ve kısa açıklama) çevrilir.
     let rendered = render(news, item, settings.target_language(), false, Duration::from_secs(25)).await;
+    if untranslated(item, settings.target_language(), &rendered) {
+        queue_retry(news, guild_id, category, source, item, 0).await;
+        return;
+    }
+    push_pending(news, guild_id, category, source, item, &rendered).await;
+}
+
+async fn push_pending(news: &NewsContext, guild_id: GuildId, category: &Category, source: &str, item: &NewsItem, rendered: &Rendered) {
+    let rendered = rendered.clone();
     let pending = Pending { category: category.key.to_owned(), title: rendered.title, link: item.link.clone(), source: source.to_owned() };
     let Ok(json) = serde_json::to_string(&pending) else { return };
     let key = format!("haber:bekleyen:{guild_id}");
@@ -1103,6 +1154,60 @@ async fn queue_for_digest(news: &NewsContext, guild_id: GuildId, settings: &News
         .cmd("EXPIRE").arg(&key).arg(3 * 86_400).ignore()
         .query_async(&mut conn)
         .await;
+}
+
+#[derive(Serialize, Deserialize)]
+struct Retry {
+    category: String,
+    source: String,
+    item: NewsItem,
+    tries: u8,
+}
+
+fn retry_key(guild_id: GuildId) -> String {
+    format!("haber:ceviri-bekleyen:{guild_id}")
+}
+
+/// Çevrilemeyen haberi sonraki turda yeniden denemek üzere saklar.
+async fn queue_retry(news: &NewsContext, guild_id: GuildId, category: &Category, source: &str, item: &NewsItem, tries: u8) {
+    let retry = Retry { category: category.key.to_owned(), source: source.to_owned(), item: item.clone(), tries };
+    let Ok(json) = serde_json::to_string(&retry) else { return };
+    let key = retry_key(guild_id);
+    let mut conn = news.redis.clone();
+    let _: redis::RedisResult<()> = redis::pipe()
+        .cmd("RPUSH").arg(&key).arg(json).ignore()
+        .cmd("LTRIM").arg(&key).arg(-50).arg(-1).ignore()
+        .cmd("EXPIRE").arg(&key).arg(6 * 3600).ignore()
+        .query_async(&mut conn)
+        .await;
+    debug!(guild = %guild_id, title = item.title, tries, "Haber çevrilemedi, sonra yeniden denenecek");
+}
+
+/// Önceki turlarda çevrilemeyen haberleri yeniden dener: çevrilirse gönderir, olmazsa (sınıra kadar) yeniden sıraya koyar.
+async fn retry_untranslated(news: &NewsContext, guild_id: GuildId, settings: &NewsSettings) {
+    let key = retry_key(guild_id);
+    let mut conn = news.redis.clone();
+    let Ok((raw, ())): Result<(Vec<String>, ()), _> = redis::pipe().cmd("LRANGE").arg(&key).arg(0).arg(-1).cmd("DEL").arg(&key).ignore().query_async(&mut conn).await else {
+        return;
+    };
+    for retry in raw.iter().filter_map(|r| serde_json::from_str::<Retry>(r).ok()) {
+        let Some(category) = category(&retry.category) else { continue };
+        let details = settings.delivery == Delivery::Instant && settings.ai_details && settings.style == Style::Full;
+        let rendered = render(news, &retry.item, settings.target_language(), details, Duration::from_secs(15)).await;
+        if untranslated(&retry.item, settings.target_language(), &rendered) {
+            if retry.tries + 1 < MAX_TRANSLATE_TRIES {
+                queue_retry(news, guild_id, category, &retry.source, &retry.item, retry.tries + 1).await;
+            } else {
+                warn!(guild = %guild_id, title = retry.item.title, "Haber bir saat boyunca çevrilemediği için gönderilmedi");
+            }
+            continue;
+        }
+        match settings.delivery {
+            Delivery::Instant => post(news, guild_id, settings, category, &retry.source, &retry.item, &rendered).await,
+            Delivery::Daily => push_pending(news, guild_id, category, &retry.source, &retry.item, &rendered).await,
+        }
+        crate::newsprefs::dispatch(news, guild_id, settings, category, &retry.source, &retry.item).await;
+    }
 }
 
 /// Türkiye saatiyle (gün 0 = Pazartesi, saat, tarih, "yıl-hafta").
@@ -1220,10 +1325,18 @@ pub async fn weekly_embed(news: &NewsContext, category: &Category, settings: &Ne
             }
         }
     }
-    // Yapay zekâ yoksa: en yeni 10 başlık.
-    let description = text.unwrap_or_else(|| {
-        entries.iter().take(10).map(|e| format!("• [{}]({}) — {}", e.title.chars().take(120).collect::<String>(), e.link, e.source)).collect::<Vec<_>>().join("\n")
-    });
+    // Yapay zekâ yoksa: en yeni 10 başlık (gerekirse çevrilerek).
+    let description = match text {
+        Some(text) => text,
+        None => {
+            let mut lines = Vec::new();
+            for e in entries.iter().take(10) {
+                let title = title_in(news, &e.title, &e.lang, settings.target_language()).await;
+                lines.push(format!("• [{}]({}) — {}", title.chars().take(120).collect::<String>(), e.link, e.source));
+            }
+            lines.join("\n")
+        }
+    };
     Some(
         CreateEmbed::new()
             .title(format!("{} Haftanın {} özeti", category.emoji, category.name.to_lowercase()))
@@ -1258,6 +1371,19 @@ pub async fn render_for_command(news: &NewsContext, item: &NewsItem, settings: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn foreign_news_without_translation_is_held_back() {
+        let item = NewsItem { title: "Hello".to_owned(), lang: "en".to_owned(), ..NewsItem::default() };
+        let original = Rendered { title: "Hello".to_owned(), ..Rendered::default() };
+        let translated = Rendered { title: "Merhaba".to_owned(), translated_to: "tr".to_owned(), ..Rendered::default() };
+        assert!(untranslated(&item, Some("tr"), &original));
+        assert!(!untranslated(&item, Some("tr"), &translated));
+        // Orijinal dil istenmişse ya da haber zaten Türkçeyse çeviri gerekmez.
+        assert!(!untranslated(&item, None, &original));
+        let turkish = NewsItem { lang: "tr".to_owned(), ..item };
+        assert!(!untranslated(&turkish, Some("tr"), &original));
+    }
     use anyhow::Context as _;
 
     const RSS: &str = r#"<?xml version="1.0"?><rss><channel><title>Site</title>

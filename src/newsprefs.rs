@@ -272,6 +272,10 @@ pub async fn dispatch(news: &NewsContext, guild_id: GuildId, settings: &NewsSett
     let link_hash = news::link_hash(&item.link);
     // Çeviri (gerekirse) bir kez yapılır; sonuç zaten önbellekte.
     let rendered = news::render(news, item, settings.target_language(), false, Duration::from_secs(15)).await;
+    // Çevrilemediyse özelden de yabancı dilde gönderilmez (kanal için yeniden denenince buraya tekrar gelir).
+    if news::untranslated(item, settings.target_language(), &rendered) {
+        return;
+    }
     for (user, mode) in subs {
         // Aynı haber birden çok sunucudan gelse de bir kez.
         if !first_time(news, format!("haber:dm:{user}:{link_hash:x}"), 3 * 86_400).await {
