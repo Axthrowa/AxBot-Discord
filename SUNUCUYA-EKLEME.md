@@ -7,7 +7,7 @@ kayıtları ayrıdır; bir sunucudaki ayar diğerini etkilemez.
 
 Bu bağlantıyı aç ve listeden arkadaşının sunucusunu seç (gerekli izinler seçili gelir):
 
-https://discord.com/oauth2/authorize?client_id=1557460476525420605&scope=bot+applications.commands&permissions=1477757496567
+https://discord.com/oauth2/authorize?client_id=1557460476525420605&scope=bot+applications.commands&permissions=1488092261623
 
 - Listede sunucuyu görmek için o sunucuda **Sunucuyu Yönet** iznin olmalı. Yoksa bağlantıyı
   arkadaşına gönder, o eklesin.
