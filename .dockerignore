@@ -1,0 +1,14 @@
+# Derleme bağlamına sadece kaynak kod girsin; gizli bilgiler ve büyük klasörler asla imaja kopyalanmasın.
+target
+logs
+.env
+.env.*
+.git
+scripts
+searxng
+docker-compose*.yml
+Dockerfile
+dist
+deploy
+tools
+*.md

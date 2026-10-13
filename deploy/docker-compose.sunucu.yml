@@ -1,0 +1,12 @@
+# Sunucuda (7/24) docker-compose.yml'nin üstüne eklenir (deploy/sunucuya-gonder.ps1 kendisi ekler).
+#
+# Veritabanı, Redis ve SearXNG sunucuda dışarıya hiç port açmaz: bot onlara Docker'ın iç ağından
+# bağlanır. Böylece sunucuda başka bir PostgreSQL / Redis zaten çalışıyorsa port çakışması da olmaz.
+# (`!reset` için Docker Compose 2.24 veya yenisi gerekir.)
+services:
+  postgres:
+    ports: !reset []
+  redis:
+    ports: !reset []
+  searxng:
+    ports: !reset []

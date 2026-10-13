@@ -1,0 +1,6 @@
+Noto Sans yazı tipleri (https://github.com/notofonts) SIL Open Font License 1.1 ile dağıtılır.
+Şarkı kartı görselinde (src/music/render.rs) kullanılır.
+
+Poppins (Indian Type Foundry), PT Serif (ParaType) ve Pacifico (Vernon Adams ve ekibi) yazı tipleri de
+SIL Open Font License 1.1 ile dağıtılır (https://github.com/google/fonts). Karşılama ve rütbe kartlarında
+seçilebilen yazı tipleridir (src/cards.rs).

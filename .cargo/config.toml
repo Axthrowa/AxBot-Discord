@@ -1,0 +1,6 @@
+# Bu bilgisayara özel derleme ayarları.
+# Müzik (songbird → libopus) C kütüphanesini CMake ile derler. CMake, Visual Studio Build Tools
+# ile birlikte gelir ama PATH'te değildir; burada yolu gösteriliyor. Sistem PATH'i değişmez.
+# Docker derlemesi bu dosyayı kullanmaz (orada CMake apt ile kurulur).
+[env]
+CMAKE = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'

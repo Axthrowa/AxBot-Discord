@@ -1,0 +1,106 @@
+[package]
+name = "discord-bot"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+# Discord
+poise = "0.6"
+serenity = { version = "0.12", default-features = false, features = [
+    "builder",
+    "cache",
+    "chrono",
+    "client",
+    "gateway",
+    "http",
+    "model",
+    "utils",
+    "rustls_backend",
+] }
+
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+
+# Hata yönetimi
+anyhow = "1"
+thiserror = "2"
+
+# Loglama
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
+# Dosyaya log: arka plan thread'inde yazar (async thread'ler disk I/O ile bloklanmaz)
+tracing-appender = "0.2"
+
+# Veri katmanı
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "macros",
+    "migrate",
+    "chrono",
+    "json",
+] }
+redis = { version = "1.7", features = ["tokio-comp", "connection-manager"] }
+
+# Auto-mod / önbellek
+regex = "1"
+dashmap = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Müzik: Discord ses (DAVE şifrelemeli) + ses çözme (saf Rust, ffmpeg gerekmez)
+songbird = { version = "0.6", default-features = false, features = [
+    "driver",
+    "gateway",
+    "serenity",
+    "rustls",
+    "tungstenite",
+    "builtin-queue",
+] }
+symphonia = { version = "0.5", features = ["aac", "mp3", "isomp4", "alac"] }
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+# HTTP / DNS (serenity'nin kullandığı reqwest ile aynı sürüm olmalı)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
+url = "2"
+hickory-resolver ={ version = "0.25", default-features = false, features = ["tokio", "system-config"] }
+
+# Şarkı kartı görseli (kapak + ilerleme çubuğu resim olarak çizilir)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+imageproc = { version = "0.25", default-features = false }
+ab_glyph = "0.2"
+
+# Web sunucusu: yönetim paneli (/panel) ve ban itirazı formu (/itiraz)
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "form", "query", "json"] }
+
+# Web panelinde botun bellek kullanımı (Windows + Linux)
+memory-stats = "1"
+
+# Arka plan döngülerinde paniği yakalamak (`supervise.rs`)
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+# Zaman (yapay zekâya güncel tarih vermek için)
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# Yapılandırma
+dotenvy = "0.15"
+
+# Sadece testte: müzik kartı ikonlarını (assets/icons/src/*.svg, Lucide, ISC) PNG'ye çevirmek için
+# (`cargo test render_icon_pngs -- --ignored`). Bota girmez.
+[dev-dependencies]
+resvg = "0.48"
+
+# Üretim derlemesi: en yüksek optimizasyon, tek parça link-time optimization, küçük binary.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+# Sembol ve satır bilgisi tutulur: panik olursa logdaki iz kaydı dosya/satırı gösterir (hıza etkisi yok).
+strip = "none"
+debug = "line-tables-only"
+# panic = "unwind" (varsayılan) bilerek bırakıldı: bir tokio görevi panik yaparsa
+# sadece o görev düşer, bot çalışmaya devam eder.

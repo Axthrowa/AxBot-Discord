@@ -1,0 +1,33 @@
+AxBot — sunucuya kurulum
+========================
+
+Gerekenler: Linux sunucu (Ubuntu / Debian önerilir), root veya sudo yetkisi,
+~1 GB boş RAM, ~4 GB boş disk. Dışarıya port açmaya gerek yok (bot Discord'a kendisi bağlanır).
+
+KURULUM
+1. AxBot-sunucu.tar.gz dosyasını sunucuya yükle (örneğin /root klasörüne).
+2. Sunucuda sırayla:
+       tar -xzf AxBot-sunucu.tar.gz
+       cd AxBot-sunucu
+       sudo bash kur.sh
+3. Sonda "AxBot çalışıyor ✅" yazarsa tamamdır. Yüklenen paket klasörü silinebilir.
+
+- Docker yoksa betik kendisi kurar (Ubuntu/Debian).
+- Bot /opt/axbot klasörüne kurulur ve kendi Docker kutularında çalışır; sunucudaki diğer
+  programlara ve portlara dokunmaz.
+- Sunucu yeniden başlarsa bot kendiliğinden açılır.
+- Her gece 03:30'da veritabanı yedeği /opt/axbot/yedekler klasörüne alınır (son 7 gün).
+
+YARARLI KOMUTLAR (önce: cd /opt/axbot)
+  Loglar:          docker compose logs -f bot          (çıkmak için Ctrl+C)
+  Yeniden başlat:  docker compose restart bot
+  Durdur:          docker compose stop bot
+  Tekrar başlat:   docker compose start bot
+
+GÜNCELLEME
+  Yeni gelen paketi aynı şekilde açıp "sudo bash kur.sh" çalıştır. Veriler korunur.
+
+KALDIRMA (veriler de silinir!)
+  cd /opt/axbot && docker compose --profile docker down -v && rm -rf /opt/axbot
+
+ÖNEMLİ: .env dosyasında botun gizli anahtarları var. Kimseyle paylaşma, herkese açık yere yükleme.
