@@ -97,6 +97,13 @@ pub const PLUGINS: &[Plugin] = &[
         group: "Temel",
     },
     Plugin {
+        slug: "discord-automod",
+        icon: "🧱",
+        name: "Discord AutoMod",
+        about: "Discord'un kendi filtreleri: mesaj gönderilmeden engellenir, bot kapalıyken de korur.",
+        group: "Temel",
+    },
+    Plugin {
         slug: "yikim-korumasi",
         icon: "🚨",
         name: "Yıkım koruması",
@@ -320,6 +327,7 @@ pub struct Extra {
     pub invites: bool,
     pub modmail: bool,
     pub antinuke: bool,
+    pub native_automod: bool,
     pub tags: bool,
     pub economy: bool,
     pub stats: bool,
@@ -354,6 +362,7 @@ impl Extra {
             invites: crate::invites::leaderboard(db, guild_id, 1).await.is_ok_and(|top| !top.is_empty()),
             modmail: settings.get::<crate::modmail::ModmailSettings>(db, guild_id).await.is_ok_and(|s| s.channel.is_some()),
             antinuke: settings.get::<crate::antinuke::AntiNukeSettings>(db, guild_id).await.is_ok_and(|s| s.enabled),
+            native_automod: settings.get::<crate::nativeautomod::NativeAutomodSettings>(db, guild_id).await.is_ok_and(|s| s.is_active()),
             tags: state.tags.all(db, guild_id).await.is_ok_and(|t| !t.is_empty()),
             economy: crate::economy::shop(db, guild_id).await.is_ok_and(|items| !items.is_empty()),
             stats: crate::statchannels::count(db, guild_id).await.is_ok_and(|n| n > 0),
@@ -389,6 +398,7 @@ fn is_enabled(slug: &str, cfg: &GuildConfig, extra: Extra) -> bool {
         "davetler" => extra.invites,
         "modmail" => extra.modmail,
         "yikim-korumasi" => extra.antinuke,
+        "discord-automod" => extra.native_automod,
         "etiketler" => extra.tags,
         "ekonomi" => extra.economy,
         "sayaclar" => extra.stats,
@@ -669,6 +679,7 @@ fn flash(code: Option<&str>) -> &'static str {
         Some("anahtar") => "<div class=\"flash err\">❌ Bu platformun anahtarları tanımlı değil. Bot sahibi .env dosyasına Twitch / Kick anahtarlarını yazmalı.</div>",
         Some("kopru") => "<div class=\"flash err\">❌ X, Instagram ve TikTok için RSS köprüsü tanımlı değil. Bot sahibi .env dosyasına RSS_BRIDGE_URL yazıp botu yeniden başlatmalı.</div>",
         Some("akis") => "<div class=\"flash err\">❌ Kaynak okunamadı. Ad ya da adres doğru mu, herkese açık bir RSS/Atom akışı mı?</div>",
+        Some("automod") => "<div class=\"flash err\">❌ Discord AutoMod kurallarından biri uygulanamadı (ayrıntı Loglar sayfasında). Botun 'Sunucuyu Yönet' izni var mı? Sunucuda zaten Discord'un kendi hazır filtre ya da spam kuralı varsa önce onu kapat.</div>",
         Some("limit") => "<div class=\"flash err\">❌ Liste çok uzun; bazı öğeleri kaldır.</div>",
         Some("oturum") => "<div class=\"flash err\">❌ Oturum doğrulanamadı; sayfayı yenileyip tekrar dene.</div>",
         Some("hata") => "<div class=\"flash err\">❌ Kaydedilemedi; biraz sonra tekrar dene.</div>",
@@ -733,6 +744,7 @@ pub async fn page(
         "davetler" => Some(super::community::invite_fields(&state, guild_id).await),
         "modmail" => Some(super::manage::modmail_fields(&state, guild_id, &options).await),
         "yikim-korumasi" => Some(super::manage::antinuke_fields(&state, guild_id, &options).await),
+        "discord-automod" => Some(super::moderation::native_fields(&state, guild_id, &options).await),
         "etiketler" => Some(super::manage::tag_fields(&state, guild_id).await),
         "ekonomi" => Some(super::manage::economy_fields(&state, guild_id, &options).await),
         "sayaclar" => Some(super::manage::stat_fields(&state, guild_id, &options).await),
@@ -898,6 +910,7 @@ pub async fn save(
         "davetler" => Some(Ok(())),
         "modmail" => Some(super::manage::modmail_save(&state, guild_id, &input).await),
         "yikim-korumasi" => Some(super::manage::antinuke_save(&state, guild_id, &input).await),
+        "discord-automod" => Some(super::moderation::native_save(&state, guild_id, &input).await),
         "etiketler" => Some(super::manage::tag_save(&state, guild_id, &input).await),
         "ekonomi" => Some(super::manage::economy_save(&state, guild_id, &input).await),
         "sayaclar" => Some(super::manage::stat_save(&state, guild_id, &input).await),
@@ -994,7 +1007,7 @@ mod tests {
             assert!(seen.insert(plugin.slug));
             assert!(!is_enabled(plugin.slug, &cfg, Extra::default()));
             // Bu eklentilerin formu kendi modülünde (veritabanı okur).
-            let own_module = ["karsilama", "dogrulama", "seviye", "moderasyon", "kayitlar", "tepki-rol", "ozel-komutlar", "zamanlayici", "gomulu-mesaj", "otomasyon", "basarimlar", "dogum-gunu", "biletler", "sosyal", "haberler", "yz", "bot", "topluluk", "ayarlar", "yayinlar", "otocevap", "davetler", "modmail", "yikim-korumasi", "etiketler", "ekonomi", "sayaclar", "basvurular", "gecici-odalar", "anket", "cekilis", "ek-starboard", "muzik"];
+            let own_module = ["karsilama", "dogrulama", "seviye", "moderasyon", "kayitlar", "tepki-rol", "ozel-komutlar", "zamanlayici", "gomulu-mesaj", "otomasyon", "basarimlar", "dogum-gunu", "biletler", "sosyal", "haberler", "yz", "bot", "topluluk", "ayarlar", "yayinlar", "otocevap", "davetler", "modmail", "yikim-korumasi", "discord-automod", "etiketler", "ekonomi", "sayaclar", "basvurular", "gecici-odalar", "anket", "cekilis", "ek-starboard", "muzik"];
             if !own_module.contains(&plugin.slug) {
                 assert!(!form_fields(plugin.slug, &cfg, &options).is_empty(), "form yok: {}", plugin.slug);
             }

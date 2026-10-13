@@ -8,7 +8,8 @@ use std::time::Duration;
 use chrono::{NaiveDate, NaiveDateTime};
 use poise::serenity_prelude::{
     self as serenity, ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow, CreateAllowedMentions, CreateButton, CreateEmbed, CreateEmbedFooter,
-    CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, EditMessage, GuildId, MessageId, UserId,
+    CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, CreateScheduledEvent, EditMessage, GuildId, MessageId,
+    ScheduledEventId, ScheduledEventType, UserId,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -27,6 +28,8 @@ const MAX_AHEAD_SECS: i64 = 366 * 86_400;
 const TICK: Duration = Duration::from_secs(60);
 /// Hatırlatmada en fazla bu kadar kişi etiketlenir.
 const MAX_PINGS: usize = 50;
+/// Discord etkinliğinin süresi (harici etkinliklerde bitiş zamanı zorunlu).
+const DISCORD_EVENT_LENGTH_SECS: i64 = 2 * 3600;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -43,6 +46,8 @@ pub struct Event {
     pub maybe: Vec<u64>,
     pub declined: Vec<u64>,
     pub reminded: bool,
+    /// Discord'un kendi etkinlik listesinde (sunucu adının altındaki "Etkinlikler") açılan kopyası.
+    pub discord_event: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,7 +186,8 @@ pub async fn create(
     title: String,
     description: Option<String>,
     start: i64,
-) -> Result<u32, &'static str> {
+    discord_event: bool,
+) -> Result<(u32, Option<String>), &'static str> {
     let current = settings.get::<EventSettings>(db, guild_id).await.map_err(|_| "Etkinlikler okunamadı.")?;
     if current.events.len() >= MAX_EVENTS {
         return Err("Aynı anda en fazla 20 etkinlik olabilir; eskilerden iptal et.");
@@ -192,11 +198,35 @@ pub async fn create(
     let sent = channel.send_message(http, message).await.map_err(|_| "Etkinlik mesajı gönderilemedi; botun o kanalda mesaj gönderme ve bağlantı yerleştirme izni olmalı.")?;
     event.message = sent.id.get();
     let id = event.id;
+    // Discord'un kendi etkinlik listesine de eklenir (üyeler "İlgileniyorum" der, Discord kendisi hatırlatır).
+    let mut note = None;
+    if discord_event {
+        match create_discord_event(http, guild_id, &event, &sent.link()).await {
+            Ok(created) => event.discord_event = Some(created.get()),
+            Err(e) => {
+                warn!(guild = %guild_id, error = %e, "Discord etkinliği oluşturulamadı");
+                note = Some("Discord etkinlik listesine eklenemedi; botun 'Etkinlikleri Yönet' izni olmalı.".to_owned());
+            }
+        }
+    }
     // Gönderim sırasında liste değişmiş olabilir: güncel hâli alınır.
     let mut updated = (*settings.get::<EventSettings>(db, guild_id).await.map_err(|_| "Etkinlik kaydedilemedi.")?).clone();
     updated.events.push(event);
     settings.set(db, guild_id, updated).await.map_err(|_| "Etkinlik kaydedilemedi.")?;
-    Ok(id)
+    Ok((id, note))
+}
+
+async fn create_discord_event(http: &serenity::Http, guild_id: GuildId, event: &Event, link: &str) -> anyhow::Result<ScheduledEventId> {
+    let start = serenity::Timestamp::from_unix_timestamp(event.start)?;
+    let end = serenity::Timestamp::from_unix_timestamp(event.start + DISCORD_EVENT_LENGTH_SECS)?;
+    let mut builder = CreateScheduledEvent::new(ScheduledEventType::External, event.title.chars().take(100).collect::<String>(), start)
+        .end_time(end)
+        .location(link.chars().take(100).collect::<String>())
+        .audit_log_reason("/etkinlik oluştur");
+    if let Some(description) = event.description.as_deref().filter(|d| !d.trim().is_empty()) {
+        builder = builder.description(description.chars().take(1000).collect::<String>());
+    }
+    Ok(guild_id.create_scheduled_event(http, builder).await?.id)
 }
 
 /// Etkinliği iptal eder: kaydı siler, mesajı "iptal edildi" olarak günceller.
@@ -207,6 +237,11 @@ pub async fn cancel(http: &serenity::Http, db: &PgPool, settings: &PluginSetting
     };
     let event = updated.events.remove(position);
     settings.set(db, guild_id, updated).await?;
+    if let Some(discord) = event.discord_event.filter(|id| *id != 0) {
+        if let Err(e) = guild_id.delete_scheduled_event(http, ScheduledEventId::new(discord)).await {
+            warn!(guild = %guild_id, error = %e, "Discord etkinliği silinemedi (elle silinmiş olabilir)");
+        }
+    }
     let embed = CreateEmbed::new().title(format!("🚫 İptal edildi: {}", event.title)).colour(serenity::Colour::DARK_GREY);
     let edit = EditMessage::new().embed(embed).components(Vec::new());
     if let Err(e) = ChannelId::new(event.channel.max(1)).edit_message(http, MessageId::new(event.message.max(1)), edit).await {

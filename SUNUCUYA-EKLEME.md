@@ -33,7 +33,7 @@ Her satırın yanında o özelliği açan komut yazar.
 | Moderasyon logu | `/log-kanalı kanal:#mod-log` |
 | Sunucu olay logu | `/log-kanalı kanal:#olay-log tür:Sunucu olayları` |
 | Karşılama / veda | `/karşılama hoşgeldin` · `/karşılama veda` |
-| Otomatik rol | `/otorol rol:@Üye` |
+| Otomatik rol | `/rol otomatik rol:@Üye` |
 | Destek biletleri | `/bilet kur kanal:#destek` |
 | Doğrulama | `/doğrulama kur` |
 | Seviye ödülleri | `/seviye-ödül ekle` |

@@ -160,7 +160,7 @@ pub async fn avatar(
 }
 
 /// Bir rol hakkında bilgi gösterir.
-#[poise::command(slash_command, guild_only, rename = "rol-bilgi", category = "Genel")]
+#[poise::command(slash_command, guild_only, rename = "bilgi")]
 pub async fn rol_bilgi(ctx: Context<'_>, #[description = "Bakılacak rol"] rol: serenity::Role) -> Result<(), Error> {
     // Üye sayısı önbellekten; büyük sunucularda önbellekte olmayan üyeler sayılmaz.
     let members = ctx.guild().map_or(0, |g| g.members.values().filter(|m| m.roles.contains(&rol.id)).count());

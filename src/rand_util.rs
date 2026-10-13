@@ -31,34 +31,9 @@ pub fn shuffle<T>(items: &mut [T]) {
     }
 }
 
-/// Listeden en fazla `count` farklı eleman seçer.
-pub fn pick<T: Clone>(items: &[T], count: usize) -> Vec<T> {
-    let mut pool = items.to_vec();
-    shuffle(&mut pool);
-    pool.truncate(count);
-    pool
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pick_returns_distinct_subset() {
-        let items: Vec<u32> = (0..50).collect();
-        let picked = pick(&items, 10);
-        assert_eq!(picked.len(), 10);
-        let mut sorted = picked.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), 10, "tekrar eden eleman olmamalı");
-        assert!(picked.iter().all(|p| items.contains(p)));
-    }
-
-    #[test]
-    fn pick_more_than_available_returns_all() {
-        assert_eq!(pick(&[1, 2, 3], 10).len(), 3);
-    }
 
     #[test]
     fn shuffle_is_not_constant() {

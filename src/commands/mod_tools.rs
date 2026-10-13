@@ -109,12 +109,7 @@ pub async fn yavasmod(
     Ok(())
 }
 
-fn send_permissions() -> Permissions {
-    Permissions::SEND_MESSAGES
-        | Permissions::SEND_MESSAGES_IN_THREADS
-        | Permissions::CREATE_PUBLIC_THREADS
-        | Permissions::CREATE_PRIVATE_THREADS
-}
+use crate::lockdown::send_permissions;
 
 /// Kanalı kilitler: @everyone mesaj gönderemez (diğer izinler korunur).
 #[poise::command(

@@ -85,6 +85,7 @@ async fn collect_links(state: &WebState, guild_id: GuildId) -> Vec<Link> {
     }
     if let Ok(s) = settings.get::<crate::leveling::settings::LevelSettings>(db, guild_id).await {
         links.extend(s.announce_channel.map(|c| link("seviye", "Seviye duyuru kanalı", Channel(c))));
+        links.extend(s.role_boosts.iter().map(|b| link("seviye", "XP çarpanı rolü", Role(b.role))));
     }
     if let Ok(s) = settings.get::<crate::automod::rules::ModSettings>(db, guild_id).await {
         links.extend(s.exempt_roles.iter().map(|r| link("moderasyon", "Otomatik moderasyondan muaf rol", Role(*r))));
@@ -135,6 +136,8 @@ async fn collect_links(state: &WebState, guild_id: GuildId) -> Vec<Link> {
         links.extend(s.clip_channel.map(|c| link("topluluk", "Klip kanalı", Channel(c))));
         links.extend(s.confession_log_channel.map(|c| link("topluluk", "İtiraf yazarının bildirildiği kanal", Channel(c))));
         links.extend(s.manager_roles.iter().map(|r| link("ayarlar", "Bot yöneticisi rolü", Role(*r))));
+        links.extend(s.boost_channel.map(|c| link("topluluk", "Takviye teşekkür kanalı", Channel(c))));
+        links.extend(s.boost_role.map(|r| link("topluluk", "Takviye ödül rolü", Role(r))));
     }
     if let Ok(s) = settings.get::<crate::music::playlists::MusicExtras>(db, guild_id).await {
         links.extend(s.dj_role.map(|r| link("muzik", "DJ rolü", Role(r))));
@@ -147,6 +150,10 @@ async fn collect_links(state: &WebState, guild_id: GuildId) -> Vec<Link> {
     }
     if let Ok(s) = settings.get::<crate::antinuke::AntiNukeSettings>(db, guild_id).await {
         links.extend(s.trusted_roles.iter().map(|r| link("yikim-korumasi", "Güvenilen rol", Role(*r))));
+    }
+    if let Ok(s) = settings.get::<crate::nativeautomod::NativeAutomodSettings>(db, guild_id).await {
+        links.extend(s.alert_channel.map(|c| link("discord-automod", "Discord AutoMod bildirim kanalı", Channel(c))));
+        links.extend(s.exempt_roles.iter().map(|r| link("discord-automod", "Discord AutoMod muaf rolü", Role(*r))));
     }
     if let Ok(s) = settings.get::<crate::ai::characters::AiSettings>(db, guild_id).await {
         links.extend(s.assignments.iter().map(|a| link("yz", "Karakter atanmış kanal", Channel(a.channel))));

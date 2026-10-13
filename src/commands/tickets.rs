@@ -193,7 +193,7 @@ async fn kapat(ctx: Context<'_>) -> Result<(), Error> {
     };
     let extras = data.settings.get::<tickets::TicketExtras>(&data.db, guild_id).await?;
     ctx.say(tickets::closing_notice(ctx.author().id, extras.keep_closed)).await?;
-    tickets::finish_close(ctx.serenity_context(), data, guild_id, ctx.channel_id(), closing, ctx.author(), &extras).await;
+    tickets::finish_close(ctx.serenity_context(), &data.db, &data.modlog, guild_id, ctx.channel_id(), closing, ctx.author(), &extras).await;
     Ok(())
 }
 

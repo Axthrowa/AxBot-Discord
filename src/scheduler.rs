@@ -1,4 +1,4 @@
-//! Kalıcı zamanlanmış görevler: çekiliş bitişi, hatırlatma, süreli ban kaldırma.
+//! Kalıcı zamanlanmış görevler: çekiliş bitişi, hatırlatma, süreli ban kaldırma, süreli rol.
 //!
 //! Görevler PostgreSQL'de tutulur (bot kapalıyken zamanı gelenler açılışta çalışır).
 //! Çalıştırıcı periyodik sorgulamaz: bir sonraki görevin zamanına kadar uyur, daha yakın
@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context as _};
 use chrono::{DateTime, Utc};
-use poise::serenity_prelude::{ChannelId, CreateAllowedMentions, CreateMessage, GuildId, Http, Mentionable, UserId};
+use poise::serenity_prelude::{ChannelId, CreateAllowedMentions, CreateMessage, GuildId, Http, Mentionable, RoleId, UserId};
 use serde::{Deserialize, Serialize};
 use sqlx::types::Json;
 use sqlx::PgPool;
@@ -40,6 +40,12 @@ pub enum Task {
     Unban {
         guild_id: u64,
         user_id: u64,
+    },
+    /// `/rol süreli-ver` ile verilen rolün süresi doldu.
+    TempRoleEnd {
+        guild_id: u64,
+        user_id: u64,
+        role_id: u64,
     },
 }
 
@@ -87,6 +93,48 @@ impl Scheduler {
         .fetch_one(&self.db)
         .await?;
         Ok(n)
+    }
+
+    /// Sunucuda bekleyen süreli rol sayısı.
+    pub async fn pending_temp_roles(&self, guild: GuildId) -> anyhow::Result<i64> {
+        let n = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM scheduled_tasks
+             WHERE payload->>'kind' = 'temp_role_end' AND (payload->>'guild_id')::BIGINT = $1",
+        )
+        .bind(crate::db::snowflake(guild.get())?)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(n)
+    }
+
+    /// Bir üyedeki süreli rol görevini siler; silinen görev sayısını döndürür.
+    pub async fn cancel_temp_role(&self, guild: GuildId, user: UserId, role: RoleId) -> anyhow::Result<u64> {
+        let done = sqlx::query(
+            "DELETE FROM scheduled_tasks
+             WHERE payload->>'kind' = 'temp_role_end' AND (payload->>'guild_id')::BIGINT = $1
+               AND (payload->>'user_id')::BIGINT = $2 AND (payload->>'role_id')::BIGINT = $3",
+        )
+        .bind(crate::db::snowflake(guild.get())?)
+        .bind(crate::db::snowflake(user.get())?)
+        .bind(crate::db::snowflake(role.get())?)
+        .execute(&self.db)
+        .await?;
+        Ok(done.rows_affected())
+    }
+
+    /// Bekleyen süreli roller: (üye, rol, bitiş unix), en yakın biten önce.
+    pub async fn temp_roles(&self, guild: GuildId, limit: i64) -> anyhow::Result<Vec<(i64, i64, i64)>> {
+        let rows = sqlx::query_as(
+            "SELECT (payload->>'user_id')::BIGINT, (payload->>'role_id')::BIGINT, EXTRACT(EPOCH FROM run_at)::BIGINT
+             FROM scheduled_tasks
+             WHERE payload->>'kind' = 'temp_role_end' AND (payload->>'guild_id')::BIGINT = $1
+             ORDER BY run_at LIMIT $2",
+        )
+        .bind(crate::db::snowflake(guild.get())?)
+        .bind(limit)
+        .fetch_all(&self.db)
+        .await?;
+        Ok(rows)
     }
 
     pub fn spawn(self: &Arc<Self>, executor: Executor) {
@@ -191,6 +239,17 @@ async fn execute(db: &PgPool, ex: &Executor, task: &Task) -> anyhow::Result<()> 
                     .context("hatırlatma gönderilemedi")?;
             }
             Ok(())
+        }
+        Task::TempRoleEnd { guild_id, user_id, role_id } => {
+            let guild = GuildId::new(nonzero(*guild_id)?);
+            let user = UserId::new(nonzero(*user_id)?);
+            let role = RoleId::new(nonzero(*role_id)?);
+            match ex.http.remove_member_role(guild, user, role, Some("Süreli rolün süresi doldu")).await {
+                Ok(()) => Ok(()),
+                // Üye ayrılmış ya da rol silinmişse yapılacak bir şey yok.
+                Err(e) if ["Unknown Member", "Unknown Role", "Unknown Guild"].iter().any(|m| e.to_string().contains(m)) => Ok(()),
+                Err(e) => Err(e.into()),
+            }
         }
         Task::Unban { guild_id, user_id } => {
             let guild = GuildId::new(nonzero(*guild_id)?);

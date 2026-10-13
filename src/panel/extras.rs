@@ -599,6 +599,10 @@ pub async fn ticket_fields(state: &WebState, guild_id: GuildId, options: &Option
     let settings = tickets::load_settings(&state.db, guild_id).await?;
     let extras = state.settings.get::<TicketExtras>(&state.db, guild_id).await?;
     let (category, role) = settings.as_ref().map_or((None, None), |s| (s.category_id.map(ChannelId::get), s.support_role_id.map(|r| r.get())));
+    let rating_note = match tickets::rating_summary(&state.redis, guild_id).await {
+        Some((average, count)) => format!("<p class=\"note\">Ortalama memnuniyet: <b>{average:.1} / 5</b> ⭐ ({count} puan)</p>"),
+        None => String::new(),
+    };
 
     let mut out = section(
         "Genel",
@@ -642,7 +646,18 @@ pub async fn ticket_fields(state: &WebState, guild_id: GuildId, options: &Option
                 "Saklanan biletlerin kategorisi",
                 &Options::select("closed_category", &options.categories, "", extras.closed_category, "— Olduğu yerde kalsın —"),
                 "Konuşma kaydı her durumda log kanalına ve bileti açana gönderilir.",
-            ),
+            )
+            + &field(
+                "Hareketsiz bilet kaç saatte kapansın",
+                &format!(
+                    "<input type=\"number\" name=\"auto_close_hours\" value=\"{}\" min=\"0\" max=\"{}\">",
+                    extras.auto_close_hours,
+                    crate::tickets::MAX_AUTO_CLOSE_HOURS
+                ),
+                "Bu kadar saat kimse yazmazsa bilet kendiliğinden kapanır; bir saat önce kanalda uyarılır. 0 = kapalı.",
+            )
+            + &checkbox("rating", extras.rating, "Kapatılınca bileti açana 1-5 yıldızlı memnuniyet sorusu gönder (puanlar bilet log kanalına düşer)")
+            + &rating_note,
     ));
     out.push_str(&section(
         "Panel mesajı",
@@ -673,6 +688,8 @@ pub async fn ticket_save(state: &WebState, guild_id: GuildId, input: &Input<'_>)
             }
             (!faq.is_empty()).then(|| faq.to_owned())
         },
+        auto_close_hours: if input.raw("auto_close_hours").is_empty() { 0 } else { input.number("auto_close_hours", 0, tickets::MAX_AUTO_CLOSE_HOURS)? },
+        rating: input.checked("rating"),
     };
     let panel_channel = input.channel("panel_channel")?;
 
@@ -892,6 +909,17 @@ pub async fn news_fields(state: &WebState, guild_id: GuildId, options: &Options)
             + &field("Saat (Türkiye saati)", &hour_select("weekly_hour", settings.weekly_hour), "Özet bu saatteki ilk kontrolde gönderilir.")
             + "<p class=\"note\">Discord'da <code>/akış haber-özeti</code> ile bu haftanın özeti istendiğinde de görülebilir.</p>",
     ));
+    let subscribers = crate::newsprefs::subscriber_count(&state.db, guild_id).await.unwrap_or(0);
+    out.push_str(&section(
+        "Kişisel haberler",
+        field(
+            "Tercih panelini bu kanala gönder",
+            &options.channel_select("personal_panel", None),
+            "Üyeler paneldeki <b>⚙️ Tercihlerim</b> ile kendi kategorilerini seçer, isterse haberleri özelden (anlık ya da günlük özet) alır;              <b>📰 Haberlerim</b> son haberleri yalnızca seçtiği kategorilerden, yalnızca ona görünen bir mesajla gösterir. Boş bırakırsan gönderilmez.",
+        ) + &format!(
+            "<p class=\"note\">Şu an özelden haber alan üye: <b>{subscribers}</b>. Özelden anlık haberde kişi başına saatte en fazla 6 haber gider;              günlük özet yukarıdaki özet saatinde gönderilir. Özel mesajları kapalı olanın tercihi kendiliğinden kapanır.</p>"
+        ),
+    ));
     Ok((out, settings.is_active()))
 }
 
@@ -968,7 +996,15 @@ pub async fn news_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -
         role: input.role("role")?.map(serenity::RoleId::get),
         roles,
     };
-    state.settings.set(&state.db, guild_id, settings).await.map_err(failed)
+    let personal_panel = input.channel("personal_panel")?;
+    state.settings.set(&state.db, guild_id, settings).await.map_err(failed)?;
+    if let Some(channel) = personal_panel {
+        channel.send_message(&state.http, crate::newsprefs::panel_message()).await.map_err(|e| {
+            warn!(guild = %guild_id, error = %e, "Panel: kişisel haber paneli gönderilemedi");
+            "gonder"
+        })?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

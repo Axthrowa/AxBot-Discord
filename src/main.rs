@@ -31,6 +31,8 @@ mod giveaway;
 mod greetings;
 mod guild_config;
 mod help;
+mod highlights;
+mod lockdown;
 mod integrations;
 mod invites;
 mod leveling;
@@ -43,6 +45,9 @@ mod modmail;
 mod music;
 mod net;
 mod news;
+mod newsprefs;
+mod nativeautomod;
+mod nickguard;
 mod panel;
 mod presence;
 mod profile;
@@ -336,6 +341,7 @@ async fn run() -> anyhow::Result<()> {
                     ai: Arc::clone(&ai),
                 });
                 rsvp::spawn(ctx.clone(), db.clone(), plugin_settings.clone());
+                tickets::spawn_auto_close(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone(), Arc::clone(&modlog));
                 alerts::spawn(Arc::clone(&ctx.http), http_client.clone(), alert_owners);
                 let leveling = Arc::new(leveling::Leveling::new());
                 community::spawn_seasons(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone(), Arc::clone(&leveling));

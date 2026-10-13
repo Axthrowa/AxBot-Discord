@@ -1,4 +1,4 @@
-//! Topluluk ayarları: `/karşılama`, `/otorol`, `/koruma`, `/rol-paneli`.
+//! Topluluk ayarları: `/karşılama`, `/rol otomatik`, `/koruma`, `/rol panel`.
 
 use poise::serenity_prelude::{self as serenity, Mentionable, Role};
 
@@ -241,10 +241,9 @@ pub(super) fn cannot_send(ctx: Context<'_>, channel: &serenity::GuildChannel) ->
 #[poise::command(
     slash_command,
     guild_only,
-    rename = "otorol",
-    default_member_permissions = "MANAGE_ROLES",
-    required_bot_permissions = "MANAGE_ROLES",
-    category = "Topluluk"
+    rename = "otomatik",
+    required_permissions = "MANAGE_ROLES",
+    required_bot_permissions = "MANAGE_ROLES"
 )]
 pub async fn otorol(
     ctx: Context<'_>,
@@ -273,7 +272,7 @@ pub async fn otorol(
     guild_only,
     rename = "koruma",
     default_member_permissions = "MANAGE_GUILD",
-    subcommands("koruma_hesap_yasi", "koruma_baskin", "koruma_baskin_bitir", "koruma_durum"),
+    subcommands("koruma_hesap_yasi", "koruma_baskin", "koruma_baskin_bitir", "koruma_kilit", "koruma_durum"),
     subcommand_required,
     category = "Topluluk"
 )]
@@ -342,6 +341,69 @@ async fn koruma_baskin_bitir(ctx: Context<'_>) -> Result<(), Error> {
     reply_private(ctx, text).await
 }
 
+#[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
+enum LockChoice {
+    #[name = "Kilitle (kimse yazamaz)"]
+    Lock,
+    #[name = "Kilidi aç (eski hâline dön)"]
+    Unlock,
+}
+
+/// Baskın sırasında bütün yazı kanallarını tek seferde kilitler ya da açar.
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "kilit",
+    required_permissions = "MANAGE_CHANNELS",
+    required_bot_permissions = "MANAGE_CHANNELS | MANAGE_ROLES"
+)]
+async fn koruma_kilit(
+    ctx: Context<'_>,
+    #[description = "Kilitle ya da aç"] durum: LockChoice,
+    #[description = "Sebep (kayıtlarda görünür)"]
+    #[max_length = 200]
+    sebep: Option<String>,
+) -> Result<(), Error> {
+    let guild_id = guild_id(ctx)?;
+    let data = ctx.data();
+    let serenity_ctx = ctx.serenity_context();
+    let locked = crate::lockdown::is_locked(&data.redis, guild_id).await;
+    match durum {
+        LockChoice::Lock if locked => reply_private(ctx, "ℹ️ Sunucu zaten kilitli. Açmak için `/koruma kilit durum:Kilidi aç`.").await,
+        LockChoice::Unlock if !locked => reply_private(ctx, "ℹ️ Sunucu kilitli değil.").await,
+        LockChoice::Lock => {
+            ctx.defer().await?;
+            let reason = sebep.unwrap_or_else(|| "Sunucu kilidi".to_owned());
+            let (done, skipped, failed) = crate::lockdown::lock_all(serenity_ctx, &data.redis, guild_id, &reason).await?;
+            let mut text = format!("🔒 **Sunucu kilitlendi** — {done} kanalda üyeler artık yazamıyor.
+> {reason}");
+            if skipped > 0 {
+                text.push_str(&format!("
+_{skipped} kanal zaten yazmaya kapalıydı; dokunulmadı._"));
+            }
+            if failed > 0 {
+                text.push_str(&format!("
+⚠️ {failed} kanal kilitlenemedi (botun o kanallarda 'Kanalları Yönet' / 'İzinleri Yönet' izni yok)."));
+            }
+            text.push_str("
+Açmak için: `/koruma kilit durum:Kilidi aç`");
+            ctx.say(text).await?;
+            Ok(())
+        }
+        LockChoice::Unlock => {
+            ctx.defer().await?;
+            let (done, failed) = crate::lockdown::unlock_all(serenity_ctx, &data.redis, guild_id).await?;
+            let mut text = format!("🔓 **Sunucu kilidi açıldı** — {done} kanal eski hâline döndü.");
+            if failed > 0 {
+                text.push_str(&format!("
+⚠️ {failed} kanal açılamadı; tekrar dene."));
+            }
+            ctx.say(text).await?;
+            Ok(())
+        }
+    }
+}
+
 /// Koruma ve topluluk ayarlarını gösterir.
 #[poise::command(slash_command, guild_only, rename = "durum")]
 async fn koruma_durum(ctx: Context<'_>) -> Result<(), Error> {
@@ -372,10 +434,9 @@ async fn koruma_durum(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(
     slash_command,
     guild_only,
-    rename = "rol-paneli",
-    default_member_permissions = "MANAGE_ROLES",
-    required_bot_permissions = "MANAGE_ROLES | SEND_MESSAGES | EMBED_LINKS",
-    category = "Topluluk"
+    rename = "panel",
+    required_permissions = "MANAGE_ROLES",
+    required_bot_permissions = "MANAGE_ROLES | SEND_MESSAGES | EMBED_LINKS"
 )]
 pub async fn rol_paneli(
     ctx: Context<'_>,

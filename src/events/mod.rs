@@ -109,6 +109,7 @@ pub async fn handle(
                 };
                 let extras = async {
                     crate::community::on_message(ctx, data, guild_id, msg).await;
+                    crate::highlights::on_message(ctx, &data.db, guild_id, msg).await;
                     crate::modmail::on_staff_message(ctx, data, guild_id, msg).await;
                     crate::ai::assist::on_ticket_message(ctx, data, guild_id, msg).await;
                     crate::achievements::bump(ctx, data, guild_id, &msg.author, crate::achievements::Kind::Messages, 1, Some(msg.channel_id)).await;
@@ -176,12 +177,14 @@ pub async fn handle(
             let id = component.data.custom_id.as_str();
             if id.starts_with("ticket:") {
                 tickets::handle_component(ctx, data, component).await?;
+            } else if id.starts_with(crate::newsprefs::PREFIX) {
+                crate::newsprefs::handle_component(ctx, data, component).await?;
             } else if id.starts_with(crate::reactionroles::PREFIX) {
                 crate::reactionroles::handle_component(ctx, data, component).await?;
             } else if id.starts_with(rolepanel::PREFIX) {
                 rolepanel::handle_button(ctx, component).await?;
             } else if id.starts_with(giveaway::BUTTON_PREFIX) {
-                giveaway::handle_button(ctx, &data.db, component).await?;
+                giveaway::handle_button(ctx, data, component).await?;
             } else if id.starts_with(suggestions::BUTTON_PREFIX) {
                 suggestions::handle_button(ctx, &data.db, component).await?;
             } else if id.starts_with(verification::PREFIX) {
@@ -274,7 +277,11 @@ pub async fn handle(
             eventlog::voice_changed(ctx, data, old.as_ref(), new).await;
         }
         serenity::FullEvent::GuildMemberAddition { new_member } => {
+            if new_member.user.bot {
+                crate::antinuke::on_bot_join(ctx, data, new_member.guild_id, new_member.user.id).await;
+            }
             members::on_join(ctx, data, new_member).await?;
+            crate::nickguard::check(ctx, data, new_member.guild_id, &new_member.user, new_member.nick.as_deref(), &new_member.roles).await;
             crate::community::on_join(ctx, data, new_member).await;
             crate::community::member_flow(&data.redis, new_member.guild_id, true).await;
             crate::community::track_member(&data.redis, new_member.guild_id, new_member.user.id, true).await;
@@ -305,7 +312,22 @@ pub async fn handle(
             ..
         } => {
             eventlog::member_updated(ctx, data, old_if_available.as_ref(), update).await;
+            let name_changed = old_if_available.as_ref().is_none_or(|old| {
+                old.nick != update.nick || old.user.global_name != update.user.global_name || old.user.name != update.user.name
+            });
+            if name_changed {
+                crate::nickguard::check(ctx, data, update.guild_id, &update.user, update.nick.as_deref(), &update.roles).await;
+            }
             if let Some(old) = old_if_available {
+                if old.premium_since.is_none() && update.premium_since.is_some() {
+                    crate::community::on_boost(ctx, data, update.guild_id, &update.user).await;
+                }
+            }
+            if let Some(old) = old_if_available {
+                let gained: Vec<RoleId> = update.roles.iter().filter(|r| !old.roles.contains(r)).copied().collect();
+                if !gained.is_empty() {
+                    crate::antinuke::on_member_roles_added(ctx, data, update.guild_id, update.user.id, &gained).await;
+                }
                 let added = update.roles.iter().filter(|r| !old.roles.contains(r)).map(|r| (Trigger::RoleAdded, *r));
                 let removed = old.roles.iter().filter(|r| !update.roles.contains(r)).map(|r| (Trigger::RoleRemoved, *r));
                 for (trigger, role) in added.chain(removed).collect::<Vec<_>>() {
@@ -323,9 +345,17 @@ pub async fn handle(
         }
         serenity::FullEvent::GuildRoleCreate { new } => {
             eventlog::role_created(ctx, data, new).await;
+            crate::antinuke::on_role_permissions(ctx, data, new.guild_id, new, None).await;
         }
         serenity::FullEvent::GuildRoleUpdate { old_data_if_available, new } => {
             eventlog::role_updated(ctx, data, old_data_if_available.as_ref(), new).await;
+            // Eski yetkiler bilinmiyorsa (önbellekte yok) yükseltme anlaşılamaz; atlanır.
+            if let Some(old) = old_data_if_available {
+                crate::antinuke::on_role_permissions(ctx, data, new.guild_id, new, Some(old.permissions)).await;
+            }
+        }
+        serenity::FullEvent::WebhookUpdate { guild_id, .. } => {
+            crate::antinuke::on_webhook(ctx, data, *guild_id).await;
         }
         serenity::FullEvent::GuildRoleDelete { guild_id, removed_role_id, removed_role_data_if_available } => {
             eventlog::role_deleted(ctx, data, *guild_id, *removed_role_id, removed_role_data_if_available.as_ref()).await;
@@ -346,6 +376,7 @@ pub async fn handle(
         }
         serenity::FullEvent::ChannelCreate { channel } => {
             eventlog::channel_created(ctx, data, channel).await;
+            crate::antinuke::record(ctx, data, channel.guild_id, crate::antinuke::Kind::ChannelCreate, None).await;
         }
         serenity::FullEvent::ChannelUpdate { old, new } => {
             eventlog::channel_updated(ctx, data, old.as_ref(), new).await;
@@ -467,7 +498,7 @@ async fn award_xp(ctx: &serenity::Context, data: &Data, guild_id: GuildId, msg: 
 
     let level_up = match data
         .leveling
-        .on_message(&data.db, &data.redis, guild_id, msg.author.id, settings.xp_rate)
+        .on_message(&data.db, &data.redis, guild_id, msg.author.id, settings.effective_rate(&roles.iter().map(|r| r.get()).collect::<Vec<_>>()))
         .await
     {
         Ok(Some(level_up)) => level_up,

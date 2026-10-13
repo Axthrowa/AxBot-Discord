@@ -428,6 +428,14 @@ pub fn giveaway_fields(options: &Options) -> (String, bool) {
                 ),
                 "En fazla 30 gün.",
             )
+            + &field("Gereken rol", &Options::select("gw_role", &options.all_roles, "@ ", None, "— Herkes katılabilir —"), "")
+            + &field("En az seviye", &number_input("gw_level", 0, 0, giveaway::MAX_MIN_LEVEL), "0 = şart yok.")
+            + &field("Hesap en az kaç günlük", &number_input("gw_days", 0, 0, giveaway::MAX_ACCOUNT_DAYS), "0 = şart yok. Sahte / yeni hesaplara karşı.")
+            + &field(
+                "Ek şans rolü",
+                &Options::select("gw_bonus", &options.all_roles, "@ ", None, "— Yok —"),
+                "Bu roldekilerin katılımı 2 kez sayılır (ör. takviyeciler).",
+            )
             + "<p class=\"note\">Üyeler çekiliş mesajındaki butonla katılır; süre dolunca kazananlar kendiliğinden seçilir. \
                Erken bitirmek ya da yeniden çekmek için: <code>/çekiliş bitir · yeniden-çek</code>.</p>",
     );
@@ -453,7 +461,13 @@ pub async fn giveaway_save(state: &WebState, guild_id: GuildId, input: &Input<'_
     }
     // Çekilişi panelden başlatan kişi yerine bot "düzenleyen" olarak görünür.
     let host = state.cache.current_user().id;
-    let new = giveaway::NewGiveaway { guild_id, channel_id, host, prize: &prize, winners, duration };
+    let requirements = giveaway::Requirements {
+        role: input.id("gw_role", &input.options.all_roles, "rol")?.map(RoleId::new),
+        min_level: if input.raw("gw_level").is_empty() { 0 } else { input.number("gw_level", 0, giveaway::MAX_MIN_LEVEL)? },
+        min_account_days: if input.raw("gw_days").is_empty() { 0 } else { input.number("gw_days", 0, giveaway::MAX_ACCOUNT_DAYS)? },
+        bonus_role: input.id("gw_bonus", &input.options.all_roles, "rol")?.map(RoleId::new),
+    };
+    let new = giveaway::NewGiveaway { guild_id, channel_id, host, prize: &prize, winners, duration, requirements };
     giveaway::create(&state.http, &state.db, &state.scheduler, new).await.map(|_| ()).map_err(|e| {
         warn!(guild = %guild_id, error = ?e, "Panel: çekiliş başlatılamadı");
         "gonder"
@@ -586,14 +600,21 @@ pub async fn antinuke_fields(state: &WebState, guild_id: GuildId, options: &Opti
     let choices: Vec<(&str, &str)> = Punishment::ALL.iter().map(|(_, key, label)| (*key, *label)).collect();
     let out = section(
         "Yıkım koruması",
-        checkbox("enabled", settings.enabled, "Kısa sürede çok sayıda kanal / rol silen ya da üye yasaklayan / atan yetkiliyi durdur")
+        checkbox("enabled", settings.enabled, "Kısa sürede çok sayıda kanal / rol silen ya da açan, üye yasaklayan / atan yetkiliyi durdur")
+            + &checkbox("guard_webhooks", settings.guard_webhooks, "Güvenilmeyen birinin açtığı webhook'u anında sil (webhook'la toplu spam / etiketlemeye karşı)")
+            + &checkbox("guard_bots", settings.guard_bots, "Güvenilmeyen birinin eklediği botu anında at")
+            + &checkbox(
+                "guard_permissions",
+                settings.guard_permissions,
+                "Güvenilmeyen birinin bir role verdiği yönetici / moderasyon yetkisini ve bir üyeye verdiği yetkili rolü geri al",
+            )
             + &field("Kaç işlemde tetiklensin", &number_input("limit", settings.limit, antinuke::MIN_LIMIT, antinuke::MAX_LIMIT), "")
-            + &field("Kaç saniye içinde", &number_input("window", settings.window_secs, antinuke::MIN_WINDOW, antinuke::MAX_WINDOW), "Örn. 30 saniyede 3 işlem.")
+            + &field("Kaç saniye içinde", &number_input("window", settings.window_secs, antinuke::MIN_WINDOW, antinuke::MAX_WINDOW), "Örn. 30 saniyede 3 işlem. Kanal açmada sınır iki katıdır (30 saniyede 6 kanal).")
             + &field("Ne yapılsın", &radios("punishment", &choices, settings.punishment.key()), "")
             + &field(
                 "Güvenilen roller",
                 &checklist("trusted_role", &options.all_roles, "@ ", &settings.trusted_roles),
-                "Bu rollerdeki üyeler sayılmaz. Sunucu sahibi ve botun kendisi hiçbir zaman sayılmaz.",
+                "Bu rollerdeki üyeler sayılmaz. Sunucu sahibi ve botun kendisi hiçbir zaman sayılmaz. <b>Yönetici ekibinin rolünü buraya ekleyin</b>; yoksa onların yaptığı meşru yetki değişiklikleri, webhook ve bot eklemeleri de geri alınır.",
             )
             + "<p class=\"note\">Botun 'Denetim Kaydını Görüntüle' izni olmalı ve rolü yetkili rollerinin ÜSTÜNDE durmalı; yoksa kimin yaptığını göremez \
                ya da cezayı uygulayamaz. Tetiklenince olay kayıtları kanalına uyarı yazılır.</p>",
@@ -608,6 +629,9 @@ pub async fn antinuke_save(state: &WebState, guild_id: GuildId, input: &Input<'_
         window_secs: input.number("window", antinuke::MIN_WINDOW, antinuke::MAX_WINDOW)?,
         punishment: Punishment::parse(input.raw("punishment")).ok_or("hata")?,
         trusted_roles: input.ids("trusted_role", &input.options.all_roles, "rol")?,
+        guard_webhooks: input.checked("guard_webhooks"),
+        guard_bots: input.checked("guard_bots"),
+        guard_permissions: input.checked("guard_permissions"),
     };
     state.settings.set(&state.db, guild_id, settings).await.map_err(failed(guild_id, "yıkım koruması"))
 }

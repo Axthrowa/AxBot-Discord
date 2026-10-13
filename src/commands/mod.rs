@@ -12,6 +12,7 @@ mod forms;
 mod fun;
 mod giveaway;
 mod heist;
+mod highlight;
 mod leveling;
 mod mod_tools;
 mod moderation;
@@ -21,6 +22,7 @@ mod panel;
 mod ping;
 mod planning;
 mod profile;
+mod roles;
 mod search;
 mod server;
 mod setup;
@@ -116,14 +118,13 @@ fn every() -> Vec<poise::Command<Data, Error>> {
         mod_tools::uyari_cezasi(),
         mod_tools::uyarilari_sifirla(),
         community::karsilama(),
-        community::otorol(),
+        roles::rol(),
+        highlight::vurgu(),
         community::koruma(),
-        community::rol_paneli(),
         giveaway::cekilis(),
         utility::hatirlat(),
         utility::kullanici_bilgi(),
         utility::sunucu_bilgi(),
-        utility::rol_bilgi(),
         utility::avatar(),
         engagement::starboard(),
         engagement::etiket(),
@@ -185,7 +186,10 @@ pub const BOT_PERMISSIONS: serenity::Permissions = serenity::Permissions::VIEW_C
     .union(serenity::Permissions::MODERATE_MEMBERS)
     .union(serenity::Permissions::CONNECT)
     .union(serenity::Permissions::SPEAK)
-    .union(serenity::Permissions::MOVE_MEMBERS);
+    .union(serenity::Permissions::MOVE_MEMBERS)
+    .union(serenity::Permissions::MANAGE_NICKNAMES)
+    .union(serenity::Permissions::MANAGE_EVENTS)
+    .union(serenity::Permissions::MANAGE_WEBHOOKS);
 
 /// Botu bir sunucuya eklemek için bağlantı (gerekli izinler seçili gelir).
 pub fn invite_url(application_id: serenity::UserId) -> String {

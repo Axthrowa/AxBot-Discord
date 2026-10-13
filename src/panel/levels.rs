@@ -12,7 +12,7 @@ use super::auth;
 use super::can_manage;
 use super::pages::{forbidden, layout, layout_public, GuildNav, Nav, Page};
 use super::plugins::{checkbox, checklist, field, radios, section, textarea, Input, Options};
-use crate::leveling::settings::{Announce, LevelSettings, DEFAULT_MESSAGE, RATES};
+use crate::leveling::settings::{Announce, LevelSettings, RoleBoost, BOOSTS, DEFAULT_MESSAGE, MAX_ROLE_BOOSTS, RATES};
 use crate::leveling::{formula, ExclusionKind};
 use crate::web::{escape, WebState};
 
@@ -122,6 +122,38 @@ pub async fn fields(state: &WebState, guild_id: GuildId, options: &Options) -> a
     rates.push_str("</select>");
     out.push_str(&section("TP oranı", field("Kazanılan XP çarpanı", &rates, "Seviye atlamayı zorlaştırmak ya da kolaylaştırmak için.")));
 
+    // Role göre ek XP.
+    let mut boosts = String::new();
+    if settings.role_boosts.is_empty() {
+        boosts.push_str("<p class=\"note\">Henüz rol çarpanı yok.</p>");
+    } else {
+        boosts.push_str("<table><tr><th>Rol</th><th>Çarpan</th><th>Kaldır</th></tr>");
+        for boost in &settings.role_boosts {
+            let name = options.all_roles.iter().find(|(id, _)| *id == boost.role).map_or("(silinmiş rol)", |(_, n)| n.as_str());
+            let _ = write!(
+                boosts,
+                "<tr><td>@ {}</td><td>{}</td><td><input type=\"checkbox\" name=\"boost_del\" value=\"{}\"></td></tr>",
+                escape(name),
+                rate_label(boost.percent),
+                boost.role
+            );
+        }
+        boosts.push_str("</table>");
+    }
+    let mut percents = String::from("<select name=\"boost_percent\">");
+    for percent in BOOSTS {
+        let _ = write!(percents, "<option value=\"{percent}\"{}>{}</option>", if percent == 200 { " selected" } else { "" }, rate_label(percent));
+    }
+    percents.push_str("</select>");
+    out.push_str(&section(
+        "Role göre XP çarpanı",
+        boosts
+            + "<div style=\"height:14px\"></div>"
+            + &field("Yeni çarpan: rol", &Options::select("boost_role", &options.all_roles, "@ ", None, "— Seç —"), "")
+            + &field("Çarpan", &percents, "Ör. takviyecilere 2 kat. Üye birden çok roldeyse en yüksek çarpan geçerlidir; genel TP oranıyla çarpılır.")
+            + &format!("<p class=\"note\">En fazla {MAX_ROLE_BOOSTS} rol.</p>"),
+    ));
+
     // XP listeleri.
     let mut channel_items = options.channels.clone();
     channel_items.extend(options.categories.iter().map(|(id, name)| (*id, format!("{name} (kategori)"))));
@@ -172,7 +204,22 @@ pub async fn save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Res
         "deny" | "" => Ok(false),
         _ => Err("hata"),
     };
+    let current = state.settings.get::<LevelSettings>(&state.db, guild_id).await.map_err(|e| {
+        warn!(guild = %guild_id, error = ?e, "Panel: seviye ayarı okunamadı");
+        "hata"
+    })?;
+    let removed: Vec<u64> = input.all("boost_del").into_iter().map(|raw| raw.parse().map_err(|_| "hata")).collect::<Result<_, _>>()?;
+    let mut role_boosts: Vec<RoleBoost> = current.role_boosts.iter().copied().filter(|b| !removed.contains(&b.role)).collect();
+    if let Some(role) = input.id("boost_role", &input.options.all_roles, "rol")? {
+        let percent: u16 = input.raw("boost_percent").parse().ok().filter(|p| BOOSTS.contains(p)).ok_or("sayi")?;
+        role_boosts.retain(|b| b.role != role);
+        if role_boosts.len() >= MAX_ROLE_BOOSTS {
+            return Err("limit");
+        }
+        role_boosts.push(RoleBoost { role, percent });
+    }
     let settings = LevelSettings {
+        role_boosts,
         enabled: input.checked("enabled"),
         announce,
         announce_channel,

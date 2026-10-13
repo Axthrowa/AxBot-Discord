@@ -23,6 +23,7 @@ pub async fn cekilis(_ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Yeni bir çekiliş başlatır.
+#[allow(clippy::too_many_arguments)]
 #[poise::command(slash_command, guild_only, rename = "başlat", required_bot_permissions = "SEND_MESSAGES | EMBED_LINKS")]
 async fn baslat(
     ctx: Context<'_>,
@@ -41,6 +42,22 @@ async fn baslat(
     #[description = "Kanal (boşsa bu kanal)"]
     #[channel_types("Text", "News")]
     kanal: Option<serenity::GuildChannel>,
+    #[rename = "gereken_rol"]
+    #[description = "Yalnızca bu roldekiler katılabilir"]
+    required_role: Option<serenity::Role>,
+    #[rename = "en_az_seviye"]
+    #[description = "Katılmak için gereken en düşük seviye"]
+    #[min = 1]
+    #[max = 500]
+    min_level: Option<u32>,
+    #[rename = "hesap_yaşı"]
+    #[description = "Hesap en az kaç günlük olmalı (sahte hesaplara karşı)"]
+    #[min = 1]
+    #[max = 3650]
+    min_account_days: Option<u32>,
+    #[rename = "ek_şans_rolü"]
+    #[description = "Bu roldekiler 2 kat şanslı (ör. takviyeciler)"]
+    bonus_role: Option<serenity::Role>,
 ) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
     let length = match duration::parse(&length) {
@@ -63,6 +80,12 @@ async fn baslat(
             prize: prize.trim(),
             winners: winners.unwrap_or(1).clamp(1, MAX_WINNERS),
             duration: length,
+            requirements: giveaway::Requirements {
+                role: required_role.map(|r| r.id).filter(|r| *r != guild_id.everyone_role()),
+                min_level: min_level.unwrap_or(0).min(giveaway::MAX_MIN_LEVEL),
+                min_account_days: min_account_days.unwrap_or(0).min(giveaway::MAX_ACCOUNT_DAYS),
+                bonus_role: bonus_role.map(|r| r.id).filter(|r| *r != guild_id.everyone_role()),
+            },
         },
     )
     .await?;

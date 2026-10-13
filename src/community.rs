@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use dashmap::{DashMap, DashSet};
 use poise::serenity_prelude::{
-    self as serenity, ChannelId, CreateAllowedMentions, CreateEmbed, CreateMessage, GuildId, Member, Message, MessageId, ReactionType, RoleId, UserId,
+    self as serenity, ChannelId, CreateAllowedMentions, CreateEmbed, CreateMessage, GuildId, Member, Mentionable, Message, MessageId, ReactionType, RoleId, UserId,
 };
 use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,53 @@ const STICKY_COOLDOWN: Duration = Duration::from_secs(12);
 const VOICE_XP_MAX_MINUTES: u64 = 600;
 const ROLE_MEMORY_SECS: u64 = 30 * 24 * 3600;
 const ACTIVITY_DAYS: u64 = 45;
+pub const MAX_BOOST_MESSAGE: usize = 1000;
+const DEFAULT_BOOST_MESSAGE: &str = "💖 {kullanıcı} sunucumuza takviye yaptı, çok teşekkürler! **{sunucu}** artık {sayı} takviyeye sahip. 🚀";
+
+/// Takviye teşekkür şablonunu doldurur.
+pub fn boost_text(template: &str, mention: &str, name: &str, guild: &str, count: u64) -> String {
+    let template = if template.trim().is_empty() { DEFAULT_BOOST_MESSAGE } else { template };
+    template
+        .replace("{kullanıcı}", mention)
+        .replace("{isim}", name)
+        .replace("{sunucu}", guild)
+        .replace("{sayı}", &count.to_string())
+}
+
+/// Üye sunucuya takviye yaptı (`premium_since` boştan dolu hâle geçti).
+pub async fn on_boost(ctx: &serenity::Context, data: &Data, guild_id: GuildId, user: &serenity::User) {
+    let Ok(settings) = data.settings.get::<CommunitySettings>(&data.db, guild_id).await else {
+        return;
+    };
+    if let Some(role) = settings.boost_role.filter(|r| *r != 0).map(RoleId::new) {
+        let safe = ctx.cache.guild(guild_id).and_then(|g| g.roles.get(&role).cloned());
+        match safe.map(|r| crate::rolepanel::check_role(ctx, guild_id, &r)) {
+            Some(Ok(())) => {
+                if let Err(e) = ctx.http.add_member_role(guild_id, user.id, role, Some("Sunucu takviyesi")).await {
+                    warn!(guild = %guild_id, error = %e, "Takviye rolü verilemedi");
+                }
+            }
+            Some(Err(reason)) => warn!(guild = %guild_id, reason, "Takviye rolü verilmedi"),
+            None => {}
+        }
+    }
+    let Some(channel) = settings.boost_channel.filter(|c| *c != 0).map(ChannelId::new) else {
+        return;
+    };
+    let (guild_name, count) = ctx
+        .cache
+        .guild(guild_id)
+        .map(|g| (g.name.clone(), g.premium_subscription_count.unwrap_or(0)))
+        .unwrap_or_default();
+    let name = user.global_name.clone().unwrap_or_else(|| user.name.clone());
+    let text = boost_text(&settings.boost_message, &user.id.mention().to_string(), &name, &guild_name, count);
+    let message = CreateMessage::new()
+        .content(text.chars().take(2000).collect::<String>())
+        .allowed_mentions(CreateAllowedMentions::new().users(vec![user.id]));
+    if let Err(e) = channel.send_message(&ctx.http, message).await {
+        warn!(guild = %guild_id, channel = %channel, error = %e, "Takviye teşekkürü gönderilemedi");
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sticky {
@@ -58,6 +105,12 @@ pub struct CommunitySettings {
     pub season_channel: Option<u64>,
     /// Birinciye verilecek para (ikinciye yarısı, üçüncüye çeyreği; 0 = ödül yok).
     pub season_reward: u32,
+    /// Sunucuya takviye (boost) yapanlara teşekkür mesajının kanalı (boşsa kapalı).
+    pub boost_channel: Option<u64>,
+    /// Teşekkür şablonu: `{kullanıcı}`, `{isim}`, `{sunucu}`, `{sayı}` (boşsa hazır metin).
+    pub boost_message: String,
+    /// Takviye yapana ek olarak verilecek rol (Discord'un kendi takviye rolüne ek; isteğe bağlı).
+    pub boost_role: Option<u64>,
 }
 
 impl PluginConfig for CommunitySettings {
@@ -66,7 +119,7 @@ impl PluginConfig for CommunitySettings {
 
 impl CommunitySettings {
     pub fn is_active(&self) -> bool {
-        !self.sticky.is_empty() || self.counting_channel.is_some() || self.word_chain_channel.is_some() || self.confession_channel.is_some() || self.persist_roles || self.voice_xp_per_min > 0 || self.season_channel.is_some() || self.clip_channel.is_some()
+        !self.sticky.is_empty() || self.counting_channel.is_some() || self.word_chain_channel.is_some() || self.confession_channel.is_some() || self.persist_roles || self.voice_xp_per_min > 0 || self.season_channel.is_some() || self.clip_channel.is_some() || self.boost_channel.is_some()
     }
 }
 

@@ -89,7 +89,7 @@ pub async fn build(http: &Http, cache: &Arc<Cache>, db: &PgPool, configs: &Guild
     let features = vec![
         channel("📜 Olay logu", cfg.event_log_channel, "/log-kanalı tür:Sunucu olayları"),
         channel("👋 Karşılama", cfg.welcome_channel, "/karşılama hoşgeldin"),
-        role("🎭 Otomatik rol", cfg.autorole, "/otorol"),
+        role("🎭 Otomatik rol", cfg.autorole, "/rol otomatik"),
         role("✅ Doğrulama", cfg.verify_role, "/doğrulama kur"),
         Feature {
             name: "🎫 Bilet",

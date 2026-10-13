@@ -40,6 +40,9 @@ async fn etkinlik_olustur(
     #[description = "Ayrıntılar (isteğe bağlı)"]
     #[max_length = 1000]
     description: Option<String>,
+    #[rename = "discord_etkinliği"]
+    #[description = "Discord'un Etkinlikler listesine de eklensin mi? (varsayılan: evet)"]
+    discord_event: Option<bool>,
 ) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
@@ -58,8 +61,16 @@ async fn etkinlik_olustur(
         return reply_private(ctx, "Başlık ya da açıklama sunucunun yasaklı kelimelerini içeriyor.").await;
     }
     ctx.defer_ephemeral().await?;
-    match rsvp::create(ctx.http(), &data.db, &data.settings, guild_id, ctx.channel_id(), ctx.author().id, title, description, start).await {
-        Ok(id) => reply_private(ctx, format!("✅ Etkinlik #{id} oluşturuldu (<t:{start}:F>). İptal için: `/etkinlik iptal numara:{id}`")).await,
+    let discord_event = discord_event.unwrap_or(true);
+    match rsvp::create(ctx.http(), &data.db, &data.settings, guild_id, ctx.channel_id(), ctx.author().id, title, description, start, discord_event).await {
+        Ok((id, note)) => {
+            let listed = match (&note, discord_event) {
+                (Some(note), _) => format!("\n⚠️ {note}"),
+                (None, true) => "\n📅 Sunucunun **Etkinlikler** listesine de eklendi.".to_owned(),
+                (None, false) => String::new(),
+            };
+            reply_private(ctx, format!("✅ Etkinlik #{id} oluşturuldu (<t:{start}:F>). İptal için: `/etkinlik iptal numara:{id}`{listed}")).await
+        }
         Err(problem) => reply_private(ctx, format!("❌ {problem}")).await,
     }
 }

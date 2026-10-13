@@ -40,6 +40,16 @@ impl Announce {
 /// Seçilebilir TP oranları (yüzde).
 pub const RATES: [u16; 8] = [25, 50, 75, 100, 150, 200, 250, 300];
 pub const DEFAULT_MESSAGE: &str = "🎉 {kullanıcı} **{seviye}. seviyeye** ulaştı!";
+/// Role göre XP çarpanları (yüzde): 125 = %25 fazla … 300 = 3 kat.
+pub const BOOSTS: [u16; 6] = [125, 150, 200, 250, 300, 400];
+pub const MAX_ROLE_BOOSTS: usize = 10;
+
+/// Bir roldeki üyeler bu yüzde kadar XP kazanır (birden çok roldeyse en yükseği geçerlidir).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleBoost {
+    pub role: u64,
+    pub percent: u16,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -61,6 +71,8 @@ pub struct LevelSettings {
     pub channels_allow_only: bool,
     /// Sıralama sayfası giriş yapmadan da görülebilir.
     pub public_leaderboard: bool,
+    /// Role göre ek XP (ör. takviyecilere 2 kat).
+    pub role_boosts: Vec<RoleBoost>,
 }
 
 impl Default for LevelSettings {
@@ -76,6 +88,7 @@ impl Default for LevelSettings {
             roles_allow_only: false,
             channels_allow_only: false,
             public_leaderboard: false,
+            role_boosts: Vec::new(),
         }
     }
 }
@@ -85,6 +98,12 @@ impl PluginConfig for LevelSettings {
 }
 
 impl LevelSettings {
+    /// Üyenin rollerine göre geçerli XP oranı: genel oran × en yüksek rol çarpanı.
+    pub fn effective_rate(&self, roles: &[u64]) -> u16 {
+        let boost = self.role_boosts.iter().filter(|b| roles.contains(&b.role)).map(|b| b.percent).max().unwrap_or(100).max(100);
+        u16::try_from(u32::from(self.xp_rate) * u32::from(boost) / 100).unwrap_or(u16::MAX)
+    }
+
     pub fn template(&self) -> &str {
         self.message.as_deref().filter(|m| !m.trim().is_empty()).unwrap_or(DEFAULT_MESSAGE)
     }
@@ -159,6 +178,18 @@ mod tests {
         // Yeni ödül seviyesine ulaşılmadıysa hiçbir şey değişmez.
         let (grant, revoke) = roles_on_level_up(&rewards(), 10, 12, false);
         assert!(grant.is_empty() && revoke.is_empty());
+    }
+
+    #[test]
+    fn role_boost_uses_highest_multiplier() {
+        let settings = LevelSettings {
+            xp_rate: 150,
+            role_boosts: vec![RoleBoost { role: 1, percent: 200 }, RoleBoost { role: 2, percent: 300 }],
+            ..LevelSettings::default()
+        };
+        assert_eq!(settings.effective_rate(&[]), 150);
+        assert_eq!(settings.effective_rate(&[1]), 300);
+        assert_eq!(settings.effective_rate(&[1, 2, 9]), 450);
     }
 
     #[test]

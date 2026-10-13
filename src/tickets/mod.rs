@@ -33,6 +33,11 @@ pub const CLAIM_BUTTON: &str = "ticket:claim";
 pub const TOPIC_SELECT: &str = "ticket:topic";
 pub const REOPEN_BUTTON: &str = "ticket:reopen";
 pub const DELETE_BUTTON: &str = "ticket:delete";
+/// Memnuniyet butonları: `ticket:rate:<sunucu>:<numara>:<puan>`.
+pub const RATE_PREFIX: &str = "ticket:rate:";
+pub const MAX_AUTO_CLOSE_HOURS: u32 = 720;
+/// Otomatik kapatma döngüsü bu aralıkla bakar.
+const AUTO_CLOSE_EVERY: Duration = Duration::from_secs(10 * 60);
 pub const MAX_TOPICS: usize = 10;
 pub const MAX_TOPIC_LEN: usize = 50;
 
@@ -52,11 +57,24 @@ pub struct TicketExtras {
     pub closed_category: Option<u64>,
     /// Sık sorulan sorular: doluysa yapay zekâ üyenin ilk mesajına buradan cevap vermeyi dener.
     pub faq: Option<String>,
+    /// Bu kadar saat kimse yazmazsa bilet kendiliğinden kapanır (0 = kapalı). Bir saat önce uyarılır.
+    pub auto_close_hours: u32,
+    /// Kapatılınca açana 1-5 yıldızlı memnuniyet sorusu gönderilir.
+    pub rating: bool,
 }
 
 impl Default for TicketExtras {
     fn default() -> Self {
-        Self { topics: Vec::new(), intro: None, max_open: 1, keep_closed: false, closed_category: None, faq: None }
+        Self {
+            topics: Vec::new(),
+            intro: None,
+            max_open: 1,
+            keep_closed: false,
+            closed_category: None,
+            faq: None,
+            auto_close_hours: 0,
+            rating: false,
+        }
     }
 }
 
@@ -171,6 +189,9 @@ pub async fn handle_component(
     data: &Data,
     interaction: &ComponentInteraction,
 ) -> anyhow::Result<()> {
+    if let Some(rest) = interaction.data.custom_id.strip_prefix(RATE_PREFIX) {
+        return rate(ctx, data, interaction, rest).await;
+    }
     match interaction.data.custom_id.as_str() {
         OPEN_BUTTON => open(ctx, data, interaction, None).await,
         TOPIC_SELECT => {
@@ -432,16 +453,17 @@ pub fn closing_notice(closer: UserId, keep: bool) -> String {
 }
 
 /// Konuşma kaydını çıkarır, log kanalına ve açan kişiye gönderir; ayara göre kanalı siler ya da kilitler.
+#[allow(clippy::too_many_arguments)]
 pub async fn finish_close(
     ctx: &serenity::Context,
-    data: &Data,
+    db: &PgPool,
+    modlog: &crate::modlog::ModLog,
     guild_id: GuildId,
     channel_id: ChannelId,
     closing: Closing,
     closer: &serenity::User,
     extras: &TicketExtras,
 ) {
-    let db = &data.db;
     let Closing { number, opener, opened_unix, claimed_by } = closing;
     let guild_name = ctx
         .cache
@@ -482,7 +504,7 @@ pub async fn finish_close(
         summary = summary.field("Üstlenen", format!("<@{staff}>"), true);
     }
 
-    data.modlog
+    modlog
         .ticket_closed(
             &ctx.http,
             db,
@@ -496,9 +518,11 @@ pub async fn finish_close(
         let dm = CreateMessage::new()
             .content(format!(
                 "🎫 **{guild_name}** sunucusundaki **#{number:04}** numaralı destek biletin kapatıldı. \
-                 Konuşma kaydı ektedir."
+                 Konuşma kaydı ektedir.{}",
+                if extras.rating { "\n\n**Destekten ne kadar memnun kaldın?**" } else { "" }
             ))
             .add_file(CreateAttachment::bytes(text.into_bytes(), filename));
+        let dm = if extras.rating { dm.components(vec![rating_row(guild_id, number)]) } else { dm };
         if let Err(e) = opener.direct_message(ctx, dm).await {
             debug!(user = %opener.id, error = %e, "Bilet kaydı DM ile gönderilemedi");
         }
@@ -565,7 +589,185 @@ async fn close(ctx: &serenity::Context, data: &Data, interaction: &ComponentInte
             ),
         )
         .await?;
-    finish_close(ctx, data, guild_id, channel_id, closing, &interaction.user, &extras).await;
+    finish_close(ctx, &data.db, &data.modlog, guild_id, channel_id, closing, &interaction.user, &extras).await;
+    Ok(())
+}
+
+fn rating_row(guild_id: GuildId, number: i32) -> CreateActionRow {
+    let buttons = (1..=5)
+        .map(|n| {
+            CreateButton::new(format!("{RATE_PREFIX}{guild_id}:{number}:{n}"))
+                .label(format!("{n} ⭐"))
+                .style(if n >= 4 { ButtonStyle::Success } else { ButtonStyle::Secondary })
+        })
+        .collect();
+    CreateActionRow::Buttons(buttons)
+}
+
+/// `<sunucu>:<numara>:<puan>` → değerler (puan 1-5).
+fn parse_rating(rest: &str) -> Option<(GuildId, i32, u8)> {
+    let mut parts = rest.split(':');
+    let guild = parts.next()?.parse::<u64>().ok().filter(|g| *g != 0).map(GuildId::new)?;
+    let number = parts.next()?.parse::<i32>().ok()?;
+    let score = parts.next()?.parse::<u8>().ok().filter(|s| (1..=5).contains(s))?;
+    parts.next().is_none().then_some((guild, number, score))
+}
+
+fn rating_key(guild_id: GuildId) -> String {
+    format!("bilet:puan:{guild_id}")
+}
+
+/// Sunucunun ortalama memnuniyet puanı ve oy sayısı.
+pub async fn rating_summary(redis: &redis::aio::ConnectionManager, guild_id: GuildId) -> Option<(f64, u64)> {
+    let mut conn = redis.clone();
+    let (sum, count): (Option<u64>, Option<u64>) =
+        redis::cmd("HMGET").arg(rating_key(guild_id)).arg("toplam").arg("adet").query_async(&mut conn).await.ok()?;
+    let (sum, count) = (sum?, count.filter(|c| *c > 0)?);
+    Some((sum as f64 / count as f64, count))
+}
+
+/// Açanın DM'deki yıldız butonu.
+async fn rate(ctx: &serenity::Context, data: &Data, interaction: &ComponentInteraction, rest: &str) -> anyhow::Result<()> {
+    let Some((guild_id, number, score)) = parse_rating(rest) else {
+        return Ok(());
+    };
+    let mut conn = data.redis.clone();
+    // Her bilet bir kez puanlanır (DM'deki butonlar yalnızca açana görünür).
+    let first: Option<String> = redis::cmd("SET")
+        .arg(format!("bilet:puanlandi:{guild_id}:{number}"))
+        .arg(1)
+        .arg("NX")
+        .arg("EX")
+        .arg(90 * 86_400)
+        .query_async(&mut conn)
+        .await?;
+    let text = if first.is_some() {
+        let _: () = redis::pipe()
+            .cmd("HINCRBY").arg(rating_key(guild_id)).arg("toplam").arg(score)
+            .cmd("HINCRBY").arg(rating_key(guild_id)).arg("adet").arg(1)
+            .query_async(&mut conn)
+            .await?;
+        let embed = CreateEmbed::new()
+            .title(format!("⭐ Bilet #{number:04} puanlandı: {score}/5"))
+            .description(format!("{} {}", "⭐".repeat(usize::from(score)), user_line(&interaction.user)))
+            .colour(if score >= 4 { serenity::Colour::DARK_GREEN } else if score == 3 { serenity::Colour::GOLD } else { serenity::Colour::RED })
+            .timestamp(serenity::Timestamp::now());
+        data.modlog.ticket_rated(&ctx.http, &data.db, guild_id, embed).await;
+        format!("Teşekkürler! Bileti **{score}/5** ⭐ ile puanladın.")
+    } else {
+        "Bu bileti zaten puanlamıştın, teşekkürler!".to_owned()
+    };
+    interaction
+        .create_response(
+            ctx,
+            CreateInteractionResponse::UpdateMessage(CreateInteractionResponseMessage::new().content(text).components(Vec::new())),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Hareketsiz biletleri kapatır (her sunucunun `auto_close_hours` ayarına göre). Kapanmadan bir saat önce uyarır.
+pub fn spawn_auto_close(
+    ctx: serenity::Context,
+    db: PgPool,
+    redis: redis::aio::ConnectionManager,
+    settings: crate::settings::PluginSettings,
+    modlog: std::sync::Arc<crate::modlog::ModLog>,
+) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(AUTO_CLOSE_EVERY).await;
+            crate::supervise::round("bilet otomatik kapatma", Duration::from_secs(600), async {
+                if let Err(e) = auto_close_round(&ctx, &db, &redis, &settings, &modlog).await {
+                    warn!(error = ?e, "Hareketsiz biletler kontrol edilemedi");
+                }
+            })
+            .await;
+        }
+    });
+}
+
+/// Hareketsizlik durumuna göre ne yapılmalı?
+#[derive(Debug, PartialEq, Eq)]
+enum Idle {
+    Fine,
+    Warn,
+    Close,
+}
+
+fn idle_state(idle_secs: i64, hours: u32) -> Idle {
+    let limit = i64::from(hours) * 3600;
+    if hours == 0 {
+        Idle::Fine
+    } else if idle_secs >= limit {
+        Idle::Close
+    } else if hours >= 2 && idle_secs >= limit - 3600 {
+        Idle::Warn
+    } else {
+        Idle::Fine
+    }
+}
+
+async fn auto_close_round(
+    ctx: &serenity::Context,
+    db: &PgPool,
+    redis: &redis::aio::ConnectionManager,
+    settings: &crate::settings::PluginSettings,
+    modlog: &crate::modlog::ModLog,
+) -> anyhow::Result<()> {
+    let open: Vec<(i64, i64, i64)> =
+        sqlx::query_as("SELECT guild_id, channel_id, EXTRACT(EPOCH FROM created_at)::BIGINT FROM tickets WHERE status = 'open'")
+            .fetch_all(db)
+            .await?;
+    let now = serenity::Timestamp::now().unix_timestamp();
+    for (guild, channel, created) in open {
+        let (Some(guild_id), Some(channel_id)) = (to_id(Some(guild)).map(GuildId::new), to_id(Some(channel)).map(ChannelId::new)) else {
+            continue;
+        };
+        let extras = settings.get::<TicketExtras>(db, guild_id).await?;
+        if extras.auto_close_hours == 0 {
+            continue;
+        }
+        // Son mesajın zamanı önbellekten (kanal kimliği gibi mesaj kimliği de zaman taşır).
+        let Some(last) = ctx.cache.guild(guild_id).and_then(|g| g.channels.get(&channel_id).map(|c| c.last_message_id)) else {
+            continue; // Kanal yok (silinmiş); kanal silme olayı kaydı kapatır.
+        };
+        let last_unix = last.map_or(created, |m| m.created_at().unix_timestamp()).max(created);
+        match idle_state(now - last_unix, extras.auto_close_hours) {
+            Idle::Fine => {}
+            Idle::Warn => {
+                let mut conn = redis.clone();
+                let fresh: Option<String> =
+                    redis::cmd("SET").arg(format!("bilet:uyari:{channel_id}:{last_unix}")).arg(1).arg("NX").arg("EX").arg(7200).query_async(&mut conn).await?;
+                if fresh.is_some() {
+                    let text = "⏰ Bu bilette bir süredir yazışma yok. **1 saat** içinde kimse yazmazsa bilet otomatik kapatılacak.";
+                    let _ = channel_id.send_message(&ctx.http, CreateMessage::new().content(text)).await;
+                }
+            }
+            Idle::Close => {
+                let row: Option<(i32, i64, Option<i64>)> = sqlx::query_as(
+                    "SELECT number, opener_id, claimed_by FROM tickets WHERE channel_id = $1 AND status = 'open'",
+                )
+                .bind(channel)
+                .fetch_optional(db)
+                .await?;
+                let Some((number, opener_id, claimed_by)) = row else { continue };
+                let bot = ctx.cache.current_user().id;
+                if !mark_closed(db, channel_id, Some(bot)).await? {
+                    continue;
+                }
+                let closing = Closing { number, opener: to_id(Some(opener_id)).map(UserId::new), opened_unix: created, claimed_by };
+                let notice = format!(
+                    "⏰ Bu bilette {} saattir kimse yazmadığı için otomatik kapatılıyor. Kayıt oluşturuluyor…",
+                    extras.auto_close_hours
+                );
+                let _ = channel_id.send_message(&ctx.http, CreateMessage::new().content(notice)).await;
+                let bot_user: serenity::User = (**ctx.cache.current_user()).clone();
+                info!(guild = %guild_id, ticket = number, "Hareketsiz bilet otomatik kapatılıyor");
+                finish_close(ctx, db, modlog, guild_id, channel_id, closing, &bot_user, &extras).await;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -849,6 +1051,27 @@ fn to_id(raw: Option<i64>) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_rating_buttons() {
+        assert_eq!(parse_rating("12:7:5"), Some((GuildId::new(12), 7, 5)));
+        assert_eq!(parse_rating("12:7:0"), None);
+        assert_eq!(parse_rating("12:7:6"), None);
+        assert_eq!(parse_rating("0:7:3"), None);
+        assert_eq!(parse_rating("12:7:3:9"), None);
+        assert_eq!(parse_rating("x:7:3"), None);
+    }
+
+    #[test]
+    fn idle_tickets_are_warned_then_closed() {
+        assert_eq!(idle_state(10 * 3600, 0), Idle::Fine);
+        assert_eq!(idle_state(3600, 24), Idle::Fine);
+        assert_eq!(idle_state(23 * 3600, 24), Idle::Warn);
+        assert_eq!(idle_state(24 * 3600, 24), Idle::Close);
+        // 1 saatlik ayarda uyarı yok, doğrudan kapanır.
+        assert_eq!(idle_state(1800, 1), Idle::Fine);
+        assert_eq!(idle_state(3600, 1), Idle::Close);
+    }
 
     #[test]
     fn topic_slugs_are_safe_channel_names() {

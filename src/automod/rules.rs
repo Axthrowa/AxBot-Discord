@@ -239,6 +239,12 @@ pub struct ModSettings {
     /// Kısıtlı kanalda mesaj silinince kanalda kısa bir uyarı göster.
     pub restricted_reply: bool,
     pub log: LogSettings,
+    /// Yasaklı kelime içeren takma adları değiştir.
+    pub nick_filter: bool,
+    /// Listede üste çıkmak için başa konan işaretleri (!, ., 0…) temizle.
+    pub dehoist: bool,
+    /// Ad tamamen temizlenirse ya da küfürlüyse verilecek takma ad.
+    pub nick_replacement: String,
 }
 
 impl Default for ModSettings {
@@ -257,6 +263,9 @@ impl Default for ModSettings {
             restricted_dm: false,
             restricted_reply: true,
             log: LogSettings::default(),
+            nick_filter: false,
+            dehoist: false,
+            nick_replacement: "Üye".to_owned(),
         }
     }
 }

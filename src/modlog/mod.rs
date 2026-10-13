@@ -147,6 +147,11 @@ impl ModLog {
         self.send(http, db, guild_id, message).await;
     }
 
+    /// Bilete verilen memnuniyet puanı (bilet kayıtlarının gittiği kanala).
+    pub async fn ticket_rated(&self, http: &Http, db: &PgPool, guild_id: GuildId, embed: CreateEmbed) {
+        self.send(http, db, guild_id, CreateMessage::new().embed(embed)).await;
+    }
+
     /// Log gönderilemezse moderasyon işlemi başarısız sayılmaz; sadece loglanır.
     async fn send(&self, http: &Http, db: &PgPool, guild_id: GuildId, message: CreateMessage) {
         let channel = match self.channel(db, guild_id).await {

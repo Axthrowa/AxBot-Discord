@@ -142,6 +142,16 @@ pub async fn fields(state: &WebState, guild_id: GuildId, options: &Options) -> a
             + &checkbox("restricted_reply", settings.restricted_reply, "Mesaj silinince kanalda kısa bir uyarı göster")
             + &checkbox("restricted_dm", settings.restricted_dm, "Mesaj silinince yazara özelden haber ver"),
     ));
+    out.push_str(&section(
+        "Takma ad denetimi",
+        checkbox("nick_filter", settings.nick_filter, "Yasaklı kelime içeren takma adları değiştir")
+            + &checkbox("dehoist", settings.dehoist, "Listede üste çıkmak için başa konan işaretleri (!, ., 0…) temizle")
+            + &field(
+                "Yerine verilecek ad",
+                &format!("<input type=\"text\" name=\"nick_replacement\" value=\"{}\" maxlength=\"32\" placeholder=\"Üye\">", escape(&settings.nick_replacement)),
+                "Ad küfürlüyse ya da temizlenince boş kalırsa bu ad verilir. Üye girişinde ve adını değiştirdiğinde denetlenir; muaf roller atlanır.                  Botun <b>Takma Adları Yönet</b> izni olmalı; sunucu sahibinin ve botun rolünden yüksek üyelerin adı değiştirilemez.",
+            ),
+    ));
 
     // Otomatik cezalar.
     let mut table = String::new();
@@ -287,6 +297,13 @@ pub async fn save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Res
     }
     settings.restricted_reply = input.checked("restricted_reply");
     settings.restricted_dm = input.checked("restricted_dm");
+    settings.nick_filter = input.checked("nick_filter");
+    settings.dehoist = input.checked("dehoist");
+    let replacement = input.raw("nick_replacement").trim();
+    if replacement.chars().count() > 32 {
+        return Err("metin");
+    }
+    settings.nick_replacement = if replacement.is_empty() { "Üye".to_owned() } else { replacement.to_owned() };
 
     let punish_removed: Vec<i32> = input.all("punish_del").into_iter().map(|raw| raw.parse().map_err(|_| "sayi")).collect::<Result<_, _>>()?;
     let new_punishment = parse_punishment(input)?;
@@ -392,6 +409,100 @@ pub async fn log_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) ->
     state.modlog.set_channel(&state.db, guild_id, mod_channel).await.map_err(failed)?;
     state.settings.set(&state.db, guild_id, settings).await.map_err(failed)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------- Discord AutoMod
+
+/// "Discord AutoMod" sayfası: Discord'un kendi kuralları (bot kapalıyken de korur).
+pub async fn native_fields(state: &WebState, guild_id: GuildId, options: &Options) -> anyhow::Result<(String, bool)> {
+    use crate::nativeautomod::{self, NativeAutomodSettings};
+    let settings = state.settings.get::<NativeAutomodSettings>(&state.db, guild_id).await?;
+    let mut out = section(
+        "Hazır filtreler (Discord'un kendi listeleri)",
+        checkbox("profanity", settings.profanity, "Küfür ve argo")
+            + &checkbox("sexual", settings.sexual, "Cinsel içerik")
+            + &checkbox("slurs", settings.slurs, "Hakaret ve nefret söylemi")
+            + "<p class=\"note\">Discord bu listeleri kendisi günceller (İngilizce ağırlıklıdır). Türkçe küfürler için aşağıdaki kelime listesini ya da "
+            + "<b>Moderasyon</b> sayfasındaki botun kendi filtresini kullan.</p>",
+    );
+    out.push_str(&section(
+        "Yasaklı kelimeler",
+        field(
+            "Kelimeler",
+            &words_area("keywords", &settings.keywords, "her satıra bir kelime\n*reklam*  (içinde geçen)\nkumar*  (ile başlayan)"),
+            "Satır ya da virgülle ayır; en fazla 1000 kelime, her biri en fazla 60 karakter. Mesaj Discord tarafından gönderilmeden engellenir.",
+        ) + &field(
+            "Yazanı kaç dakika sustur",
+            &number_input("timeout_minutes", settings.timeout_minutes, 0, nativeautomod::MAX_TIMEOUT_MINUTES),
+            "0 = susturma, yalnızca engelle. En fazla 4 hafta.",
+        ),
+    ));
+    out.push_str(&section(
+        "Toplu etiket ve spam",
+        field(
+            "Bir mesajda en fazla kaç etiket",
+            &number_input("native_mentions", settings.mention_limit, 0, u32::from(nativeautomod::MAX_MENTIONS)),
+            "0 = kapalı. Ör. 5: altıncı farklı kişiyi/rolü etiketleyen mesaj engellenir.",
+        ) + &checkbox("native_spam", settings.spam, "Discord'un spam sezgisini aç (şüpheli bağlantı ve toplu mesajlar)"),
+    ));
+    out.push_str(&section(
+        "Ortak ayarlar",
+        field("Engellenen mesajlar şu kanala bildirilsin", &options.channel_select("alert_channel", settings.alert_channel.filter(|c| *c != 0).map(ChannelId::new)), "Boşsa bildirilmez.")
+            + &field(
+                "Üyeye gösterilecek açıklama",
+                &format!(
+                    "<input type=\"text\" name=\"block_message\" value=\"{}\" maxlength=\"{}\" placeholder=\"Bu mesaj sunucu kurallarına aykırı.\">",
+                    escape(&settings.block_message),
+                    nativeautomod::MAX_BLOCK_MESSAGE
+                ),
+                "En fazla 150 karakter.",
+            )
+            + &field("Muaf roller", &checklist("native_exempt", &options.all_roles, "@ ", &settings.exempt_roles), "Bu rollerdekilerin mesajları engellenmez.")
+            + "<p class=\"note\">Kaydedince kurallar Discord'da <b>Sunucu Ayarları → AutoMod</b> altında “AxBot · …” adıyla oluşur. Botun "
+            + "<b>Sunucuyu Yönet</b> izni olmalı (susturma için <b>Üyelere Zaman Aşımı Uygula</b> da). Discord sunucu başına yalnızca bir hazır filtre "
+            + "ve bir spam kuralına izin verir: sunucuda zaten varsa önce onu kapat.</p>",
+    ));
+    Ok((out, settings.is_active()))
+}
+
+pub async fn native_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Result<(), &'static str> {
+    use crate::nativeautomod::{self, NativeAutomodSettings};
+    let block_message = input.raw("block_message").trim().to_owned();
+    if block_message.chars().count() > nativeautomod::MAX_BLOCK_MESSAGE {
+        return Err("metin");
+    }
+    let current = state.settings.get::<NativeAutomodSettings>(&state.db, guild_id).await.map_err(|e| {
+        warn!(guild = %guild_id, error = ?e, "Panel: Discord AutoMod ayarı okunamadı");
+        "hata"
+    })?;
+    let mut settings = NativeAutomodSettings {
+        profanity: input.checked("profanity"),
+        sexual: input.checked("sexual"),
+        slurs: input.checked("slurs"),
+        keywords: nativeautomod::parse_keywords(input.raw("keywords"))?,
+        timeout_minutes: if input.raw("timeout_minutes").is_empty() { 0 } else { input.number("timeout_minutes", 0, nativeautomod::MAX_TIMEOUT_MINUTES)? },
+        mention_limit: if input.raw("native_mentions").is_empty() {
+            0
+        } else {
+            u8::try_from(input.number("native_mentions", 0, u32::from(nativeautomod::MAX_MENTIONS))?).map_err(|_| "sayi")?
+        },
+        spam: input.checked("native_spam"),
+        alert_channel: input.channel("alert_channel")?.map(ChannelId::get),
+        block_message,
+        exempt_roles: input.ids("native_exempt", &input.options.all_roles, "rol")?,
+        rule_ids: current.rule_ids,
+    };
+    let errors = nativeautomod::apply(&state.http, guild_id, &mut settings).await;
+    // Kimlikler her durumda saklanır (bir kısmı oluşmuş olabilir).
+    state.settings.set(&state.db, guild_id, settings).await.map_err(|e| {
+        warn!(guild = %guild_id, error = ?e, "Panel: Discord AutoMod ayarı kaydedilemedi");
+        "hata"
+    })?;
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err("automod")
+    }
 }
 
 #[cfg(test)]

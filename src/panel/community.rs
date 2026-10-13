@@ -135,6 +135,22 @@ pub async fn community_fields(state: &WebState, guild_id: GuildId, options: &Opt
             "İkinci yarısını, üçüncü çeyreğini alır. 0 = yalnızca duyuru.",
         ),
     ));
+    out.push_str(&section(
+        "Takviye (boost) teşekkürü",
+        field(
+            "Teşekkür kanalı",
+            &channel_opt(options, "boost_channel", settings.boost_channel),
+            "Bir üye sunucuya takviye yapınca burada teşekkür edilir. Boşsa kapalı.",
+        ) + &field(
+            "Mesaj",
+            &big_textarea("boost_message", &settings.boost_message, community::MAX_BOOST_MESSAGE, 3, "Boşsa hazır metin: 💖 {kullanıcı} sunucumuza takviye yaptı…"),
+            "<code>{kullanıcı}</code> etiket, <code>{isim}</code> ad, <code>{sunucu}</code> sunucu adı, <code>{sayı}</code> toplam takviye sayısı.",
+        ) + &field(
+            "Ek ödül rolü",
+            &Options::select("boost_role", &options.roles, "@ ", settings.boost_role, "— Yok —"),
+            "Discord'un kendi takviyeci rolüne ek olarak verilir (isteğe bağlı). Takviye bitince Discord kendi rolünü alır; bu rol kalır.",
+        ),
+    ));
     Ok((out, settings.is_active()))
 }
 
@@ -162,6 +178,12 @@ pub async fn community_save(state: &WebState, guild_id: GuildId, input: &Input<'
     let season_channel = input.channel("season_channel")?.map(ChannelId::get);
     let clip_channel = input.channel("clip_channel")?.map(ChannelId::get);
     let season_reward = if input.raw("season_reward").is_empty() { 0 } else { input.number("season_reward", 0, community::MAX_SEASON_REWARD)? };
+    let boost_channel = input.channel("boost_channel")?.map(ChannelId::get);
+    let boost_message = input.raw("boost_message").to_owned();
+    if boost_message.chars().count() > community::MAX_BOOST_MESSAGE {
+        return Err("metin");
+    }
+    let boost_role = input.id("boost_role", &input.options.roles, "rol")?;
 
     let current = state.settings.get::<CommunitySettings>(&state.db, guild_id).await.map_err(&failed)?;
     let mut settings = (*current).clone();
@@ -185,6 +207,9 @@ pub async fn community_save(state: &WebState, guild_id: GuildId, input: &Input<'
     settings.season_channel = season_channel;
     settings.clip_channel = clip_channel;
     settings.season_reward = season_reward;
+    settings.boost_channel = boost_channel;
+    settings.boost_message = boost_message;
+    settings.boost_role = boost_role;
     state.settings.set(&state.db, guild_id, settings).await.map_err(&failed)
 }
 

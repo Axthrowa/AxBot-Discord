@@ -332,7 +332,7 @@ impl NewsSettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewsItem {
     pub id: String,
     pub title: String,
@@ -680,6 +680,7 @@ async fn poll(news: &NewsContext) {
                         continue;
                     }
                     deliver(news, *guild_id, settings, category, source.name, &item).await;
+                    crate::newsprefs::dispatch(news, *guild_id, settings, category, source.name, &item).await;
                 }
             }
             everything.extend(items.into_iter().filter(is_suitable).map(|i| (source.name, i)));
@@ -702,7 +703,11 @@ async fn poll(news: &NewsContext) {
             }
         }
     }
+    let (_, hour, today, _) = turkey_now();
     for (guild_id, settings) in &guilds {
+        if hour == settings.digest_hour {
+            crate::newsprefs::daily_digests(news, *guild_id, &today).await;
+        }
         if settings.delivery == Delivery::Daily {
             daily_if_due(news, *guild_id, settings).await;
         }
@@ -784,10 +789,61 @@ struct WeekEntry {
     link: String,
     source: String,
     at: i64,
+    /// Haberin dili (eski kayıtlarda yok).
+    #[serde(default)]
+    lang: String,
+}
+
+/// Son okunan bir haber (kişisel "Haberlerim" listesi için).
+pub struct RecentEntry {
+    pub title: String,
+    pub link: String,
+    pub source: String,
+    pub at: i64,
+    pub lang: String,
+}
+
+/// Kategorinin son haberleri, sunucunun dil ve kelime süzgeçlerinden geçenler (en yeni önce).
+pub async fn recent(news: &NewsContext, category: &str, settings: &NewsSettings, limit: usize) -> Vec<RecentEntry> {
+    let mut conn = news.redis.clone();
+    let raw: Vec<String> = redis::cmd("LRANGE").arg(format!("haber:hafta:{category}")).arg(0).arg(WEEK_ITEMS - 1).query_async(&mut conn).await.unwrap_or_default();
+    raw.iter()
+        .filter_map(|r| serde_json::from_str::<WeekEntry>(r).ok())
+        .filter(|e| {
+            let item = NewsItem { title: e.title.clone(), lang: e.lang.clone(), ..NewsItem::default() };
+            is_suitable(&item) && (e.lang.is_empty() && settings.source_languages.is_empty() || settings.allows(&item))
+        })
+        .take(limit)
+        .map(|e| RecentEntry { title: e.title, link: e.link, source: e.source, at: e.at, lang: e.lang })
+        .collect()
+}
+
+/// Başlığı hedef dile çevirir (gerekirse; sonuç 2 gün saklanır). Çevrilemezse olduğu gibi.
+pub async fn title_in(news: &NewsContext, title: &str, lang: &str, target: Option<&str>) -> String {
+    let Some(target) = target.filter(|t| *t != lang && !lang.is_empty()) else {
+        return title.to_owned();
+    };
+    let key = format!("haber:baslik:{target}:{:x}", fnv(title));
+    let mut conn = news.redis.clone();
+    if let Ok(Some(cached)) = redis::cmd("GET").arg(&key).query_async::<Option<String>>(&mut conn).await {
+        return cached;
+    }
+    match machine_translate(title, target).await {
+        Some(translated) => {
+            let _: redis::RedisResult<()> = redis::cmd("SET").arg(&key).arg(&translated).arg("EX").arg(2 * 86_400).query_async(&mut conn).await;
+            translated
+        }
+        None => title.to_owned(),
+    }
+}
+
+/// Bağlantının kısa özeti (kişisel gönderimde aynı haberi tanımak için).
+pub fn link_hash(link: &str) -> u64 {
+    fnv(link)
 }
 
 async fn remember_for_week(news: &NewsContext, category: &str, source: &str, item: &NewsItem) {
-    let entry = WeekEntry { title: item.title.clone(), link: item.link.clone(), source: source.to_owned(), at: serenity::Timestamp::now().unix_timestamp() };
+    let entry = WeekEntry { title: item.title.clone(), link: item.link.clone(), source: source.to_owned(), at: serenity::Timestamp::now().unix_timestamp(), lang: item.lang.clone() };
     let Ok(json) = serde_json::to_string(&entry) else { return };
     let key = format!("haber:hafta:{category}");
     let mut conn = news.redis.clone();

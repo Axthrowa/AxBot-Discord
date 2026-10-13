@@ -31,7 +31,7 @@ pub const PAGES: &[Page] = &[
         admin: false,
         body: "**Komutları bulmak:** `/` yaz → listeden AxBot'u seç. Her komutun altında kısa açıklaması yazar.\n\
 **Bilgi komutları**\n\
-• `/kullanıcı-bilgi`, `/sunucu-bilgi`, `/rol-bilgi`, `/avatar` — hesap, sunucu, rol ve profil resmi\n\
+• `/kullanıcı-bilgi`, `/sunucu-bilgi`, `/rol bilgi`, `/avatar` — hesap, sunucu, rol ve profil resmi\n\
 • `/ping` — botun gecikmesi\n\
 • `/hatırlat süre:30dk mesaj:…` — belirtilen sürede sana hatırlatır\n\
 • `/afk sebep:…` — biri seni etiketlerse bot AFK olduğunu söyler; ilk mesajında AFK kalkar\n\n\
@@ -102,14 +102,18 @@ pub const PAGES: &[Page] = &[
 • `/yaz istek:…` kısa metin yazdırır · `/çevir metin:… dil:…` · `/hayal-et istek:…` resim çizdirir\n\n\
 **Arama — `/ara`**: `youtube` · `twitch` · `anime` · `manga` · `pokemon` · `sözlük` · `imgur`\n\
 **Emoji — `/emoji büyüt`** bir emojiyi büyük gösterir\n\
-**Davetler:** `/davetler` kaç kişi davet ettin · `/davet-sıralama`",
+**Davetler:** `/davetler` kaç kişi davet ettin · `/davet-sıralama`\n\
+**Vurgu — `/vurgu ekle kelime:…`:** seçtiğin kelime (ör. adın) görebildiğin bir kanalda geçince sana özelden haber verilir · `liste` · `sil`\n\
+**Kişisel haberler:** haber kanalındaki **⚙️ Tercihlerim** ile kategorilerini seç, istersen özelden al; **📰 Haberlerim** yalnızca senin kategorilerini gösterir\n\
+**Rol bilgisi:** `/rol bilgi rol:@…`",
     },
     Page {
         key: "u_community",
         label: "Topluluk",
         emoji: "🤝",
         admin: false,
-        body: "**Destek bileti:** bilet kanalındaki **Bilet aç** butonuna bas; sadece sen ve yetkililer görürsün. Bitince `/bilet kapat`.\n\
+        body: "**Destek bileti:** bilet kanalındaki **Bilet aç** butonuna bas; sadece sen ve yetkililer görürsün. Bitince `/bilet kapat`; sonra özelden 1-5 ⭐ puan verebilirsin.\n\
+**Çekilişler:** **Katıl** butonuna bas; bazı çekilişlerde rol / seviye / hesap yaşı şartı ya da ek şans rolü olabilir.\n\
 **Doğum günü:** `/doğum-günü ayarla gün:8 ay:10` — o gün kutlanırsın · `liste` yaklaşanlar · `sil`\n\
 **Geçici ses odası:** \"➕ Oda Oluştur\" kanalına gir, sana özel oda açılır. Yönet: `/oda isim` · `limit` · `kilitle` / `aç` · \
 `gizle` / `göster` · `at` · `yasakla` · `devret` · `sahiplen`\n\
@@ -141,9 +145,10 @@ karşılama, otomod, seviye, rol menüleri, özel komutlar, otomasyonlar, istati
 Super Mario ya da hepsi karışık (panelde birden fazlası seçilebilir)\n\
 • `test` mesajı dener · `kapat`\n\
 • Değişkenler: `{kullanıcı}` `{isim}` `{sunucu}` `{üye}`; birden çok metni `|` ile ayır. Resimli karşılama kartı panelde.\n\n\
-**Roller:** `/otorol rol:@…` yeni üyelere · `/rol-paneli` butonla rol alma · panelde **Rol menüleri** (tepki / buton / açılır menü)\n\
+**Roller:** `/rol otomatik rol:@…` yeni üyelere · `/rol panel` butonla rol alma · `/rol süreli-ver` belirli bir süreliğine rol (süre dolunca geri alınır; liste `/rol süreliler`) · panelde **Rol menüleri** (tepki / buton / açılır menü)\n\
 **Doğrulama:** `/doğrulama kur kanal:#… rol:@…` (işlem sorusu ya da resimli kod) · `kapat`\n\
-**Giriş koruması — `/koruma`:** `hesap-yaşı` (yeni hesaplar) · `baskın kişi:…` · `baskın-bitir` · `durum`",
+**Giriş koruması — `/koruma`:** `hesap-yaşı` (yeni hesaplar) · `baskın kişi:…` · `baskın-bitir` · `kilit` (baskında bütün kanalları tek seferde kilitle / eski hâline aç) · `durum`\n\
+**Takviye teşekkürü:** panel → Topluluk (kanal, mesaj, ek ödül rolü)",
     },
     Page {
         key: "a_mod",
@@ -157,7 +162,10 @@ Super Mario ya da hepsi karışık (panelde birden fazlası seçilebilir)\n\
 **Otomatik moderasyon — `/automod`:** `durum` · `ayarla` (küfür, davet, bağlantı, spam) · `kelime-ekle/sil` · `istisna-ekle/sil` · \
 `spam-limiti`. Panelde 10 kural (büyük harf, emoji, bahsetme, zalgo…), her biri için sil / uyar, muaf roller, kısıtlı kanallar, YZ moderasyonu.\n\
 **Ban itirazı:** `/başvuru itiraz-kanalı kanal:#…` — yasaklananın DM'ine itiraz butonu gider\n\
-**Yıkım koruması** (panel): toplu kanal/rol silme ve yasaklamaya karşı · **Yedek — `/yedek al/liste/yükle/sil`**",
+**Yıkım koruması** (panel): toplu kanal/rol silme, açma ve yasaklamaya karşı; izinsiz webhook silinir, izinsiz eklenen bot atılır, \
+izinsiz verilen yönetici yetkisi geri alınır · **Yedek — `/yedek al/liste/yükle/sil`**\n\
+**Discord AutoMod** (panel): Discord'un kendi filtreleri (küfür, cinsel içerik, hakaret, kelime listesi, toplu etiket, spam) — bot kapalıyken de korur\n\
+**Takma ad denetimi** (panel → Moderasyon): küfürlü adları ve başa konan \"!\" gibi işaretleri düzeltir",
     },
     Page {
         key: "a_systems",
@@ -165,11 +173,12 @@ Super Mario ya da hepsi karışık (panelde birden fazlası seçilebilir)\n\
         emoji: "🎫",
         admin: true,
         body: "**Bilet:** `/bilet kur kanal:#… destek_rolü:@…` → panel gönderilir. Bilette `üstlen` · `ekle` · `çıkar` · `kapat` · `yeniden-aç` · `sil`. \
-Panelde konular, SSS (YZ ilk cevabı dener), üye başına sınır.\n\
+Panelde konular, SSS (YZ ilk cevabı dener), üye başına sınır, hareketsiz bileti otomatik kapatma ve 1-5 ⭐ memnuniyet puanı.\n\
 **Öneriler:** `/öneri-kanalı kanal:#…` · `/öneri-yanıtla numara:1 durum:Kabul edildi`\n\
-**Starboard:** `/starboard kanal:#… eşik:3` (panelde ek panolar) · **Çekiliş:** `/çekiliş başlat/bitir/yeniden-çek`\n\
+**Starboard:** `/starboard kanal:#… eşik:3` (panelde ek panolar) · **Çekiliş:** `/çekiliş başlat/bitir/yeniden-çek` \
+(şartlar: `gereken_rol` · `en_az_seviye` · `hesap_yaşı` · `ek_şans_rolü` 2 kat şans)\n\
 **Başvuru formları:** `/başvuru form-ekle` (5 soruya kadar) · `panel` · `form-liste` · `form-sil`\n\
-**Etkinlik:** `/etkinlik oluştur başlık:… zaman:GG.AA.YYYY SS:DD` · `iptal`\n\
+**Etkinlik:** `/etkinlik oluştur başlık:… zaman:GG.AA.YYYY SS:DD` (Discord'un Etkinlikler listesine de eklenir) · `iptal`\n\
 **Sayaç kanalları:** `/sayaç ekle tür:Tüm üyeler` · `sil` · `liste` · **Geçici odalar:** `/geçici-oda` · `/oda temizle`\n\
 **Doğum günü:** `/doğum-günü kanal kanal:#… rol:@…` · **Hayvan oyunu:** `/hayvan kanal kanal:#…`\n\
 **Müzik:** `/müzik 7-24` (bot kanaldan ayrılmaz) · `/müzik dj-rol rol:@…`",
@@ -182,7 +191,7 @@ Panelde konular, SSS (YZ ilk cevabı dener), üye başına sınır.\n\
         body: "**Seviye**\n\
 • `/seviye-ödül ekle seviye:10 rol:@…` · `sil` · `liste`\n\
 • `/xp ver` / `/xp al` · `/xp-muaf` — XP kazanılmayacak kanal, kategori ya da rol\n\
-• Panel → **Seviye**: duyuru yeri ve metni, XP oranı (%25-300), ödüllerin birikmesi, herkese açık sıralama sayfası; \
+• Panel → **Seviye**: duyuru yeri ve metni, XP oranı (%25-300), role göre XP çarpanı (ör. takviyecilere 2 kat), ödüllerin birikmesi, herkese açık sıralama sayfası; \
 **Başarımlar** ve sezon (haftalık/aylık) ödülleri **Topluluk** sayfasında\n\n\
 **Ekonomi**\n\
 • `/mağaza-yönet ekle ad:VIP fiyat:500 rol:@VIP` · `sil`\n\
@@ -198,7 +207,7 @@ Panelde konular, SSS (YZ ilk cevabı dener), üye başına sınır.\n\
 **Etiketler:** `/etiket ekle ad:kurallar içerik:…` → üyeler `!kurallar` yazar\n\
 **Duyuru:** `/duyuru gönder kanal:#… renk:mavi` (pencereye metni yaz) · `/duyuru düzenle`\n\
 **Bildirimler:** `/youtube ekle` · `/yayın ekle` (Twitch/Kick) · `/akış ekle` (Reddit, Bluesky, RSS, podcast…)\n\
-**Haberler:** `/akış haberler kanal:#haberler kategori:Hepsi dil:Türkçe` — teknoloji, oyun, sinema, dizi haberleri ve ücretsiz oyunlar; 5 dilde kaynak, istenen dile çeviri, anahtar kelime süzgeci, anlık ya da günlük, haftalık özet (ayarlar panelde) · `/akış haber-özeti`\n\
+**Haberler:** `/akış haberler kanal:#haberler kategori:Hepsi dil:Türkçe` — teknoloji, oyun, sinema, dizi haberleri ve ücretsiz oyunlar; 5 dilde kaynak, istenen dile çeviri, anahtar kelime süzgeci, anlık ya da günlük, haftalık özet (ayarlar panelde) · `/akış haber-özeti` · panelden **kişisel haber paneli** (herkes kendi kategorisini seçer)\n\
 **Emoji:** `/emoji ekle` · `/emoji sil`\n\n\
 **Yalnızca panelden:** özel komutlar (`!ad`), otomasyonlar (\"şu olunca şunu yap\"), tekrarlı mesajlar, gömülü mesajlar, \
 ModMail (DM → yetkili kanalı), sabit mesajlar, sayma / kelime zinciri kanalları, itiraf kanalı, bot profili.",
