@@ -49,7 +49,7 @@ echo "$(docker --version) · Compose $ver"
 
 # ---------- Dosyalar ----------
 say "Dosyalar $DIR klasörüne kopyalanıyor"
-mkdir -p "$DIR/yedekler"
+mkdir -p "$DIR/yedekler" "$DIR/yt-cerez"
 if [ "$HERE" != "$DIR" ]; then
     cp -a "$HERE"/. "$DIR"/
 fi
@@ -60,6 +60,10 @@ chown -R root:root "$DIR"
 chmod -R u=rwX,go=rX "$DIR"
 chmod 700 "$DIR"
 chmod 600 .env
+# İsteğe bağlı YouTube çerezi: bot kapsayıcısı (nonroot) okuyabilmeli; üst klasör 700 olduğu için sunucudaki
+# başka kullanıcılar yine erişemez.
+chmod 755 yt-cerez
+[ -f yt-cerez/cookies.txt ] && chmod 644 yt-cerez/cookies.txt
 
 # ---------- İmaj ----------
 if [ "$(uname -m)" = "x86_64" ] && [ -f axbot-image.tar ]; then

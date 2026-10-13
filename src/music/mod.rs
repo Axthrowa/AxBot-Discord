@@ -143,6 +143,39 @@ pub fn is_playlist_url(query: &str) -> bool {
     (youtube && q.contains("list=")) || (q.contains("soundcloud.com/") && q.contains("/sets/"))
 }
 
+/// yt-dlp hatası YouTube'un bot engeli mi? (veri merkezi IP'lerinde sık görülür)
+fn is_bot_block(error: &str) -> bool {
+    error.contains("Sign in to confirm") || error.contains("not a bot")
+}
+
+/// Sunucu kurulumundaki yt-dlp ayarları (ortam değişkenleriyle; ev bilgisayarında hiçbiri gerekmez):
+/// - `YTDLP_PLUGIN_DIRS`: eklenti klasörü (PO token sağlayıcısı bgutil burada),
+/// - `YTDLP_POT_URL`: PO token sunucusu (ör. `http://pot:4416`),
+/// - `YTDLP_COOKIES`: isteğe bağlı YouTube çerez dosyası (Netscape biçimi). yt-dlp çerezleri geri yazdığı için
+///   yazılabilir bir kopyası kullanılır.
+fn server_ytdlp_args() -> Vec<String> {
+    let mut args = Vec::new();
+    let var = |name: &str| std::env::var(name).ok().map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
+    if let Some(dirs) = var("YTDLP_PLUGIN_DIRS") {
+        args.extend(["--plugin-dirs".to_owned(), dirs]);
+    }
+    if let Some(url) = var("YTDLP_POT_URL") {
+        args.extend(["--extractor-args".to_owned(), format!("youtubepot-bgutilhttp:base_url={url}")]);
+    }
+    // Dosya konmadıysa sessizce geçilir (çerez isteğe bağlı).
+    if let Some(path) = var("YTDLP_COOKIES").filter(|p| Path::new(p).is_file()) {
+        let copy = std::env::temp_dir().join("axbot-yt-cookies.txt");
+        match std::fs::copy(&path, &copy) {
+            Ok(_) => {
+                info!("YouTube çerez dosyası kullanılıyor");
+                args.extend(["--cookies".to_owned(), copy.to_string_lossy().into_owned()]);
+            }
+            Err(e) => warn!(path, error = %e, "YTDLP_COOKIES dosyası okunamadı; çerezsiz devam ediliyor"),
+        }
+    }
+    args
+}
+
 impl Music {
     pub fn new(songbird: Arc<Songbird>, http: reqwest::Client) -> Self {
         let tools = Path::new("tools");
@@ -154,6 +187,7 @@ impl Music {
             ytdlp_args.push("--js-runtimes".to_owned());
             ytdlp_args.push(format!("deno:{deno}"));
         }
+        ytdlp_args.extend(server_ytdlp_args());
 
         Self(Arc::new(Shared {
             songbird,
@@ -388,22 +422,15 @@ impl Music {
             return Err("❌ Bu bağlantı çalınamaz. YouTube, Spotify, SoundCloud, Bandcamp, Twitch gibi bilinen bir müzik/video sitesinin bağlantısını ver ya da şarkının adını yaz.".to_owned());
         }
 
-        let source = if is_url {
-            YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), query.to_owned())
-        } else {
-            YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), query.to_owned())
-        }
-        .user_args(self.ytdlp_args.clone());
-
-        // yt-dlp tek kez çalışır; sonuç çalarken de kullanılır (bkz. `prefetch`).
-        let (input, meta) = prefetch::Prefetched::resolve(source).await.map_err(|e| {
-            let text = e.to_string();
+        let result = self.fetch(query, !is_url).await;
+        let (input, meta) = result.map_err(|text| {
             warn!(query, error = %text, "Şarkı çözülemedi");
             if text.contains("could not find executable") {
                 "❌ Müzik için gereken **yt-dlp** programı bulunamadı. Bot yöneticisinin `tools` klasörüne kurması gerekiyor."
                     .to_owned()
-            } else if text.contains("Sign in to confirm") {
-                "❌ YouTube bu isteği bot koruması nedeniyle reddetti. Biraz sonra tekrar dene veya başka bir bağlantı kullan."
+            } else if is_bot_block(&text) {
+                "❌ YouTube bu sunucunun IP adresini \"bot\" sanıp engelledi. Biraz sonra tekrar dene; sürerse bot yöneticisine \
+                 haber ver (sunucuya YouTube çerezi eklenmesi gerekebilir)."
                     .to_owned()
             } else {
                 format!("❌ **{query}** için çalınabilir bir sonuç bulunamadı.")
@@ -424,6 +451,17 @@ impl Music {
             spotify_url: None,
         };
         Ok((input, info))
+    }
+
+    /// yt-dlp'yi bir kez çalıştırır (sonuç çalarken de kullanılır, bkz. `prefetch`). Hata metni yt-dlp'ninkidir.
+    async fn fetch(&self, target: &str, search: bool) -> Result<(Input, songbird::input::AuxMetadata), String> {
+        let source = if search {
+            YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), target.to_owned())
+        } else {
+            YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), target.to_owned())
+        }
+        .user_args(self.ytdlp_args.clone());
+        prefetch::Prefetched::resolve(source).await.map_err(|e| e.to_string())
     }
 
     /// Şarkı adıysa ve Spotify anahtarı varsa önce Spotify'da arar: kart, kapak ve bağlantı Spotify'ın

@@ -41,6 +41,10 @@ services:
       WEB_BIND: 0.0.0.0:8080
       TUNNEL_METRICS_URL: http://tunnel:2000
       AXBOT_DOCKER: "1"
+      # YouTube veri merkezi IP'lerini "bot" sanıp engelliyor: yt-dlp, PO token servisinden (pot) kanıt alır.
+      YTDLP_POT_URL: http://pot:4416
+      # İsteğe bağlı: yt-cerez/cookies.txt konursa yt-dlp YouTube'a o hesapla bağlanır (yoksa yok sayılır).
+      YTDLP_COOKIES: /run/yt-cerez/cookies.txt
     # Bazı modem DNS'leri IPv6 (AAAA) sorgularını cevapsız bırakıp bağlantıları ~12 sn geciktiriyor.
     # Docker'ın iç DNS'i servis adlarını çözmeye devam eder, dış adlar için bunları kullanır.
     dns:
@@ -53,6 +57,10 @@ services:
         condition: service_healthy
       searxng:
         condition: service_started
+      pot:
+        condition: service_started
+    volumes:
+      - ./yt-cerez:/run/yt-cerez:ro
     # docker stop → SIGTERM → bot shard'ları kapatır, XP'yi yazar, havuzu kapatır.
     stop_grace_period: 20s
     read_only: true
@@ -64,6 +72,19 @@ services:
     cap_drop:
       - ALL
     mem_limit: 256m
+
+  # YouTube için PO token ("bot değilim" kanıtı) üreten servis. Yalnızca Docker'ın iç ağında; port açmaz.
+  pot:
+    <<: *defaults
+    profiles: ["docker"]
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.2-node
+    init: true
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
 
   # Web paneli için Cloudflare hızlı tüneli: hesap ve port açmadan https://….trycloudflare.com adresi.
   # Adres tünel her yeniden başladığında değişebilir; bot yeni adresi kendisi öğrenir (/panel).

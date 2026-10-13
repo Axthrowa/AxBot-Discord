@@ -31,6 +31,9 @@ RUN set -eux; \
     unzip -q /tmp/deno.zip -d /tools; \
     rm /tmp/deno.zip; \
     chmod 0755 /tools/yt-dlp /tools/deno; \
+    mkdir -p /tools/yt-dlp-plugins; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /tools/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip \
+        "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/download/2.0.2/bgutil-ytdlp-pot-provider.zip"; \
     mkdir -p /tools/lib; \
     cp -L "$(dpkg -L zlib1g | grep '/libz\.so\.1$')" /tools/lib/libz.so.1
 # (yt-dlp'nin tek dosyalık sürümü zlib ister; distroless imajda yoktur, yukarıda kopyalandı.)
@@ -52,9 +55,12 @@ COPY --from=builder /usr/local/bin/discord-bot /usr/local/bin/discord-bot
 COPY --from=builder /tools/yt-dlp /usr/local/bin/yt-dlp
 COPY --from=builder /tools/deno /usr/local/bin/deno
 COPY --from=builder /tools/lib /usr/local/lib/tools
+# yt-dlp eklentisi: PO token'ı docker-compose'daki `pot` servisinden alır (YouTube'un veri merkezi engeline karşı).
+COPY --from=builder /tools/yt-dlp-plugins /usr/local/lib/yt-dlp-plugins
 # Dosya sistemi salt okunurdur; yt-dlp ve deno önbelleklerini /tmp'ye (tmpfs) yazar.
 ENV XDG_CACHE_HOME=/tmp/cache \
     DENO_DIR=/tmp/deno \
-    LD_LIBRARY_PATH=/usr/local/lib/tools
+    LD_LIBRARY_PATH=/usr/local/lib/tools \
+    YTDLP_PLUGIN_DIRS=/usr/local/lib/yt-dlp-plugins
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/discord-bot"]
