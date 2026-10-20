@@ -135,7 +135,7 @@ async fn ensure(db: &PgPool, g: i64, u: i64) -> anyhow::Result<()> {
 }
 
 /// Cüzdana para ekler; yeni bakiyeyi döner.
-pub async fn add(db: &PgPool, guild_id: GuildId, user: UserId, amount: i64) -> anyhow::Result<i64> {
+pub async fn add(db: impl sqlx::PgExecutor<'_>, guild_id: GuildId, user: UserId, amount: i64) -> anyhow::Result<i64> {
     let (g, u) = ids(guild_id, user)?;
     let wallet: i64 = sqlx::query_scalar(
         "INSERT INTO economy_accounts (guild_id, user_id, wallet) VALUES ($1, $2, GREATEST($3, 0))
@@ -151,7 +151,7 @@ pub async fn add(db: &PgPool, guild_id: GuildId, user: UserId, amount: i64) -> a
 }
 
 /// Cüzdandan harcar; yetmiyorsa `None`.
-pub async fn spend(db: &PgPool, guild_id: GuildId, user: UserId, amount: i64) -> anyhow::Result<Option<i64>> {
+pub async fn spend(db: impl sqlx::PgExecutor<'_>, guild_id: GuildId, user: UserId, amount: i64) -> anyhow::Result<Option<i64>> {
     let (g, u) = ids(guild_id, user)?;
     Ok(sqlx::query_scalar(
         "UPDATE economy_accounts SET wallet = wallet - $3

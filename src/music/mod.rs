@@ -165,6 +165,10 @@ fn preferred_client() -> Option<String> {
     PREFERRED_CLIENT.read().ok().and_then(|c| c.clone())
 }
 
+/// Bütün istemciler engellenince yedekler bu zamana (Unix sn) kadar atlanır.
+static ALL_BLOCKED_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+const ALL_BLOCKED_PAUSE_SECS: i64 = 10 * 60;
+
 fn set_preferred_client(client: &str) {
     if let Ok(mut current) = PREFERRED_CLIENT.write() {
         *current = Some(client.to_owned());
@@ -493,26 +497,42 @@ impl Music {
     /// YouTube "bot musun" engeli verirse diğer istemciler sırayla denenir; işe yarayan hatırlanır.
     async fn fetch(&self, target: &str, search: bool) -> Result<(Input, songbird::input::AuxMetadata), String> {
         let first = self.fetch_with(target, search, self.args()).await;
-        let Err(error) = first else { return first };
-        if !is_bot_block(&error) {
-            return Err(error);
-        }
+        let Err(first_error) = first else { return first };
+        let blocked = is_bot_block(&first_error);
         let current = preferred_client();
+        // Varsayılan istemcide engel dışı hata (bulunamadı vb.) gerçek sonuçtur. Tercih edilen istemci ise
+        // bazı videoları açamayabilir (ör. `web_embedded` gömülemeyenleri): o zaman diğerleri de denenir.
+        if !blocked && current.is_none() {
+            return Err(first_error);
+        }
+        // Az önce hepsi engellendiyse kullanıcı her şarkıda beş denemeyi beklemesin.
+        if blocked && chrono::Utc::now().timestamp() < ALL_BLOCKED_UNTIL.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(first_error);
+        }
+        let mut other_error = (!blocked).then(|| first_error.clone());
         for client in FALLBACK_CLIENTS.iter().filter(|c| current.as_deref() != Some(**c)) {
             let mut args = self.ytdlp_args.clone();
             args.extend(client_args(Some(client)));
             match self.fetch_with(target, search, args).await {
                 Ok(found) => {
-                    info!(client, "YouTube bot engeli bu istemciyle aşıldı; bundan sonra o kullanılacak");
+                    info!(client, "YouTube bu istemciyle açıldı; bundan sonra o kullanılacak");
                     set_preferred_client(client);
                     return Ok(found);
                 }
                 Err(e) if is_bot_block(&e) => warn!(client, "YouTube istemcisi de engellendi"),
-                // Başka bir hata (bulunamadı vb.): engel aşılmış demektir, hata kullanıcıya gösterilir.
-                Err(e) => return Err(e),
+                // Bu istemci bu videoyu açamadı; sıradaki denenir, hata sonda gösterilir.
+                Err(e) => {
+                    other_error.get_or_insert(e);
+                }
             }
         }
-        Err(error)
+        match other_error {
+            Some(e) => Err(e),
+            None => {
+                ALL_BLOCKED_UNTIL.store(chrono::Utc::now().timestamp() + ALL_BLOCKED_PAUSE_SECS, std::sync::atomic::Ordering::Relaxed);
+                Err(first_error)
+            }
+        }
     }
 
     async fn fetch_with(&self, target: &str, search: bool, args: Vec<String>) -> Result<(Input, songbird::input::AuxMetadata), String> {

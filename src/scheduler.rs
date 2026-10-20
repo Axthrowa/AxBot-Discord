@@ -24,6 +24,8 @@ const MAX_SLEEP: Duration = Duration::from_secs(60);
 const BATCH: i64 = 50;
 const MAX_ATTEMPTS: i32 = 5;
 const RETRY_AFTER_SECS: i64 = 60;
+/// Çalıştırılmak üzere alınan görev bu kadar ileri ertelenir (yarıda kalırsa o zaman tekrar çalışır).
+const CLAIM_SECS: i64 = 5 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -175,14 +177,16 @@ impl Scheduler {
 
     async fn run_due(&self, executor: &Executor) -> anyhow::Result<()> {
         loop {
-            // Zamanı gelenleri tek sorguda al ve sil; aynı görev iki kez çalışmaz.
+            // Zamanı gelenler silinmez, ileri ertelenerek "ayrılır": bot görevi çalıştırırken kapanırsa görev
+            // kaybolmaz, CLAIM_SECS sonra yeniden çalışır (görevler iki kez çalışsa da zarar vermez).
             let due: Vec<(i64, Json<Task>, i32)> = sqlx::query_as(
-                "DELETE FROM scheduled_tasks WHERE id IN (
+                "UPDATE scheduled_tasks SET run_at = now() + make_interval(secs => $2) WHERE id IN (
                      SELECT id FROM scheduled_tasks WHERE run_at <= now()
                      ORDER BY run_at LIMIT $1 FOR UPDATE SKIP LOCKED)
                  RETURNING id, payload, attempts",
             )
             .bind(BATCH)
+            .bind(CLAIM_SECS as f64)
             .fetch_all(&self.db)
             .await?;
             if due.is_empty() {
@@ -191,21 +195,25 @@ impl Scheduler {
 
             for (id, Json(task), attempts) in due {
                 debug!(id, ?task, "Zamanlanmış görev çalışıyor");
-                if let Err(e) = execute(&self.db, executor, &task).await {
-                    if attempts + 1 >= MAX_ATTEMPTS {
+                let done = match execute(&self.db, executor, &task).await {
+                    Ok(()) => true,
+                    Err(e) if attempts + 1 >= MAX_ATTEMPTS => {
                         warn!(id, ?task, error = ?e, "Görev {MAX_ATTEMPTS} denemede başarısız, vazgeçildi");
-                        continue;
+                        true
                     }
-                    warn!(id, ?task, error = ?e, "Görev başarısız, 1 dk sonra tekrar denenecek");
-                    sqlx::query(
-                        "INSERT INTO scheduled_tasks (run_at, payload, attempts)
-                         VALUES (now() + make_interval(secs => $1), $2, $3)",
-                    )
-                    .bind(RETRY_AFTER_SECS as f64)
-                    .bind(Json(&task))
-                    .bind(attempts + 1)
-                    .execute(&self.db)
-                    .await?;
+                    Err(e) => {
+                        warn!(id, ?task, error = ?e, "Görev başarısız, 1 dk sonra tekrar denenecek");
+                        false
+                    }
+                };
+                if done {
+                    sqlx::query("DELETE FROM scheduled_tasks WHERE id = $1").bind(id).execute(&self.db).await?;
+                } else {
+                    sqlx::query("UPDATE scheduled_tasks SET run_at = now() + make_interval(secs => $2), attempts = attempts + 1 WHERE id = $1")
+                        .bind(id)
+                        .bind(RETRY_AFTER_SECS as f64)
+                        .execute(&self.db)
+                        .await?;
                 }
             }
         }

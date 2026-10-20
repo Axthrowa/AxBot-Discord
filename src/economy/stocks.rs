@@ -98,8 +98,10 @@ pub async fn buy(db: &PgPool, guild_id: GuildId, user: UserId, stock: &Stock, co
         return Ok(Trade::TooMany);
     }
     let total = price_at(stock, hour_of(unix)) * count;
+    // Para düşme ve hisse ekleme tek işlemde: ikincisi hata verirse para da geri gelir.
+    let mut tx = db.begin().await?;
     // Para yetmiyorsa `spend` hiçbir şey düşmez.
-    let Some(wallet) = super::spend(db, guild_id, user, total).await? else {
+    let Some(wallet) = super::spend(&mut *tx, guild_id, user, total).await? else {
         return Ok(Trade::NotEnoughMoney);
     };
     let shares: i64 = sqlx::query_scalar(
@@ -110,13 +112,16 @@ pub async fn buy(db: &PgPool, guild_id: GuildId, user: UserId, stock: &Stock, co
     .bind(member)
     .bind(stock.symbol)
     .bind(count)
-    .fetch_one(db)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(Trade::Done { total, wallet, shares })
 }
 
 pub async fn sell(db: &PgPool, guild_id: GuildId, user: UserId, stock: &Stock, count: i64, unix: i64) -> anyhow::Result<Trade> {
     let (guild, member) = (snowflake(guild_id.get())?, snowflake(user.get())?);
+    // Hisse düşme ve para ekleme tek işlemde: ikincisi hata verirse hisseler geri gelir.
+    let mut tx = db.begin().await?;
     // Koşullu güncelleme: yeterli hisse yoksa satır değişmez (aynı anda iki satış fazladan hisse satamaz).
     let left: Option<i64> = sqlx::query_scalar(
         "UPDATE stock_holdings SET shares = shares - $4 WHERE guild_id = $1 AND user_id = $2 AND symbol = $3 AND shares >= $4 RETURNING shares",
@@ -125,7 +130,7 @@ pub async fn sell(db: &PgPool, guild_id: GuildId, user: UserId, stock: &Stock, c
     .bind(member)
     .bind(stock.symbol)
     .bind(count)
-    .fetch_optional(db)
+    .fetch_optional(&mut *tx)
     .await?;
     let Some(shares) = left else {
         let owned: Option<i64> = sqlx::query_scalar("SELECT shares FROM stock_holdings WHERE guild_id = $1 AND user_id = $2 AND symbol = $3")
@@ -137,13 +142,41 @@ pub async fn sell(db: &PgPool, guild_id: GuildId, user: UserId, stock: &Stock, c
         return Ok(Trade::NotEnoughShares(owned.unwrap_or(0)));
     };
     let total = price_at(stock, hour_of(unix)) * count;
-    let wallet = super::add(db, guild_id, user, total).await?;
+    let wallet = super::add(&mut *tx, guild_id, user, total).await?;
+    tx.commit().await?;
     Ok(Trade::Done { total, wallet, shares })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Alış / satış tek işlemde: `cargo test live_stock_trades -- --ignored --nocapture` (sahte sunucu 1).
+    #[tokio::test]
+    #[ignore = "gerçek PostgreSQL gerektirir (docker compose up)"]
+    async fn live_stock_trades() -> anyhow::Result<()> {
+        let _ = dotenvy::dotenv();
+        let config = crate::config::DatabaseConfig { url: std::env::var("DATABASE_URL")?, max_connections: 2 };
+        let db = crate::db::connect(&config).await?;
+        let (guild, user) = (GuildId::new(1), UserId::new(33));
+        let clean = || async {
+            sqlx::query("DELETE FROM economy_accounts WHERE guild_id = 1").execute(&db).await?;
+            sqlx::query("DELETE FROM stock_holdings WHERE guild_id = 1").execute(&db).await?;
+            anyhow::Ok(())
+        };
+        clean().await?;
+        let stock = STOCKS.first().ok_or_else(|| anyhow::anyhow!("hisse yok"))?;
+        let unix = 1_700_000_000;
+        let price = price_at(stock, hour_of(unix));
+        assert!(matches!(buy(&db, guild, user, stock, 1, unix).await?, Trade::NotEnoughMoney));
+        super::super::add(&db, guild, user, price * 3).await?;
+        assert!(matches!(buy(&db, guild, user, stock, 2, unix).await?, Trade::Done { shares: 2, .. }));
+        assert!(matches!(sell(&db, guild, user, stock, 3, unix).await?, Trade::NotEnoughShares(2)));
+        let Trade::Done { wallet, shares, .. } = sell(&db, guild, user, stock, 2, unix).await? else { anyhow::bail!("satış olmadı") };
+        assert_eq!((wallet, shares), (price * 3, 0), "alıp aynı fiyattan satınca para yerine dönmeli");
+        clean().await?;
+        Ok(())
+    }
 
     #[test]
     fn prices_are_stable_within_an_hour_and_bounded() {

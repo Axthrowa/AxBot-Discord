@@ -203,7 +203,8 @@ async fn turkish_overview(data: &Data, item: &Item) -> Option<String> {
         return Some(cached);
     }
     let english = feelm::overview(&data.http_client, item).await?;
-    let text = crate::news::machine_translate(&english, "tr").await.unwrap_or(english);
+    // Çeviri başarısızsa İngilizcesi gösterilir ama saklanmaz; sonraki istekte yeniden çevrilir.
+    let Some(text) = crate::news::machine_translate(&english, "tr").await else { return Some(english) };
     let _: redis::RedisResult<()> = redis::cmd("SET").arg(&key).arg(&text).arg("EX").arg(7 * 86_400).query_async(&mut conn).await;
     Some(text)
 }

@@ -10,7 +10,6 @@ set -uo pipefail
 cd /opt/axbot 2>/dev/null || { echo "Önce kurulum yapılmalı (/opt/axbot yok)."; exit 1; }
 DC="docker compose -f docker-compose.yml -f deploy/docker-compose.sunucu.yml"
 [ -f ipv6-acik ] && DC="$DC -f deploy/docker-compose.ipv6.yml"
-RESTART="cd /opt/axbot && sudo $DC --profile docker up -d --no-build bot"
 VIDEO="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 PLUGINS="--plugin-dirs /usr/local/lib/yt-dlp-plugins"
 POT="--extractor-args youtubepot-bgutilhttp:base_url=http://pot:4416"
@@ -91,10 +90,7 @@ if [ -n "$ok" ]; then
     case "$first" in
         default) echo "  Ek ayar gerekmez; bot zaten bu yöntemi kullanıyor. Botu yeniden başlat: docker compose restart bot" ;;
         cerez)   echo "  Çerez dosyası işe yarıyor; bot onu kullanıyor. Botu yeniden başlat: docker compose restart bot" ;;
-        *)       echo "  Bot engel görünce istemcileri kendisi dener ve '$first' istemcisini bulur."
-                 echo "  Hemen kullanması için .env'e şu satırı ekleyip botu yeniden başlat:"
-                 echo "      echo YTDLP_YOUTUBE_CLIENT=$first | sudo tee -a /opt/axbot/.env >/dev/null"
-                 echo "      $RESTART" ;;
+        *)       echo "  Ek ayar gerekmez: bot engel görünce istemcileri kendisi dener, '$first' istemcisini bulur ve hatırlar." ;;
     esac
 elif [ -n "$v6" ]; then
     echo "  Yalnızca IPv6 çalışıyor. Botu IPv6 ile çalıştırmak için:"
