@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use poise::serenity_prelude::{
     self as serenity, ButtonStyle, ChannelId, ComponentInteraction, ComponentInteractionDataKind, CreateActionRow,
-    CreateButton, CreateEmbed, CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage,
+    CreateButton, CreateEmbed, CreateMessage, EditInteractionResponse,
     CreateSelectMenu, CreateSelectMenuKind, CreateSelectMenuOption, GuildId, Http, Mentionable, MessageId, Reaction,
     ReactionType, RoleId, UserId,
 };
@@ -284,13 +284,10 @@ fn menu_for(settings: &ReactionRoleSettings, message: MessageId) -> Option<&Menu
 
 /// Buton ve açılır menü etkileşimleri.
 pub async fn handle_component(ctx: &serenity::Context, data: &Data, interaction: &ComponentInteraction) -> anyhow::Result<()> {
+    // Önce "düşünüyorum": rol değişiklikleri Discord'un 3 saniyelik cevap süresini aşabilir.
+    interaction.defer_ephemeral(ctx).await?;
     let text = respond(ctx, data, interaction).await;
-    interaction
-        .create_response(
-            ctx,
-            CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content(text).ephemeral(true)),
-        )
-        .await?;
+    interaction.edit_response(ctx, EditInteractionResponse::new().content(text)).await?;
     Ok(())
 }
 

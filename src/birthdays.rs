@@ -13,7 +13,7 @@ use poise::serenity_prelude::{
     Mentionable, RoleId, UserId,
 };
 use sqlx::PgPool;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::db::snowflake;
 use crate::guild_config::to_id;
@@ -238,7 +238,9 @@ async fn check(ctx: &serenity::Context, db: &PgPool, settings: &crate::settings:
         };
         for user in &users {
             sqlx::query(
-                "UPDATE birthdays SET last_announced = $3, role_given_on = CASE WHEN $4 THEN $5 ELSE role_given_on END
+                "UPDATE birthdays SET last_announced = $3,
+                     role_given_on = CASE WHEN $4 THEN $5 ELSE role_given_on END,
+                     role_given_id = CASE WHEN $4 THEN $6 ELSE role_given_id END
                  WHERE guild_id = $1 AND user_id = $2",
             )
             .bind(snowflake(guild)?)
@@ -246,6 +248,7 @@ async fn check(ctx: &serenity::Context, db: &PgPool, settings: &crate::settings:
             .bind(today.year())
             .bind(role.is_some() && present.contains(user))
             .bind(today)
+            .bind(role.map(|r| snowflake(r.get())).transpose()?)
             .execute(db)
             .await?;
         }
@@ -285,8 +288,8 @@ async fn check(ctx: &serenity::Context, db: &PgPool, settings: &crate::settings:
 /// Dünden kalan doğum günü rollerini geri alır.
 async fn remove_expired_roles(ctx: &serenity::Context, db: &PgPool, today: NaiveDate) -> anyhow::Result<()> {
     let rows: Vec<(i64, i64, Option<i64>)> = sqlx::query_as(
-        "SELECT b.guild_id, b.user_id, g.birthday_role_id
-         FROM birthdays b JOIN guild_settings g ON g.guild_id = b.guild_id
+        "SELECT b.guild_id, b.user_id, COALESCE(b.role_given_id, g.birthday_role_id)
+         FROM birthdays b LEFT JOIN guild_settings g ON g.guild_id = b.guild_id
          WHERE b.role_given_on IS NOT NULL AND b.role_given_on < $1",
     )
     .bind(today)
@@ -299,10 +302,14 @@ async fn remove_expired_roles(ctx: &serenity::Context, db: &PgPool, today: Naive
                 .remove_member_role(GuildId::new(g), UserId::new(u), RoleId::new(r), Some("Doğum günü bitti"))
                 .await
             {
-                debug!(error = %e, "Doğum günü rolü geri alınamadı (üye ayrılmış olabilir)");
+                // Üye ya da rol artık yoksa yapılacak bir şey kalmadı; başka hatada kayıt kalır, sonraki tur yeniden dener.
+                if !["Unknown Member", "Unknown Role", "Unknown Guild"].iter().any(|m| e.to_string().contains(m)) {
+                    warn!(guild = g, user = u, error = %e, "Doğum günü rolü geri alınamadı; tekrar denenecek");
+                    continue;
+                }
             }
         }
-        sqlx::query("UPDATE birthdays SET role_given_on = NULL WHERE guild_id = $1 AND user_id = $2")
+        sqlx::query("UPDATE birthdays SET role_given_on = NULL, role_given_id = NULL WHERE guild_id = $1 AND user_id = $2")
             .bind(guild)
             .bind(user)
             .execute(db)
