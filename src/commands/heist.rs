@@ -83,15 +83,16 @@ pub async fn run(ctx: Context<'_>) -> Result<(), Error> {
         };
         let note = |text: String| CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content(text).ephemeral(true));
         if crew.contains(&press.user.id) {
-            press.create_response(ctx, note("Zaten ekiptesin.".to_owned())).await?;
+            // Bir butona cevap verilemezse soygun bitmez (yoksa ekibin payları yanardı).
+            let _ = press.create_response(ctx, note("Zaten ekiptesin.".to_owned())).await;
             continue;
         }
         if press.user.bot || economy::spend(&data.db, guild_id, press.user.id, STAKE).await?.is_none() {
-            press.create_response(ctx, note(format!("Katılmak için cüzdanında {} olmalı.", money(STAKE)))).await?;
+            let _ = press.create_response(ctx, note(format!("Katılmak için cüzdanında {} olmalı.", money(STAKE)))).await;
             continue;
         }
         crew.push(press.user.id);
-        press.create_response(ctx, CreateInteractionResponse::UpdateMessage(CreateInteractionResponseMessage::new().embed(lobby(&crew)).components(button(false)))).await?;
+        let _ = press.create_response(ctx, CreateInteractionResponse::UpdateMessage(CreateInteractionResponseMessage::new().embed(lobby(&crew)).components(button(false)))).await;
     }
 
     let succeeded = crate::rand_util::below(100) < success_chance(crew.len());

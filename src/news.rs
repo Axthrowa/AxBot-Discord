@@ -193,9 +193,7 @@ pub fn is_suitable(item: &NewsItem) -> bool {
 }
 
 /// Büyük/küçük harf ve Türkçe I/İ farkı gözetmeden karşılaştırma için.
-fn fold(text: &str) -> String {
-    text.replace('I', "ı").replace('İ', "i").to_lowercase()
-}
+use crate::games::hangman::tr_lower as fold;
 
 /// Metinde kelime geçiyor mu? Hem Türkçe (I→ı) hem İngilizce (I→i) küçük harf kuralıyla bakılır.
 fn contains_word(text: &str, word: &str) -> bool {

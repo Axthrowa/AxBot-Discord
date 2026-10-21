@@ -335,10 +335,20 @@ pub async fn blackjack(
             CreateButton::new(&stand_id).label("Dur").emoji('✋').style(ButtonStyle::Secondary).disabled(disabled),
         ])]
     };
-    let reply = ctx
-        .send(CreateReply::default().embed(bj_embed(&player, &dealer, true, None)).components(buttons(false)))
-        .await?;
-    let message_id = reply.message().await?.id;
+    // Oyun ekranı gönderilemezse bahis geri verilir (oyun hiç başlamadı).
+    let sent = async {
+        let reply = ctx.send(CreateReply::default().embed(bj_embed(&player, &dealer, true, None)).components(buttons(false))).await?;
+        let id = reply.message().await?.id;
+        Ok::<_, serenity::Error>((reply, id))
+    }
+    .await;
+    let (reply, message_id) = match sent {
+        Ok(sent) => sent,
+        Err(e) => {
+            economy::add(&ctx.data().db, guild, ctx.author().id, bet).await?;
+            return Err(e.into());
+        }
+    };
 
     let author = ctx.author().id;
     let mut last_press = None;
@@ -357,7 +367,8 @@ pub async fn blackjack(
                 last_press = Some(press);
                 break;
             }
-            press
+            // Ekran güncellenemezse oyun sürer; bahis sonda yine ödenir.
+            let _ = press
                 .create_response(
                     ctx,
                     CreateInteractionResponse::UpdateMessage(
@@ -366,7 +377,7 @@ pub async fn blackjack(
                             .components(buttons(false)),
                     ),
                 )
-                .await?;
+                .await;
         } else {
             last_press = Some(press);
             break;

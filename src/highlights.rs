@@ -32,9 +32,7 @@ static LAST_SEEN: LazyLock<DashMap<(ChannelId, UserId), Instant>> = LazyLock::ne
 static LAST_SENT: LazyLock<DashMap<(GuildId, UserId), Instant>> = LazyLock::new(DashMap::new);
 
 /// Büyük/küçük harf ve Türkçe I/İ farkı gözetmeden karşılaştırma için.
-fn fold(text: &str) -> String {
-    text.replace('I', "ı").replace('İ', "i").to_lowercase()
-}
+use crate::games::hangman::tr_lower as fold;
 
 /// Kelime metinde TAM KELİME olarak geçiyor mu? ("ali" → "Ali'nin" evet, "kalite" hayır)
 pub fn matches(text: &str, word: &str) -> bool {
