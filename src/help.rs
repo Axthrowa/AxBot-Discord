@@ -101,7 +101,7 @@ pub const PAGES: &[Page] = &[
         body: "**Yapay zekâ**\n\
 • Yapay zekâ kanalında yazman yeterli; başka kanallarda botu **etiketle** (@AxBot) ve sorunu yaz. Güncel bilgi için web'de arar.\n\
 • `/yaz istek:…` kısa metin yazdırır · `/çevir metin:… dil:…` · `/hayal-et istek:…` resim çizdirir\n\n\
-**Arama — `/ara`**: `youtube` · `twitch` · `anime` · `manga` · `pokemon` · `sözlük` · `imgur`\n\
+**Arama — `/ara`**: `youtube` · `twitch` · `anime` · `manga` · `pokemon` · `sözlük` · `imgur` · `kripto` (fiyat, TL, 24 saat) · `gaz` (Ethereum işlem ücreti)\n\
 **Emoji — `/emoji büyüt`** bir emojiyi büyük gösterir\n\
 **Davetler:** `/davetler` kaç kişi davet ettin · `/davet-sıralama`\n\
 **Vurgu — `/vurgu ekle kelime:…`:** seçtiğin kelime (ör. adın) görebildiğin bir kanalda geçince sana özelden haber verilir · `liste` · `sil`\n\

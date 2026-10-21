@@ -24,7 +24,7 @@ const EMOJI_MAX_BYTES: usize = 256 * 1024;
 #[poise::command(
     slash_command,
     rename = "ara",
-    subcommands("ara_youtube", "ara_twitch", "ara_anime", "ara_manga", "ara_pokemon", "ara_sozluk", "ara_imgur"),
+    subcommands("ara_youtube", "ara_twitch", "ara_anime", "ara_manga", "ara_pokemon", "ara_sozluk", "ara_imgur", "ara_kripto", "ara_gaz"),
     subcommand_required,
     category = "Araçlar"
 )]
@@ -176,6 +176,66 @@ async fn ara_anime(ctx: Context<'_>, #[description = "Anime adı"] #[max_length 
 #[poise::command(slash_command, rename = "manga")]
 async fn ara_manga(ctx: Context<'_>, #[description = "Manga adı"] #[max_length = 100] ad: String) -> Result<(), Error> {
     kitsu(ctx, "manga", &ad, "📖").await
+}
+
+/// Kripto paranın fiyatı ve 24 saatlik değişimi (CoinGecko, anahtar gerekmez).
+#[poise::command(slash_command, rename = "kripto")]
+async fn ara_kripto(ctx: Context<'_>, #[description = "Para adı ya da kısaltması (ör. bitcoin, eth)"] #[max_length = 40] para: String) -> Result<(), Error> {
+    ctx.defer().await?;
+    // Ad / kısaltma → CoinGecko kimliği (en üstteki eşleşme).
+    let found = get_json(ctx, "https://api.coingecko.com/api/v3/search", &[("query", para.trim())]).await.ok().flatten();
+    let Some(coin) = found.as_ref().and_then(|f| f.pointer("/coins/0")) else {
+        return reply_private(ctx, "Böyle bir kripto para bulunamadı.").await;
+    };
+    let id = text(coin, "/id").unwrap_or_default();
+    let query = [("ids", id), ("vs_currencies", "usd,try"), ("include_24hr_change", "true"), ("include_market_cap", "true")];
+    let Some(prices) = get_json(ctx, "https://api.coingecko.com/api/v3/simple/price", &query).await?.and_then(|p| p.get(id).cloned()) else {
+        return reply_private(ctx, "Fiyat şu an alınamadı, biraz sonra tekrar dene.").await;
+    };
+    let number = |key: &str| prices.get(key).and_then(Value::as_f64);
+    let change = number("usd_24h_change").unwrap_or(0.0);
+    let mut embed = CreateEmbed::new()
+        .title(format!("{} ({})", text(coin, "/name").unwrap_or(id), text(coin, "/symbol").unwrap_or_default().to_uppercase()))
+        .url(format!("https://www.coingecko.com/en/coins/{id}"))
+        .colour(if change >= 0.0 { serenity::Colour::DARK_GREEN } else { serenity::Colour::RED })
+        .field("Fiyat", format!("${}", crate::statchannels::format_price(number("usd").unwrap_or(0.0))), true)
+        .field("TL", format!("₺{}", crate::statchannels::format_price(number("try").unwrap_or(0.0))), true)
+        .field("24 saat", format!("{} %{:.2}", if change >= 0.0 { "📈" } else { "📉" }, change), true)
+        .footer(CreateEmbedFooter::new("CoinGecko"));
+    if let Some(cap) = number("usd_market_cap").filter(|c| *c > 0.0) {
+        embed = embed.field("Piyasa değeri", format!("${}", crate::statchannels::format_price(cap.round())), true);
+    }
+    if let Some(image) = text(coin, "/large") {
+        embed = embed.thumbnail(image);
+    }
+    ctx.send(CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
+/// Ethereum ağındaki güncel işlem ücreti (gas fiyatı).
+#[poise::command(slash_command, rename = "gaz")]
+async fn ara_gaz(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+    let request = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "eth_gasPrice", "params": [] });
+    let answer: anyhow::Result<Value> = async {
+        Ok(ctx.data().http_client.post("https://ethereum-rpc.publicnode.com").json(&request).timeout(TIMEOUT).send().await?.error_for_status()?.json().await?)
+    }
+    .await;
+    let Some(gwei) = answer.ok().as_ref().and_then(|a| text(a, "/result")).and_then(gwei) else {
+        return reply_private(ctx, "Ethereum gas fiyatı şu an alınamadı, biraz sonra tekrar dene.").await;
+    };
+    let embed = CreateEmbed::new()
+        .title("⛽ Ethereum gas fiyatı")
+        .description(format!("**{gwei:.2} gwei**\n\nBasit bir ETH transferi (21.000 gas) ≈ **{:.6} ETH**", gwei * 21_000.0 / 1e9))
+        .colour(serenity::Colour::from_rgb(98, 126, 234))
+        .footer(CreateEmbedFooter::new("Ethereum ana ağı · publicnode.com"));
+    ctx.send(CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
+/// JSON-RPC'nin "0x…" wei değerini gwei'ye çevirir.
+fn gwei(hex: &str) -> Option<f64> {
+    u128::from_str_radix(hex.strip_prefix("0x")?, 16).ok().map(|wei| wei as f64 / 1e9)
 }
 
 /// Bir Pokémon'u arar.
@@ -447,6 +507,14 @@ async fn emoji_sil(ctx: Context<'_>, #[description = "Silinecek sunucu emojisi"]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn converts_wei_to_gwei() {
+        assert_eq!(gwei("0x3b9aca00"), Some(1.0));
+        assert_eq!(gwei("0x0"), Some(0.0));
+        assert_eq!(gwei("123"), None);
+        assert_eq!(gwei("0xzz"), None);
+    }
 
     #[test]
     fn parses_custom_emojis() {

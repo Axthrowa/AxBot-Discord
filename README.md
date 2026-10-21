@@ -25,7 +25,7 @@ MEE6, Carl-bot ve Ticket Tool'un temel özelliklerini tek, hafif bir Rust botund
 | Geçici odalar | `/geçici-oda` · `/oda isim · limit · kilitle · aç · sahiplen · yasakla · yasağı-kaldır · at · gizle · göster · devret · sahip · temizle` | "Oda Oluştur" kanalına girene özel oda; boşalınca silinir (botta 'Üyeleri Taşı' gerekir) |
 | YouTube | `/youtube ekle · sil · liste` | Yeni video duyurusu; API anahtarı gerekmez (RSS, 5 dk) |
 | Sosyal akışlar | `/akış ekle · sil · liste` | Reddit (subreddit), Bluesky (kullanıcı), RSS/Atom ve podcast paylaşımlarını duyurur; hesap ya da anahtar gerekmez, 5 dk'da bir. Özel metin (`{başlık} {bağlantı} {kaynak}`), rol etiketi. X / Instagram / TikTok açık akış sunmaz: `.env`'e `RSS_BRIDGE_URL` (RSSHub uyumlu köprü) yazılırsa kullanıcı adıyla eklenir |
-| Arama | `/ara youtube · twitch · anime · manga · pokemon · sözlük · imgur` | YouTube (yt-dlp), Twitch (anahtar gerekir), Kitsu, PokéAPI, Urban Dictionary, Imgur (`IMGUR_CLIENT_ID` gerekir) |
+| Arama | `/ara youtube · twitch · anime · manga · pokemon · sözlük · imgur · kripto · gaz` | YouTube (yt-dlp), Twitch (anahtar gerekir), Kitsu, PokéAPI, Urban Dictionary, Imgur (`IMGUR_CLIENT_ID` gerekir) |
 | Emoji | `/emoji ekle · büyüt · sil` | Başka sunucunun emojisini ya da bir resim bağlantısını sunucuya ekler (botta 'İfadeleri Yönet' gerekir) |
 | Ekonomi | `/bakiye · günlük · çalış · yatır · çek · gönder · soy · zenginler` | Sunucuya özel para (🪙), cüzdan + banka, günlük seri bonusu; `/çalış tür:` ile balık tutma ve madencilik (20 dakikada bir, nadir buluntular); `/soy` üye seçilmeden çalıştırılırsa herkesin butonla katıldığı banka soygunu başlar |
 | Şans oyunları | `/yazı-tura · slot · blackjack` | Blackjack butonlarla oynanır |
