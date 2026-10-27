@@ -143,7 +143,7 @@ YouTube veri merkezi IP'lerini sık engeller: sunucuda YouTube müziği çalış
 | `DEV_GUILD_ID` | | Doluysa komutlar sadece bu sunucuya kaydedilir (test için). Boşsa bot bulunduğu **her sunucuya** anında kaydeder; yeni eklendiği sunucuya da katıldığı an (itiraz sunucuları hariç). Başka sunucuya ekleme: `SUNUCUYA-EKLEME.md`, kurulum kontrolü: `/kurulum` |
 | `POSTGRES_*`, `DATABASE_URL`, `REDIS_PASSWORD`, `REDIS_URL` | ✅ | Docker'da adresler otomatik ayarlanır |
 | `NVIDIA_API_KEY` / `GEMINI_API_KEY` | | Yapay zekâ (biri yeterli) |
-| `AI_MODEL`, `AI_PROVIDER`, `AI_SYSTEM_PROMPT` | | Varsayılan: `z-ai/glm-5.3-flash` / `gemini-flash-latest` |
+| `AI_MODEL`, `AI_PROVIDER`, `AI_SYSTEM_PROMPT` | | Varsayılan: `nvidia/nemotron-3-ultra-550b-a55b` / `gemini-flash-lite-latest` |
 | `SEARXNG_URL`, `SEARXNG_SECRET` | | Yapay zekânın web araması (üyelik gerektirmez) |
 | `TAVILY_API_KEY` | | SearXNG yerine Tavily kullanmak için |
 | `TWITCH_CLIENT_ID/SECRET`, `KICK_CLIENT_ID/SECRET` | | Yayın duyuruları |

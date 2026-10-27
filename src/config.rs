@@ -10,9 +10,9 @@ const DEFAULT_DB_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_STREAM_POLL_SECS: u32 = 60;
 /// 2026-10 karşılaştırmasında Türkçesi en doğal ve hızlı (~6-17 sn) model; araç çağırmayı destekler.
 /// Önceki nemotron-3-super yabancı kelime karıştırıp hatalı cümle kuruyordu.
-const DEFAULT_NIM_MODEL: &str = "z-ai/glm-5.3-flash";
+const DEFAULT_NIM_MODEL: &str = "nvidia/nemotron-3-ultra-550b-a55b";
 /// Her zaman en yeni Flash modelini gösteren takma ad; model emekliye ayrılınca kırılmaz.
-const DEFAULT_GEMINI_MODEL: &str = "gemini-flash-latest";
+const DEFAULT_GEMINI_MODEL: &str = "gemini-flash-lite-latest";
 
 pub struct Config {
     pub discord_token: String,
