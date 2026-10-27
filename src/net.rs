@@ -21,9 +21,10 @@ use hickory_resolver::{system_conf, TokioResolver};
 use poise::serenity_prelude as serenity;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
-struct Ipv4FirstResolver(TokioResolver);
+/// hickory çözücüsünü reqwest'e bağlar (sıralama ve IPv4/IPv6 seçimi çözücünün ayarındadır).
+struct HickoryResolver(TokioResolver);
 
-impl Resolve for Ipv4FirstResolver {
+impl Resolve for HickoryResolver {
     fn resolve(&self, name: Name) -> Resolving {
         let resolver = self.0.clone();
         Box::pin(async move {
@@ -97,7 +98,7 @@ fn builder() -> anyhow::Result<reqwest::ClientBuilder> {
     Ok(reqwest::Client::builder()
         .use_rustls_tls()
         .user_agent(concat!("discord-bot/", env!("CARGO_PKG_VERSION")))
-        .dns_resolver(Arc::new(Ipv4FirstResolver(shared_resolver()?.clone())))
+        .dns_resolver(Arc::new(HickoryResolver(shared_resolver()?.clone())))
         // Bazı CDN adresleri bu ağda ara sıra hiç cevap vermiyor; süre adreslere bölünür,
         // böylece takılan adresten birkaç saniyede bir sonrakine geçilir.
         .connect_timeout(Duration::from_secs(10))
@@ -123,7 +124,30 @@ pub fn plain_client() -> anyhow::Result<&'static reqwest::Client> {
         .use_rustls_tls()
         .http1_only()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36")
-        .dns_resolver(Arc::new(Ipv4FirstResolver(shared_resolver()?.clone())))
+        .dns_resolver(Arc::new(HickoryResolver(shared_resolver()?.clone())))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .context("HTTP istemcisi oluşturulamadı")?;
+    Ok(CLIENT.get_or_init(|| built))
+}
+
+/// IPv4 adresine bu ağdan ulaşılamayan siteler için (feelm.org'un Cloudflare IPv4 adresleri 2026-10-27'de böyle):
+/// Önce AAAA (IPv6) kaydı Cloudflare DNS'e sorulur (modemin cevap vermediği AAAA sorgusuna takılmaz), IPv6 adresi
+/// yoksa IPv4. reqwest'in bağlantı süresi bütün adreslere birden uygulandığı için ilk adreste takılan istek
+/// sonrakine geçemiyor (happy eyeballs devreye girmedi); bu yüzden adres ailesi baştan seçilir.
+pub fn dual_stack_client() -> anyhow::Result<&'static reqwest::Client> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let mut builder = TokioResolver::builder_with_config(ResolverConfig::udp_and_tcp(&hickory_resolver::config::CLOUDFLARE), TokioRuntimeProvider::default());
+    builder.options_mut().ip_strategy = LookupIpStrategy::Ipv6thenIpv4;
+    builder.options_mut().timeout = Duration::from_secs(2);
+    let resolver = builder.build().context("DNS çözücü kurulamadı")?;
+    let built = reqwest::Client::builder()
+        .use_rustls_tls()
+        .user_agent(concat!("discord-bot/", env!("CARGO_PKG_VERSION")))
+        .dns_resolver(Arc::new(HickoryResolver(resolver)))
         .connect_timeout(Duration::from_secs(10))
         .build()
         .context("HTTP istemcisi oluşturulamadı")?;

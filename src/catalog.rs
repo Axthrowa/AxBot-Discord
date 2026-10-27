@@ -80,14 +80,22 @@ impl Kind {
     pub fn genre_name(self, key: &str) -> Option<&'static str> {
         self.genres().iter().find(|(k, _)| *k == key).map(|(_, name)| *name)
     }
+}
 
-    /// Bu tür için gereken anahtar eksikse kullanıcıya gösterilecek açıklama.
-    pub fn missing_key(self) -> Option<&'static str> {
-        let keys = crate::integrations::get();
+/// Öğenin geldiği site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Feelm,
+    Tmdb,
+    Rawg,
+}
+
+impl Source {
+    pub fn name(self) -> &'static str {
         match self {
-            Self::Movie | Self::Series if keys.tmdb_api_key.is_none() => Some("Film ve dizi önerisi için `.env` dosyasına `TMDB_API_KEY` eklenmeli (themoviedb.org → Ayarlar → API)."),
-            Self::Game if keys.rawg_api_key.is_none() => Some("Oyun önerisi için `.env` dosyasına `RAWG_API_KEY` eklenmeli (rawg.io/apidocs)."),
-            _ => None,
+            Self::Feelm => "feelm.org",
+            Self::Tmdb => "TMDB",
+            Self::Rawg => "RAWG",
         }
     }
 }
@@ -103,18 +111,21 @@ pub struct Query {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
+    pub source: Source,
     pub kind: Kind,
-    /// TMDB ya da RAWG kimliği.
+    /// TMDB ya da RAWG kimliği (feelm'de 0).
     pub id: i64,
-    /// RAWG adresindeki kısa ad (TMDB'de boş).
+    /// RAWG ve feelm adresindeki kısa ad (TMDB'de boş).
     pub slug: String,
     pub title: String,
     pub year: Option<i64>,
     pub poster: Option<String>,
-    /// TMDB'de Türkçe özet (yoksa boş); RAWG listede özet vermez.
+    /// TMDB'de Türkçe özet (yoksa boş); RAWG ve feelm listede özet vermez.
     pub overview: String,
-    /// TMDB puanı (/10) ya da Metacritic (/100).
+    /// Film/dizide TMDB puanı (/10), oyunda Metacritic ya da IGDB (/100).
     pub score: Option<f64>,
+    /// feelm'in verdiği IMDb puanı (TMDB öğelerinde puan IMDb dosyasından okunur).
+    pub imdb_score: Option<f64>,
     pub release: Option<String>,
     pub adult: bool,
     // Ayrıntı isteğiyle dolanlar (`enrich`).
@@ -129,8 +140,9 @@ pub struct Item {
 }
 
 impl Item {
-    fn new(kind: Kind, id: i64, title: String) -> Self {
+    pub fn new(source: Source, kind: Kind, id: i64, title: String) -> Self {
         Self {
+            source,
             kind,
             id,
             slug: String::new(),
@@ -139,6 +151,7 @@ impl Item {
             poster: None,
             overview: String::new(),
             score: None,
+            imdb_score: None,
             release: None,
             adult: false,
             english_overview: None,
@@ -154,14 +167,15 @@ impl Item {
 
     /// Kanal içi "yakında önerildi" listesi için anahtar.
     pub fn key(&self) -> String {
-        format!("{}{}", self.kind.code(), self.id)
+        if self.slug.is_empty() { format!("{}{}", self.kind.code(), self.id) } else { format!("{}{}", self.kind.code(), self.slug) }
     }
 
     pub fn url(&self) -> String {
-        match self.kind {
-            Kind::Movie => format!("https://www.themoviedb.org/movie/{}", self.id),
-            Kind::Series => format!("https://www.themoviedb.org/tv/{}", self.id),
-            Kind::Game => format!("https://rawg.io/games/{}", if self.slug.is_empty() { self.id.to_string() } else { self.slug.clone() }),
+        match (self.source, self.kind) {
+            (Source::Feelm, kind) => format!("{}/{}/{}", crate::feelm::BASE, crate::feelm::detail_path(kind), self.slug),
+            (_, Kind::Movie) => format!("https://www.themoviedb.org/movie/{}", self.id),
+            (_, Kind::Series) => format!("https://www.themoviedb.org/tv/{}", self.id),
+            (_, Kind::Game) => format!("https://rawg.io/games/{}", if self.slug.is_empty() { self.id.to_string() } else { self.slug.clone() }),
         }
     }
 
@@ -205,7 +219,7 @@ pub fn parse_tmdb(value: &Value, kind: Option<Kind>) -> Option<Item> {
     };
     let title = text(value, "title").or_else(|| text(value, "name"))?;
     let release = text(value, "release_date").or_else(|| text(value, "first_air_date"));
-    let mut item = Item::new(kind, value.get("id")?.as_i64()?, title);
+    let mut item = Item::new(Source::Tmdb, kind, value.get("id")?.as_i64()?, title);
     item.year = year_of(release.as_deref());
     item.release = release;
     item.poster = text(value, "poster_path").map(|p| format!("https://image.tmdb.org/t/p/w342{p}"));
@@ -217,7 +231,7 @@ pub fn parse_tmdb(value: &Value, kind: Option<Kind>) -> Option<Item> {
 
 /// RAWG liste/arama sonucundaki bir oyun.
 pub fn parse_rawg(value: &Value) -> Option<Item> {
-    let mut item = Item::new(Kind::Game, value.get("id")?.as_i64()?, text(value, "name")?);
+    let mut item = Item::new(Source::Rawg, Kind::Game, value.get("id")?.as_i64()?, text(value, "name")?);
     item.slug = text(value, "slug").unwrap_or_default();
     item.release = text(value, "released");
     item.year = year_of(item.release.as_deref());
@@ -287,14 +301,46 @@ pub fn list_params(kind: Kind, query: &Query, page: u32) -> Vec<(&'static str, S
 type Cached = (Instant, Arc<Vec<Item>>);
 static CACHE: LazyLock<DashMap<String, Cached>> = LazyLock::new(DashMap::new);
 
-/// Süzgece uyan popüler yapımlardan bir sayfa (TMDB 20, RAWG 40 öğe).
+/// feelm.org hata verince bu süre boyunca hiç denenmez (her istek zaman aşımını beklemesin).
+const FEELM_BACKOFF: Duration = Duration::from_secs(10 * 60);
+static FEELM_DOWN_UNTIL: LazyLock<std::sync::Mutex<Instant>> = LazyLock::new(|| std::sync::Mutex::new(Instant::now()));
+
+fn feelm_up() -> bool {
+    Instant::now() >= *FEELM_DOWN_UNTIL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn feelm_failed(error: &anyhow::Error) {
+    tracing::warn!(error = %error, "feelm.org'a ulaşılamadı; 10 dk boyunca TMDB/RAWG kullanılacak");
+    *FEELM_DOWN_UNTIL.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now() + FEELM_BACKOFF;
+}
+
+/// Süzgece uyan popüler yapımlardan bir sayfa: önce feelm.org, olmazsa TMDB (20) / RAWG (40 öğe).
 pub async fn list(http: &reqwest::Client, kind: Kind, query: &Query, page: u32) -> anyhow::Result<Arc<Vec<Item>>> {
     warm_imdb(http);
-    let params = list_params(kind, query, page);
-    let cache_key = format!("{}:{params:?}", kind.code());
+    let cache_key = format!("{}:{query:?}:{page}", kind.code());
     if let Some(hit) = CACHE.get(&cache_key).filter(|e| e.0.elapsed() < CACHE_FOR) {
         return Ok(Arc::clone(&hit.1));
     }
+    let from_feelm = if feelm_up() { crate::feelm::list(kind, query, page).await } else { Ok(None) };
+    let items = match from_feelm {
+        Ok(Some(items)) => items,
+        other => {
+            if let Err(e) = other {
+                feelm_failed(&e);
+            }
+            from_api(http, kind, query, page).await?
+        }
+    };
+    let items = Arc::new(items);
+    if CACHE.len() > 300 {
+        CACHE.retain(|_, e| e.0.elapsed() < CACHE_FOR);
+    }
+    CACHE.insert(cache_key, (Instant::now(), Arc::clone(&items)));
+    Ok(items)
+}
+
+async fn from_api(http: &reqwest::Client, kind: Kind, query: &Query, page: u32) -> anyhow::Result<Vec<Item>> {
+    let params = list_params(kind, query, page);
     let items: Vec<Item> = match kind {
         Kind::Movie | Kind::Series => {
             let path = if kind == Kind::Movie { "/discover/movie" } else { "/discover/tv" };
@@ -306,18 +352,21 @@ pub async fn list(http: &reqwest::Client, kind: Kind, query: &Query, page: u32) 
             body["results"].as_array().map(|list| list.iter().filter_map(parse_rawg).collect()).unwrap_or_default()
         }
     };
-    let items = Arc::new(items.into_iter().filter(|i| !i.adult).collect::<Vec<_>>());
-    if CACHE.len() > 300 {
-        CACHE.retain(|_, e| e.0.elapsed() < CACHE_FOR);
-    }
-    CACHE.insert(cache_key, (Instant::now(), Arc::clone(&items)));
-    Ok(items)
+    Ok(items.into_iter().filter(|i| !i.adult).collect())
 }
 
-/// Film, dizi (TMDB) ve oyunlarda (RAWG) arama; anahtarı olmayan kaynak atlanır. Sıra: film/dizi, sonra oyun.
+/// Film, dizi ve oyunlarda arama: önce feelm.org; sonuç yoksa ya da ulaşılamazsa TMDB + RAWG
+/// (anahtarı olmayan kaynak atlanır; sıra: film/dizi, sonra oyun).
 pub async fn search(http: &reqwest::Client, text: &str) -> anyhow::Result<Vec<Item>> {
     warm_imdb(http);
     let text = text.trim();
+    if feelm_up() {
+        match crate::feelm::search(text).await {
+            Ok(found) if !found.is_empty() => return Ok(found),
+            Ok(_) => {}
+            Err(e) => feelm_failed(&e),
+        }
+    }
     let keys = crate::integrations::get();
     let tmdb = async {
         if keys.tmdb_api_key.is_none() {
@@ -353,6 +402,10 @@ pub async fn enrich(http: &reqwest::Client, item: &mut Item) {
 }
 
 async fn try_enrich(http: &reqwest::Client, item: &mut Item) -> anyhow::Result<()> {
+    if item.source == Source::Feelm {
+        item.english_overview = crate::feelm::overview(item).await?;
+        return Ok(());
+    }
     match item.kind {
         Kind::Movie | Kind::Series => {
             let base = if item.kind == Kind::Movie { "movie" } else { "tv" };

@@ -1,4 +1,4 @@
-//! `/tavsiye`: film ve dizi (TMDB), oyun (RAWG) önerisi; IMDb puanı ve bağlantısıyla (bkz. `crate::catalog`).
+//! `/tavsiye`: film, dizi ve oyun önerisi; önce feelm.org, ulaşılamazsa TMDB / RAWG (bkz. `crate::catalog`).
 
 use std::collections::VecDeque;
 use std::sync::LazyLock;
@@ -11,7 +11,7 @@ use poise::serenity_prelude::{
 };
 use poise::CreateReply;
 
-use crate::catalog::{self, Item, Kind, Query};
+use crate::catalog::{self, Item, Kind, Query, Source};
 use crate::data::{Context, Data};
 use crate::error::Error;
 
@@ -50,7 +50,7 @@ async fn game_genres(_ctx: Context<'_>, partial: &str) -> Vec<serenity::Autocomp
     genres(Kind::Game, partial).await
 }
 
-/// Film önerir (TMDB, IMDb puanıyla).
+/// Film önerir (feelm.org / TMDB).
 #[poise::command(slash_command, guild_only, user_cooldown = 3)]
 async fn film(
     ctx: Context<'_>,
@@ -72,7 +72,7 @@ async fn film(
     recommend(ctx, Kind::Movie, Query { genre, year_from: year, min_score: score }).await
 }
 
-/// Dizi önerir (TMDB, IMDb puanıyla).
+/// Dizi önerir (feelm.org / TMDB).
 #[poise::command(slash_command, guild_only, user_cooldown = 3)]
 async fn dizi(
     ctx: Context<'_>,
@@ -94,7 +94,7 @@ async fn dizi(
     recommend(ctx, Kind::Series, Query { genre, year_from: year, min_score: score }).await
 }
 
-/// Oyun önerir (RAWG).
+/// Oyun önerir (feelm.org / RAWG).
 #[poise::command(slash_command, guild_only, user_cooldown = 3)]
 async fn oyun(
     ctx: Context<'_>,
@@ -124,10 +124,6 @@ async fn ara(
     #[max_length = 80]
     sorgu: String,
 ) -> Result<(), Error> {
-    if let (Some(note), Some(_)) = (Kind::Movie.missing_key(), Kind::Game.missing_key()) {
-        ctx.say(format!("⚙️ {note}")).await?;
-        return Ok(());
-    }
     ctx.defer().await?;
     let data = ctx.data();
     let hits = match catalog::search(&data.http_client, &sorgu).await {
@@ -158,10 +154,6 @@ async fn ara(
 }
 
 async fn recommend(ctx: Context<'_>, kind: Kind, query: Query) -> Result<(), Error> {
-    if let Some(note) = kind.missing_key() {
-        ctx.say(format!("⚙️ {note}")).await?;
-        return Ok(());
-    }
     ctx.defer().await?;
     let data = ctx.data();
     match pick(data, kind, &query, ctx.channel_id()).await {
@@ -270,7 +262,7 @@ async fn item_embed(data: &Data, item: &Item) -> CreateEmbed {
         let short: String = t.chars().take(700).collect();
         if short.chars().count() < t.chars().count() { format!("{short}…") } else { short }
     });
-    let source = if item.kind == Kind::Game { "RAWG" } else { "TMDB · IMDb" };
+    let source = item.source.name();
     let mut embed = CreateEmbed::new()
         .title(title.chars().take(250).collect::<String>())
         .url(item.imdb_url().unwrap_or_else(|| item.url()))
@@ -281,12 +273,15 @@ async fn item_embed(data: &Data, item: &Item) -> CreateEmbed {
         embed = if item.kind == Kind::Game { embed.image(poster) } else { embed.thumbnail(poster) };
     }
     let mut scores = Vec::new();
-    if let Some((rating, count)) = item.imdb_id.as_deref().and_then(catalog::imdb_rating) {
-        scores.push(format!("⭐ IMDb **{rating:.1}**/10 ({} oy)", votes(count)));
+    match (item.imdb_id.as_deref().and_then(catalog::imdb_rating), item.imdb_score) {
+        (Some((rating, count)), _) => scores.push(format!("⭐ IMDb **{rating:.1}**/10 ({} oy)", votes(count))),
+        (None, Some(rating)) => scores.push(format!("⭐ IMDb **{rating:.1}**/10")),
+        _ => {}
     }
-    match (item.kind, item.score) {
-        (Kind::Game, Some(score)) => scores.push(format!("Metacritic **{score:.0}**/100")),
-        (_, Some(score)) => scores.push(format!("TMDB {score:.1}/10")),
+    match (item.source, item.kind, item.score) {
+        (Source::Feelm, Kind::Game, Some(score)) => scores.push(format!("IGDB **{score:.0}**/100")),
+        (_, Kind::Game, Some(score)) => scores.push(format!("Metacritic **{score:.0}**/100")),
+        (_, _, Some(score)) => scores.push(format!("TMDB {score:.1}/10")),
         _ => {}
     }
     if !scores.is_empty() {
@@ -334,7 +329,11 @@ fn link_row(item: &Item, again: Option<(Kind, &Query)>) -> CreateActionRow {
     if let Some(imdb) = item.imdb_url() {
         buttons.push(CreateButton::new_link(imdb).label("IMDb'de aç"));
     }
-    let site = if item.kind == Kind::Game { "RAWG'da aç" } else { "TMDB'de aç" };
+    let site = match item.source {
+        Source::Feelm => "feelm.org'da aç",
+        Source::Tmdb => "TMDB'de aç",
+        Source::Rawg => "RAWG'da aç",
+    };
     buttons.push(CreateButton::new_link(item.url()).label(site));
     CreateActionRow::Buttons(buttons)
 }

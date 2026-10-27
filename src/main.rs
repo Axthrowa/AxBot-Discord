@@ -27,6 +27,7 @@ mod eventlog;
 mod events;
 mod feeds;
 mod catalog;
+mod feelm;
 mod games;
 mod giveaway;
 mod greetings;
