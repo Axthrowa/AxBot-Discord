@@ -9,6 +9,8 @@
 //! - `AI_IMAGE_MODEL`        → `/hayal-et` modeli (varsayılan FLUX.1-dev; `NVIDIA_API_KEY` gerekir)
 //! - `SPOTIFY_CLIENT_ID` + `SPOTIFY_CLIENT_SECRET` → `/çal` şarkı adını önce Spotify'da arar
 //!   (developer.spotify.com → Dashboard → Create app; ses yine YouTube'dan çalınır)
+//! - `TMDB_API_KEY`          → `/tavsiye film · dizi` (themoviedb.org → Ayarlar → API)
+//! - `RAWG_API_KEY`          → `/tavsiye oyun` (rawg.io/apidocs)
 
 use std::sync::OnceLock;
 
@@ -28,6 +30,8 @@ pub struct Integrations {
     pub user_install: bool,
     /// Spotify Web API (client id, secret): şarkı adıyla arama.
     pub spotify: Option<(String, String)>,
+    pub tmdb_api_key: Option<String>,
+    pub rawg_api_key: Option<String>,
 }
 
 static GLOBAL: OnceLock<Integrations> = OnceLock::new();
@@ -50,6 +54,8 @@ pub fn init() {
         alert_webhook_url: env("ALERT_WEBHOOK_URL").filter(|url| crate::alerts::valid_webhook(url)),
         user_install: env("USER_INSTALL").is_some_and(|v| v == "1"),
         spotify: env("SPOTIFY_CLIENT_ID").zip(env("SPOTIFY_CLIENT_SECRET")),
+        tmdb_api_key: env("TMDB_API_KEY"),
+        rawg_api_key: env("RAWG_API_KEY"),
     });
 }
 
@@ -64,6 +70,8 @@ pub fn get() -> &'static Integrations {
         alert_webhook_url: None,
         user_install: false,
         spotify: None,
+        tmdb_api_key: None,
+        rawg_api_key: None,
     };
     GLOBAL.get().unwrap_or(&EMPTY)
 }
@@ -78,6 +86,8 @@ impl std::fmt::Debug for Integrations {
             .field("image_model", &self.image_model)
             .field("alert_webhook", &self.alert_webhook_url.is_some())
             .field("user_install", &self.user_install)
+            .field("tmdb", &self.tmdb_api_key.is_some())
+            .field("rawg", &self.rawg_api_key.is_some())
             .finish()
     }
 }

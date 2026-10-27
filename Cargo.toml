@@ -50,6 +50,8 @@ regex = "1"
 dashmap = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# IMDb puan dosyası (.tsv.gz) — zaten bağımlılık ağacında
+flate2 = "1"
 
 # Müzik: Discord ses (DAVE şifrelemeli) + ses çözme (saf Rust, ffmpeg gerekmez)
 songbird = { version = "0.6", default-features = false, features = [

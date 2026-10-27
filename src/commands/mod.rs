@@ -42,7 +42,7 @@ use crate::data::Data;
 use crate::error::Error;
 
 pub use fun::{handle_tod, TOD_PREFIX};
-pub use recommend::{handle_component as handle_feelm, PREFIX as FEELM_PREFIX};
+pub use recommend::{handle_component as handle_recommend, PREFIX as RECOMMEND_PREFIX};
 
 pub fn all() -> Vec<poise::Command<Data, Error>> {
     let mut commands = every();

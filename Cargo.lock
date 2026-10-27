@@ -947,6 +947,7 @@ dependencies = [
  "chrono",
  "dashmap 6.2.1",
  "dotenvy",
+ "flate2",
  "futures-util",
  "hickory-resolver",
  "image",
