@@ -182,6 +182,17 @@ fn names(value: &Value, key: &str) -> Vec<String> {
     value.get(key).and_then(Value::as_array).map(|list| list.iter().filter_map(|v| text(v, "name")).collect()).unwrap_or_default()
 }
 
+/// RAWG türleri İngilizce gelir; bilinen kısa adlar Türkçeleştirilir.
+fn game_genres(value: &Value) -> Vec<String> {
+    let list = value.get("genres").and_then(Value::as_array);
+    list.map(|list| {
+        list.iter()
+            .filter_map(|g| text(g, "slug").and_then(|s| Kind::Game.genre_name(&s)).map(str::to_owned).or_else(|| text(g, "name")))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 /// TMDB liste/arama sonucundaki bir öğe. `kind` verilmezse `media_type`'tan okunur (arama).
 pub fn parse_tmdb(value: &Value, kind: Option<Kind>) -> Option<Item> {
     let kind = match kind {
@@ -213,7 +224,7 @@ pub fn parse_rawg(value: &Value) -> Option<Item> {
     item.poster = text(value, "background_image").filter(|u| u.starts_with("https://"));
     item.score = value.get("metacritic").and_then(Value::as_f64).filter(|s| *s > 0.0);
     item.adult = value.pointer("/esrb_rating/slug").and_then(Value::as_str) == Some("adults-only");
-    item.genres = names(value, "genres");
+    item.genres = game_genres(value);
     Some(item)
 }
 
@@ -367,7 +378,7 @@ async fn try_enrich(http: &reqwest::Client, item: &mut Item) -> anyhow::Result<(
             item.english_overview = text(&body, "description_raw");
             item.makers = names(&body, "developers");
             item.makers.truncate(3);
-            item.genres = names(&body, "genres");
+            item.genres = game_genres(&body);
             item.platforms = body
                 .get("parent_platforms")
                 .and_then(Value::as_array)
@@ -461,10 +472,11 @@ mod tests {
         assert_eq!(parse_tmdb(&series, None).map(|i| (i.kind, i.year)), Some((Kind::Series, Some(2011))));
 
         let game: Value = serde_json::from_str(
-            r#"{"id":3328,"slug":"the-witcher-3-wild-hunt","name":"The Witcher 3","released":"2015-05-18","metacritic":92,"background_image":"https://media.rawg.io/x.jpg","esrb_rating":{"slug":"mature"}}"#,
+            r#"{"id":3328,"slug":"the-witcher-3-wild-hunt","name":"The Witcher 3","released":"2015-05-18","metacritic":92,"genres":[{"slug":"role-playing-games-rpg","name":"RPG"},{"slug":"yeni","name":"New"}],"background_image":"https://media.rawg.io/x.jpg","esrb_rating":{"slug":"mature"}}"#,
         )?;
         let item = parse_rawg(&game).ok_or_else(|| anyhow::anyhow!("oyun yok"))?;
         assert_eq!((item.year, item.score, item.adult), (Some(2015), Some(92.0), false));
+        assert_eq!(item.genres, ["Rol yapma (RPG)", "New"]);
         assert_eq!(item.url(), "https://rawg.io/games/the-witcher-3-wild-hunt");
         let adult: Value = serde_json::from_str(r#"{"id":1,"name":"x","esrb_rating":{"slug":"adults-only"}}"#)?;
         assert!(parse_rawg(&adult).is_some_and(|i| i.adult));
