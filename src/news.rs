@@ -954,6 +954,10 @@ async fn machine_rendered(item: &NewsItem, target: &str) -> Option<Rendered> {
 /// Google Çeviri'nin ücretsiz ucu (anahtar gerekmez; resmî değil, ileride değişebilir).
 /// Botun genel istemcisi (HTTP/2) Google'a "otomatik trafik" görünüp 429 alıyor; tarayıcı gibi istemci kullanılır.
 pub async fn machine_translate(text: &str, target: &str) -> Option<String> {
+    // Google 429 verdiyse bir süre hiç denenmez (her haberde üç deneme + bekleme boşa gitmesin).
+    if std::time::Instant::now() < *TRANSLATE_BLOCKED_UNTIL.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
+        return None;
+    }
     let text: String = text.chars().take(1500).collect();
     // Ücretsiz uç ara sıra 429 / zaman aşımı veriyor: kısa aralıklarla üç deneme.
     let mut last_error = String::new();
@@ -971,8 +975,15 @@ pub async fn machine_translate(text: &str, target: &str) -> Option<String> {
         }
     }
     warn!(error = %last_error, "Google Çeviri üç denemede de yanıt vermedi");
+    if last_error.contains("429") {
+        *TRANSLATE_BLOCKED_UNTIL.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = std::time::Instant::now() + TRANSLATE_BACKOFF;
+    }
     None
 }
+
+const TRANSLATE_BACKOFF: Duration = Duration::from_secs(10 * 60);
+static TRANSLATE_BLOCKED_UNTIL: std::sync::LazyLock<std::sync::Mutex<std::time::Instant>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::time::Instant::now()));
 
 /// Tek çeviri isteği. `Ok(None)`: yanıt geldi ama çeviri boş.
 async fn google_translate(text: &str, target: &str) -> anyhow::Result<Option<String>> {

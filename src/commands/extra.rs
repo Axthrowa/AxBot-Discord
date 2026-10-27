@@ -8,7 +8,7 @@ use poise::CreateReply;
 use tokio::sync::Semaphore;
 
 use super::moderation::reply_private;
-use super::profile::{bosan, evlen, profil, rep};
+use super::profile::{profil, rep};
 use crate::data::Context;
 use crate::error::Error;
 use crate::rankcard::{self, Personal};
@@ -135,8 +135,8 @@ impl FontChoice {
     }
 }
 
-/// Rütbe kartını özelleştir; profilini gör, itibar ver, evlen.
-#[poise::command(slash_command, guild_only, rename = "kartım", subcommands("kart_ayarla", "kart_sifirla", "profil", "rep", "evlen", "bosan"), subcommand_required, category = "Seviye")]
+/// Rütbe kartını özelleştir; profilini gör, itibar ver.
+#[poise::command(slash_command, guild_only, rename = "kartım", subcommands("kart_ayarla", "kart_sifirla", "profil", "rep"), subcommand_required, category = "Seviye")]
 pub async fn kartim(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }

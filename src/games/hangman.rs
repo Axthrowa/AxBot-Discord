@@ -63,11 +63,24 @@ impl Hangman {
             _ if chars.len() == self.word.len() && chars.iter().all(|c| c.is_alphabetic()) => {
                 if chars == self.word {
                     self.solved = true;
-                    Guess::Hit
-                } else {
-                    // Yanlış kelime tahmini de bir hata sayılır.
-                    self.wrong.push('✗');
-                    Guess::Miss
+                    return Guess::Hit;
+                }
+                // Yanlış kelime: harfleri tek tek denenmiş sayılır; kelimede olanlar açılır, olmayanlar hata olur.
+                let (mut hit, mut new) = (false, false);
+                for c in chars {
+                    if self.tried.insert(c) {
+                        new = true;
+                        if self.word.contains(&c) {
+                            hit = true;
+                        } else {
+                            self.wrong.push(c);
+                        }
+                    }
+                }
+                match (new, hit) {
+                    (false, _) => Guess::AlreadyTried,
+                    (true, true) => Guess::Hit,
+                    (true, false) => Guess::Miss,
                 }
             }
             _ => Guess::Invalid,
@@ -87,7 +100,7 @@ impl Hangman {
     }
 
     pub fn wrong_letters(&self) -> String {
-        self.wrong.iter().filter(|c| **c != '✗').map(|c| tr_upper_char(*c)).collect::<Vec<_>>().join(" ")
+        self.wrong.iter().map(|c| tr_upper_char(*c)).collect::<Vec<_>>().join(" ")
     }
 
     pub fn is_won(&self) -> bool {
@@ -128,9 +141,20 @@ mod tests {
             g.guess(c);
         }
         assert!(!g.is_lost());
-        assert_eq!(g.guess("zz"), Guess::Miss); // yanlış kelime de hata
+        assert_eq!(g.guess("zz"), Guess::Miss); // yanlış kelimedeki yeni harf de hata
         assert!(g.is_lost());
-        assert_eq!(g.wrong_letters(), "B C D E F");
+        assert_eq!(g.wrong_letters(), "B C D E F Z");
+    }
+
+    #[test]
+    fn wrong_word_reveals_its_letters() {
+        let mut g = Hangman::new("kaplan");
+        assert_eq!(g.guess("kartal"), Guess::Hit); // k, a, l açılır; r, t hata
+        assert_eq!(g.masked(), "K A \\_ L A \\_");
+        assert_eq!(g.wrong_letters(), "R T");
+        assert_eq!(g.guess("kartal"), Guess::AlreadyTried);
+        assert_eq!(g.guess("kaplan"), Guess::Hit);
+        assert!(g.is_won());
     }
 
     #[test]

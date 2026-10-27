@@ -30,6 +30,8 @@ const HANGMAN_IDLE: Duration = Duration::from_secs(120);
 const TRIVIA_TIME: Duration = Duration::from_secs(20);
 const WIN_REWARD: i64 = 50;
 const TRIVIA_REWARD: i64 = 40;
+/// Üye başına saatte en fazla bu kadar ödüllü oyun (iki arkadaş sırayla kaybederek para kasmasın).
+const REWARDS_PER_HOUR: i64 = 6;
 
 /// Son sorulan sorular (sunucu/tür başına) — aynı sorular art arda gelmesin.
 static RECENT: LazyLock<DashMap<(u64, &'static str), VecDeque<usize>>> = LazyLock::new(DashMap::new);
@@ -68,11 +70,17 @@ async fn reject(ctx: Context<'_>, press: &ComponentInteraction, text: &str) -> R
     Ok(())
 }
 
-/// Kazananı (bot değilse) ödüllendirir.
+/// Kazananı (bot değilse) ödüllendirir; saatlik sınır dolduysa ödül verilmez.
 async fn reward(ctx: Context<'_>, user: UserId, amount: i64) -> String {
     let Some(guild) = ctx.guild_id() else {
         return String::new();
     };
+    let key = format!("eko:oyun:{guild}:{user}");
+    let mut conn = ctx.data().redis.clone();
+    let won: redis::RedisResult<(i64, bool)> = redis::pipe().atomic().incr(&key, 1).expire(&key, 3600).arg("NX").query_async(&mut conn).await;
+    if won.is_ok_and(|(count, _)| count > REWARDS_PER_HOUR) {
+        return " _(saatlik oyun ödülü sınırı doldu)_".to_owned();
+    }
     match economy::add(&ctx.data().db, guild, user, amount).await {
         Ok(_) => format!(" **+{}**", economy::money(amount)),
         Err(_) => String::new(),
@@ -401,7 +409,10 @@ async fn adam_asmaca(ctx: Context<'_>) -> Result<(), Error> {
             let _ = reply.edit(ctx, CreateReply::default().embed(render(&game, "Tahmin etmeye devam!"))).await;
         }
     };
-    reply.edit(ctx, CreateReply::default().embed(render(&game, &outcome))).await?;
+    // Oyun mesajı silinmişse (Unknown Message) sonuç yeni mesajla duyurulur.
+    if reply.edit(ctx, CreateReply::default().embed(render(&game, &outcome))).await.is_err() {
+        ctx.channel_id().send_message(ctx, serenity::CreateMessage::new().embed(render(&game, &outcome))).await?;
+    }
     Ok(())
 }
 

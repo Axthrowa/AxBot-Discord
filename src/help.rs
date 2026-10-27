@@ -63,10 +63,9 @@ pub const PAGES: &[Page] = &[
 • `/seviye` — seviye kartın (resimli) · `/sıralama dönem:Haftalık` — en aktifler (tüm zamanlar / haftalık / aylık)\n\
 • `/başarımlar` — kazandığın başarımlar ve ilerlemen\n\n\
 **`/kartım`**\n\
-• `profil` — seviye, bakiye, itibar, başarımlar ve eşin tek kartta\n\
+• `profil` — seviye, bakiye, itibar, başarımlar tek kartta\n\
 • `ayarla` — kartının rengini, arka planını, yazı tipini değiştir · `sıfırla`\n\
-• `rep kullanıcı:@…` — birine itibar puanı ver (günde 1)\n\
-• `evlen üye:@…` / `boşan` 💍",
+• `rep kullanıcı:@…` — birine itibar puanı ver (günde 1)",
     },
     Page {
         key: "u_economy",
