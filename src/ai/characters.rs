@@ -93,6 +93,48 @@ pub struct AiSettings {
     pub assignments: Vec<Assignment>,
     /// Yapay zekâ moderasyonu: gizlenmiş küfürleri ("a.q", "4mk") modele sorup siler.
     pub moderation: bool,
+    /// Bilgi bankası: yöneticilerin yazdığı sunucu bilgileri; boş satırla ayrılmış maddeler.
+    pub knowledge: String,
+}
+
+pub const MAX_KNOWLEDGE: usize = 20_000;
+/// Bir soruya eklenecek en fazla bilgi bankası metni (modelin bağlamı ve hız için).
+const KNOWLEDGE_BUDGET: usize = 3_000;
+
+/// Soruyla ilgili bilgi bankası maddeleri. Banka küçükse hepsi; büyükse soruyla en çok kelime paylaşanlar.
+/// Kelimeler ilk 5 harfiyle karşılaştırılır (Türkçe ekler: "kuralları" ~ "kural").
+pub fn relevant_knowledge(knowledge: &str, question: &str) -> Option<String> {
+    let knowledge = knowledge.trim();
+    if knowledge.is_empty() {
+        return None;
+    }
+    if knowledge.chars().count() <= KNOWLEDGE_BUDGET {
+        return Some(knowledge.to_owned());
+    }
+    let stems = |text: &str| -> std::collections::HashSet<String> {
+        crate::automations::fold(text)
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.chars().count() >= 3)
+            .map(|w| w.chars().take(5).collect())
+            .collect()
+    };
+    let wanted = stems(question);
+    let entries: Vec<&str> = knowledge.split("\n\n").map(str::trim).filter(|e| !e.is_empty()).collect();
+    let mut scored: Vec<(usize, usize, &str)> =
+        entries.iter().enumerate().map(|(i, e)| (stems(e).intersection(&wanted).count(), i, *e)).filter(|(score, _, _)| *score > 0).collect();
+    // En çok eşleşen önce; eşitlikte metindeki sıra korunur.
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut out = String::new();
+    for (_, _, entry) in scored {
+        if out.chars().count() + entry.chars().count() > KNOWLEDGE_BUDGET {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(entry);
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 impl PluginConfig for AiSettings {
@@ -178,10 +220,22 @@ fn plain(name: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn knowledge_picks_matching_entries() {
+        assert_eq!(relevant_knowledge("  ", "soru"), None);
+        assert_eq!(relevant_knowledge("Kısa banka.", "alakasız"), Some("Kısa banka.".to_owned()));
+        let filler = "x".repeat(2000);
+        let bank = format!("Sunucu KURALLARI: küfür yasak.\n\nYetkili başvurusu ayda bir açılır.\n\n{filler}\n\n{filler}");
+        let found = relevant_knowledge(&bank, "kurallar neler?").unwrap_or_default();
+        assert!(found.contains("küfür yasak") && !found.contains("başvurusu"), "{found}");
+        assert_eq!(relevant_knowledge(&bank, "hava nasıl"), None);
+    }
+
     fn settings() -> AiSettings {
         AiSettings {
             persona: Some("Sunucu kişiliği".to_owned()),
             moderation: false,
+            knowledge: String::new(),
             characters: vec![Character { id: 3, name: "Kaptan Zeki".to_owned(), prompt: "Özel metin".to_owned() }],
             assignments: vec![
                 Assignment { channel: 10, key: "hazir:korsan".to_owned() },

@@ -122,7 +122,7 @@ pub struct Facts<'a> {
 
 /// Büyük/küçük harf ve Türkçe noktalı-noktasız i farkını yok sayan karşılaştırma biçimi:
 /// "NASIL", "nasıl" ve "nasil" aynı sayılır (İngilizce klavyeyle yazanlar da eşleşsin).
-fn fold(text: &str) -> String {
+pub(crate) fn fold(text: &str) -> String {
     text.chars()
         .flat_map(char::to_lowercase)
         .filter(|c| *c != '\u{0307}')

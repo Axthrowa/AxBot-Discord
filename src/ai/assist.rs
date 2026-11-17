@@ -56,7 +56,12 @@ pub async fn on_ticket_message(ctx: &serenity::Context, data: &Data, guild_id: G
         return;
     }
     let Ok(extras) = data.settings.get::<TicketExtras>(&data.db, guild_id).await else { return };
-    let Some(faq) = extras.faq.as_deref().filter(|f| !f.trim().is_empty()) else { return };
+    // Bilet SSS'si ve sunucunun bilgi bankası birlikte kullanılır; ikisi de boşsa asistan susar.
+    let bank = data.settings.get::<super::characters::AiSettings>(&data.db, guild_id).await.ok().and_then(|s| super::characters::relevant_knowledge(&s.knowledge, &question));
+    let faq: String = [extras.faq.as_deref().map(str::trim).filter(|f| !f.is_empty()).map(str::to_owned), bank].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
+    if faq.is_empty() {
+        return;
+    }
 
     let typing = msg.channel_id.start_typing(&ctx.http);
     let request = format!(

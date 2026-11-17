@@ -82,6 +82,22 @@ pub async fn ai_fields(state: &WebState, guild_id: GuildId, options: &Options) -
     ));
 
     out.push_str(&section(
+        "Bilgi bankası",
+        field(
+            "Sunucu hakkında bilgiler",
+            &big_textarea(
+                "knowledge",
+                &settings.knowledge,
+                characters::MAX_KNOWLEDGE,
+                10,
+                "Her maddeyi boş bir satırla ayır. Örn:\n\nKurallar: küfür ve reklam yasak; ilk uyarıdan sonra susturma.\n\nYetkili başvurusu her ayın 1'inde #başvuru kanalında açılır.",
+            ),
+            "Yapay zekâ sunucuyla ilgili sorularda önce buraya bakar ve burada olmayan sunucu bilgisini uydurmaz. Bilet asistanı da SSS ile \
+             birlikte bunu kullanır. Uzun bankada soruyla ilgili maddeler seçilir (en fazla ~3000 karakter). Gizli bilgi yazma: üyeler soru sorarak görebilir.",
+        ),
+    ));
+
+    out.push_str(&section(
         "Yapay zekâ moderasyonu",
         super::plugins::checkbox("moderation", settings.moderation, "Gizlenmiş küfürleri yakala (ör. “a.q”, “4mk”, “s*k”)")
             + "<p class=\"note\">Kelime listesinin kaçırdığı, harflerin arasına nokta / yıldız / rakam konmuş yazımlar yapay zekâya sorulur; açıkça küfürse mesaj silinir \
@@ -146,6 +162,11 @@ pub async fn ai_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> 
     let mut settings = (*current).clone();
     settings.persona = persona;
     settings.moderation = input.checked("moderation");
+    let knowledge = input.raw("knowledge").replace("\r\n", "\n");
+    if knowledge.chars().count() > characters::MAX_KNOWLEDGE {
+        return Err("metin");
+    }
+    settings.knowledge = knowledge.trim().to_owned();
     settings.characters.retain(|c| !removed.contains(&c.id));
     match (new_name, new_prompt) {
         (Some(name), Some(prompt)) => {

@@ -220,7 +220,13 @@ pub async fn handle_message(
     // Karakter ayarı bellekteki önbellekten okunur.
     let characters = data.settings.get::<characters::AiSettings>(&data.db, guild_id).await.ok();
     let persona = characters.as_deref().and_then(|c| c.persona_for(msg.channel_id.get()));
-    let system = system_prompt(config, &guild_name, persona);
+    let mut system = system_prompt(config, &guild_name, persona);
+    if let Some(facts) = characters.as_deref().and_then(|c| characters::relevant_knowledge(&c.knowledge, &content)) {
+        system.push_str(&format!(
+            "\n\nSUNUCU BİLGİ BANKASI (yöneticilerin yazdığı, güvenilir bilgi). Bu sunucuyla ilgili sorularda önce buna dayan; \
+             burada olmayan sunucu bilgisini (kural, rol, etkinlik, tarih) uydurma, bilmediğini söyle:\n\"\"\"\n{facts}\n\"\"\""
+        ));
+    }
 
     // Cevap yazıldıkça aynı mesaj düzenlenerek gösterilir; kullanıcı cevabın bitmesini beklemez.
     let (progress, progress_rx) = tokio::sync::watch::channel(String::new());
