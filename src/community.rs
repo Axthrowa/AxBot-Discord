@@ -97,6 +97,8 @@ pub struct CommunitySettings {
     pub persist_roles: bool,
     /// Ses kanalında geçen her dakika için XP (0 = kapalı).
     pub voice_xp_per_min: u32,
+    /// Ses XP'si süzgeci kapalı: AFK kanalında, sesi kapalı / sağır ya da kanalda yalnız olanlar da XP alır.
+    pub voice_xp_idle: bool,
     /// Paneli kullanabilen ek roller ("bot yöneticisi").
     pub manager_roles: Vec<u64>,
     /// Klip kanalı: buraya gönderilen videolar sayılır (AxT Capture webhook'u ya da elle yükleme).
@@ -615,6 +617,52 @@ pub async fn on_join(ctx: &serenity::Context, data: &Data, member: &Member) {
     }
 }
 
+/// Seste "etkin" geçen süre: (biriken saniye, şu an etkinse etkinliğin başladığı an).
+type ActiveTime = (u64, Option<std::time::Instant>);
+static VOICE_ACTIVE: std::sync::LazyLock<dashmap::DashMap<(GuildId, UserId), ActiveTime>> = std::sync::LazyLock::new(dashmap::DashMap::new);
+
+/// Ses XP'si sayılır mı: AFK kanalında değil, sesi açık, sağır değil ve kanalda onu duyan başka biri var.
+pub fn voice_counts(in_afk: bool, muted: bool, deaf: bool, other_listeners: usize) -> bool {
+    !in_afk && !muted && !deaf && other_listeners > 0
+}
+
+/// Sunucudaki herkesin seste etkin olup olmadığını yeniden hesaplar (her ses olayında; önbellekten).
+pub fn refresh_voice_activity(cache: &serenity::Cache, guild_id: GuildId) {
+    let Some(guild) = cache.guild(guild_id) else { return };
+    let is_bot = |s: &serenity::VoiceState| s.member.as_ref().map_or_else(|| guild.members.get(&s.user_id).is_some_and(|m| m.user.bot), |m| m.user.bot);
+    let listening = |s: &serenity::VoiceState| !is_bot(s) && !s.deaf && !s.self_deaf;
+    let now = std::time::Instant::now();
+    for state in guild.voice_states.values() {
+        let Some(channel) = state.channel_id else { continue };
+        if is_bot(state) {
+            continue;
+        }
+        let others = guild.voice_states.values().filter(|o| o.user_id != state.user_id && o.channel_id == Some(channel) && listening(o)).count();
+        let active = voice_counts(guild.afk_metadata.as_ref().is_some_and(|a| a.afk_channel_id == channel), state.mute || state.self_mute, state.deaf || state.self_deaf, others);
+        let mut entry = VOICE_ACTIVE.entry((guild_id, state.user_id)).or_insert((0, None));
+        match (active, entry.1) {
+            (true, None) => entry.1 = Some(now),
+            (false, Some(since)) => {
+                entry.0 += since.elapsed().as_secs();
+                entry.1 = None;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Üye sesten ayrıldı: etkin geçen dakikalar.
+fn take_active_minutes(guild_id: GuildId, user: UserId) -> u64 {
+    VOICE_ACTIVE.remove(&(guild_id, user)).map_or(0, |(_, (secs, since))| (secs + since.map_or(0, |s| s.elapsed().as_secs())) / 60)
+}
+
+/// Sesten ayrılan üyeye XP: süzgeç açıksa yalnızca etkin dakikalar, kapalıysa bütün süre.
+pub async fn voice_session_xp(data: &Data, guild_id: GuildId, user: UserId, total_minutes: u64) {
+    let active = take_active_minutes(guild_id, user);
+    let idle_counts = data.settings.get::<CommunitySettings>(&data.db, guild_id).await.is_ok_and(|s| s.voice_xp_idle);
+    voice_xp(data, guild_id, user, if idle_counts { total_minutes } else { active }).await;
+}
+
 /// Seste geçen dakikalar için XP (ayar açıksa).
 pub async fn voice_xp(data: &Data, guild_id: GuildId, user: UserId, minutes: u64) {
     let rate = data.settings.get::<CommunitySettings>(&data.db, guild_id).await.map_or(0, |s| s.voice_xp_per_min.min(MAX_VOICE_XP));
@@ -848,6 +896,12 @@ mod tests {
         assert_eq!(day_stamp(86_400), 1);
         assert!(!CommunitySettings::default().is_active());
         assert!(CommunitySettings { voice_xp_per_min: 2, ..CommunitySettings::default() }.is_active());
+        // Ses XP süzgeci: AFK, sessiz, sağır ve yalnız sayılmaz.
+        assert!(voice_counts(false, false, false, 1));
+        assert!(!voice_counts(true, false, false, 3));
+        assert!(!voice_counts(false, true, false, 3));
+        assert!(!voice_counts(false, false, true, 3));
+        assert!(!voice_counts(false, false, false, 0));
         // Yalnızca yönetici rolü tanımlamak eklentiyi "açık" yapmaz.
         assert!(!CommunitySettings { manager_roles: vec![1], ..CommunitySettings::default() }.is_active());
     }

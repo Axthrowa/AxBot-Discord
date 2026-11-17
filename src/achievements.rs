@@ -252,6 +252,7 @@ static IN_VOICE: LazyLock<DashMap<(GuildId, UserId), Instant>> = LazyLock::new(D
 /// Ses kanalına giriş/çıkışı izler; çıkışta geçen dakikaları sayaca ekler.
 pub async fn on_voice(ctx: &serenity::Context, data: &Data, new: &VoiceState) {
     let Some(guild_id) = new.guild_id else { return };
+    crate::community::refresh_voice_activity(&ctx.cache, guild_id);
     let key = (guild_id, new.user_id);
     if new.channel_id.is_some() {
         IN_VOICE.entry(key).or_insert_with(Instant::now);
@@ -262,7 +263,7 @@ pub async fn on_voice(ctx: &serenity::Context, data: &Data, new: &VoiceState) {
     let Some(user) = new.member.as_ref().map(|m| m.user.clone()).or_else(|| ctx.cache.user(new.user_id).map(|u| u.clone())) else {
         return;
     };
-    crate::community::voice_xp(data, guild_id, new.user_id, minutes).await;
+    crate::community::voice_session_xp(data, guild_id, new.user_id, minutes).await;
     bump(ctx, data, guild_id, &user, Kind::Voice, minutes, None).await;
 }
 

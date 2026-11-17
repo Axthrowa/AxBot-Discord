@@ -111,6 +111,11 @@ pub async fn community_fields(state: &WebState, guild_id: GuildId, options: &Opt
                 &format!("<input type=\"number\" name=\"voice_xp\" value=\"{}\" min=\"0\" max=\"{}\">", settings.voice_xp_per_min, community::MAX_VOICE_XP),
                 "0 = kapalı. XP, üye ses kanalından çıkınca toplu eklenir (tek seferde en fazla 10 saatlik).",
             )
+            + &checkbox(
+                "voice_xp_idle",
+                settings.voice_xp_idle,
+                "Süzgeci kapat: AFK kanalındaki, sesi kapalı / sağır ya da kanalda yalnız olan üyeler de ses XP'si alsın",
+            )
             + "<p class=\"note\">AFK: üyeler <code>/afk</code> yazar; ayar gerekmez.</p>",
     ));
     out.push_str(&section(
@@ -204,6 +209,7 @@ pub async fn community_save(state: &WebState, guild_id: GuildId, input: &Input<'
     settings.confession_log_channel = confession_log_channel;
     settings.persist_roles = input.checked("persist_roles");
     settings.voice_xp_per_min = voice_xp_per_min;
+    settings.voice_xp_idle = input.checked("voice_xp_idle");
     settings.season_channel = season_channel;
     settings.clip_channel = clip_channel;
     settings.season_reward = season_reward;
