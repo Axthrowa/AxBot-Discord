@@ -1,4 +1,4 @@
-//! Moderasyon komutları: ban, unban, kick, timeout, untimeout, warn, uyarılar, uyarı-sil, log-kanalı.
+//! Moderasyon komutları: ban, unban, kick, timeout, untimeout, karantina, warn, uyarılar, uyarı-sil, log-kanalı.
 //!
 //! Ortak akış: hiyerarşi kontrolü → üyeye DM → Discord işlemi → vaka kaydı → log kanalı → onay.
 
@@ -47,13 +47,18 @@ pub async fn ban(
     #[description = "Süreli yasak (örn. 1g, 1hf); boşsa kalıcı"]
     length: Option<String>,
 ) -> Result<(), Error> {
-    let guild_id = guild_id(ctx)?;
-    let reason = clean_reason(reason);
     let length = match length.as_deref().map(duration::parse) {
         None => None,
         Some(Ok(d)) => Some(d),
         Some(Err(e)) => return reply_private(ctx, format!("Geçersiz süre: {e}")).await,
     };
+    do_ban(ctx, user, reason, delete_days.unwrap_or(0), length).await
+}
+
+/// Yasaklama akışı (`/mod yasakla` ve sağ tık "Hızlı ceza" ortak kullanır).
+pub(super) async fn do_ban(ctx: Context<'_>, user: User, reason: Option<String>, delete_days: u8, length: Option<Duration>) -> Result<(), Error> {
+    let guild_id = guild_id(ctx)?;
+    let reason = clean_reason(reason);
 
     // Sunucudaysa hiyerarşi kontrol edilir ve yasaklanmadan önce DM atılır
     // (yasaktan sonra ortak sunucu kalmadığı için DM gönderilemez).
@@ -76,7 +81,7 @@ pub async fn ban(
         .ban_with_reason(
             ctx.http(),
             user.id,
-            delete_days.unwrap_or(0),
+            delete_days,
             reason.as_deref().unwrap_or(DEFAULT_REASON),
         )
         .await;
@@ -87,7 +92,7 @@ pub async fn ban(
         schedule_unban(ctx, guild_id, user.id, d).await?;
     }
 
-    finish(ctx, guild_id, ModAction::Ban, &user, reason, length).await
+    finish(ctx, guild_id, ModAction::Ban, &user, reason, length, 1).await
 }
 
 async fn schedule_unban(ctx: Context<'_>, guild_id: GuildId, user: serenity::UserId, length: Duration) -> Result<(), Error> {
@@ -134,7 +139,7 @@ pub async fn unban(
         return reply_private(ctx, discord_error(&e)).await;
     }
 
-    finish(ctx, guild_id, ModAction::Unban, &user, reason, None).await
+    finish(ctx, guild_id, ModAction::Unban, &user, reason, None, 1).await
 }
 
 /// Bir üyeyi sunucudan atar.
@@ -155,6 +160,11 @@ pub async fn kick(
     #[description = "Atma sebebi"]
     reason: Option<String>,
 ) -> Result<(), Error> {
+    do_kick(ctx, member, reason).await
+}
+
+/// Atma akışı (komut ve sağ tık ortak).
+pub(super) async fn do_kick(ctx: Context<'_>, member: Member, reason: Option<String>) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
     let reason = clean_reason(reason);
 
@@ -176,7 +186,7 @@ pub async fn kick(
         return reply_private(ctx, discord_error(&e)).await;
     }
 
-    finish(ctx, guild_id, ModAction::Kick, &member.user, reason, None).await
+    finish(ctx, guild_id, ModAction::Kick, &member.user, reason, None, 1).await
 }
 
 /// Bir üyeyi belirli bir süre susturur (Discord timeout, en fazla 28 gün).
@@ -200,9 +210,6 @@ pub async fn timeout(
     #[description = "Susturma sebebi"]
     reason: Option<String>,
 ) -> Result<(), Error> {
-    let guild_id = guild_id(ctx)?;
-    let reason = clean_reason(reason);
-
     let length = match duration::parse(&length) {
         Ok(d) if d > duration::MAX_TIMEOUT => {
             return reply_private(ctx, "Discord en fazla 28 günlük susturmaya izin veriyor.").await;
@@ -210,6 +217,13 @@ pub async fn timeout(
         Ok(d) => d,
         Err(e) => return reply_private(ctx, format!("Geçersiz süre: {e}")).await,
     };
+    do_timeout(ctx, member, length, reason).await
+}
+
+/// Susturma akışı (komut ve sağ tık ortak). `length` en fazla 28 gün olmalı.
+pub(super) async fn do_timeout(ctx: Context<'_>, member: Member, length: Duration, reason: Option<String>) -> Result<(), Error> {
+    let guild_id = guild_id(ctx)?;
+    let reason = clean_reason(reason);
 
     if let Some(problem) = hierarchy_problem(ctx, guild_id, &member).await {
         return reply_private(ctx, problem).await;
@@ -233,7 +247,7 @@ pub async fn timeout(
     }
 
     notify(ctx, &member.user, ModAction::Timeout, reason.as_deref(), Some(length)).await;
-    finish(ctx, guild_id, ModAction::Timeout, &member.user, reason, Some(length)).await
+    finish(ctx, guild_id, ModAction::Timeout, &member.user, reason, Some(length), 1).await
 }
 
 /// Bir üyenin susturmasını kaldırır.
@@ -276,7 +290,95 @@ pub async fn untimeout(
         return reply_private(ctx, discord_error(&e)).await;
     }
 
-    finish(ctx, guild_id, ModAction::Untimeout, &member.user, reason, None).await
+    finish(ctx, guild_id, ModAction::Untimeout, &member.user, reason, None, 1).await
+}
+
+/// Bir üyeyi karantinaya alır: rolleri saklanıp alınır, yalnızca karantina rolü kalır.
+#[poise::command(
+    slash_command,
+    rename = "karantina",
+    guild_only,
+    default_member_permissions = "MODERATE_MEMBERS", required_permissions = "MODERATE_MEMBERS",
+    required_bot_permissions = "MANAGE_ROLES",
+    category = "Moderasyon"
+)]
+pub async fn karantina(
+    ctx: Context<'_>,
+    #[rename = "üye"]
+    #[description = "Karantinaya alınacak üye"]
+    member: Member,
+    #[rename = "sebep"]
+    #[description = "Karantina sebebi"]
+    reason: Option<String>,
+) -> Result<(), Error> {
+    do_quarantine(ctx, member, reason).await
+}
+
+/// Karantina akışı (komut ve sağ tık ortak).
+pub(super) async fn do_quarantine(ctx: Context<'_>, member: Member, reason: Option<String>) -> Result<(), Error> {
+    let guild_id = guild_id(ctx)?;
+    let reason = clean_reason(reason);
+    let Some(role) = quarantine_role(ctx, guild_id).await? else {
+        return reply_private(ctx, "Önce panelin Moderasyon sayfasından bir karantina rolü seç.").await;
+    };
+    if let Some(problem) = hierarchy_problem(ctx, guild_id, &member).await {
+        return reply_private(ctx, problem).await;
+    }
+    ctx.defer().await?;
+    let data = ctx.data();
+    let text = reason.as_deref().unwrap_or(DEFAULT_REASON);
+    match crate::quarantine::apply(&ctx.serenity_context().cache, ctx.http(), &data.db, guild_id, &member, role, text).await {
+        Ok(true) => {}
+        Ok(false) => return reply_private(ctx, "Bu üye zaten karantinada.").await,
+        Err(e) => return reply_private(ctx, quarantine_error(&e)).await,
+    }
+    notify(ctx, &member.user, ModAction::Quarantine, reason.as_deref(), None).await;
+    finish(ctx, guild_id, ModAction::Quarantine, &member.user, reason, None, 1).await
+}
+
+/// Karantinayı kaldırır ve üyenin eski rollerini geri verir.
+#[poise::command(
+    slash_command,
+    rename = "karantina-kaldır",
+    guild_only,
+    default_member_permissions = "MODERATE_MEMBERS", required_permissions = "MODERATE_MEMBERS",
+    required_bot_permissions = "MANAGE_ROLES",
+    category = "Moderasyon"
+)]
+pub async fn karantina_kaldir(
+    ctx: Context<'_>,
+    #[rename = "üye"]
+    #[description = "Karantinadan çıkarılacak üye"]
+    member: Member,
+    #[rename = "sebep"]
+    #[description = "Kaldırma sebebi"]
+    reason: Option<String>,
+) -> Result<(), Error> {
+    let guild_id = guild_id(ctx)?;
+    let reason = clean_reason(reason);
+    let role = quarantine_role(ctx, guild_id).await?;
+    ctx.defer().await?;
+    let data = ctx.data();
+    let text = reason.as_deref().unwrap_or(DEFAULT_REASON);
+    match crate::quarantine::release(&ctx.serenity_context().cache, ctx.http(), &data.db, guild_id, &member, role, text).await {
+        Ok(true) => {}
+        Ok(false) => return reply_private(ctx, "Bu üye karantinada değil.").await,
+        Err(e) => return reply_private(ctx, quarantine_error(&e)).await,
+    }
+    finish(ctx, guild_id, ModAction::Unquarantine, &member.user, reason, None, 1).await
+}
+
+async fn quarantine_role(ctx: Context<'_>, guild_id: GuildId) -> Result<Option<serenity::RoleId>, Error> {
+    let data = ctx.data();
+    let settings = data.settings.get::<crate::automod::rules::ModSettings>(&data.db, guild_id).await?;
+    Ok(settings.quarantine_role.filter(|r| *r != 0).map(serenity::RoleId::new))
+}
+
+fn quarantine_error(e: &anyhow::Error) -> String {
+    match e.downcast_ref::<serenity::Error>() {
+        Some(e) => discord_error(e),
+        None => format!("Karantina uygulanamadı: {e}"),
+    }
 }
 
 /// Bir üyeyi uyarır; uyarı kaydedilir ve üyeye DM ile bildirilir.
@@ -295,7 +397,13 @@ pub async fn warn(
     #[rename = "sebep"]
     #[description = "Uyarı sebebi"]
     reason: String,
+    #[rename = "puan"]
+    #[description = "Uyarının ağırlığı (varsayılan 1); otomatik cezalar puan toplamına bakar"]
+    #[min = 1]
+    #[max = 10]
+    points: Option<i32>,
 ) -> Result<(), Error> {
+    let points = points.unwrap_or(1).clamp(1, 10);
     let guild_id = guild_id(ctx)?;
     let Some(reason) = clean_reason(Some(reason)) else {
         return reply_private(ctx, "Uyarı için bir sebep yazmalısın.").await;
@@ -311,7 +419,7 @@ pub async fn warn(
     ctx.defer().await?;
 
     notify(ctx, &member.user, ModAction::Warn, Some(&reason), None).await;
-    finish(ctx, guild_id, ModAction::Warn, &member.user, Some(reason), None).await?;
+    finish(ctx, guild_id, ModAction::Warn, &member.user, Some(reason), None, points).await?;
     auto_punish(ctx, guild_id, &member).await
 }
 
@@ -356,8 +464,9 @@ pub async fn uyarilar(
             .take(15)
             .map(|w| {
                 format!(
-                    "**#{}** • <t:{}:R> • <@{}>\n{}",
+                    "**#{}** • {} puan • <t:{}:R> • <@{}>\n{}",
                     w.case_number,
+                    w.points,
                     w.created_unix,
                     w.moderator_id,
                     w.reason.as_deref().unwrap_or(DEFAULT_REASON)
@@ -495,6 +604,7 @@ async fn finish(
     target: &User,
     reason: Option<String>,
     length: Option<Duration>,
+    points: i32,
 ) -> Result<(), Error> {
     let data = ctx.data();
     let moderator = ctx.author().id;
@@ -509,6 +619,9 @@ async fn finish(
         length,
     )
     .await?;
+    if points != 1 {
+        moderation::set_points(&data.db, guild_id, case.number, points).await?;
+    }
 
     data.modlog
         .case(
@@ -536,10 +649,9 @@ async fn finish(
         text.push_str(&format!(" | {}", duration::format(d)));
     }
     if action == ModAction::Warn {
-        let count = moderation::active_warnings(&data.db, guild_id, target.id)
-            .await?
-            .len();
-        text.push_str(&format!(" | Toplam aktif uyarı: **{count}**"));
+        let warnings = moderation::active_warnings(&data.db, guild_id, target.id).await?;
+        let total: i32 = warnings.iter().map(|w| w.points).sum();
+        text.push_str(&format!(" | Toplam aktif uyarı: **{}** ({total} puan)", warnings.len()));
     }
     if let Some(r) = &reason {
         text.push_str(&format!("\n> {r}"));
@@ -662,6 +774,8 @@ pub(super) fn discord_error(e: &serenity::Error) -> String {
         "warn",
         "uyarilar",
         "uyari_sil",
+        "karantina",
+        "karantina_kaldir",
         "super::mod_tools::uyarilari_sifirla",
         "super::mod_tools::uyari_cezasi",
         "log_kanali"

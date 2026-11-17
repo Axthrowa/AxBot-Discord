@@ -1,7 +1,7 @@
 //! Sağ tık menüsü komutları (Uygulamalar menüsü). Bunlar 100'lük slash komut sınırına sayılmaz
 //! (ayrı sınır: 5 mesaj + 5 üye komutu).
 //!
-//! Mesaja sağ tık: Çevir, Yetkiliye bildir, Starboard'a ekle. Üyeye sağ tık: Sicil (`mod_tools::sicil`), Not ekle.
+//! Mesaja sağ tık: Çevir, Yetkiliye bildir, Starboard'a ekle. Üyeye sağ tık: Sicil (`mod_tools::sicil`), Not ekle, Hızlı ceza.
 
 use poise::serenity_prelude::{self as serenity, CreateAllowedMentions, CreateEmbed, CreateEmbedAuthor, CreateMessage, Mentionable};
 use poise::CreateReply;
@@ -177,6 +177,74 @@ pub async fn not_ekle_menu(ctx: AppContext<'_>, user: serenity::User) -> Result<
     };
     poise::Context::Application(ctx).send(CreateReply::default().content(text).ephemeral(true)).await?;
     Ok(())
+}
+
+/// Hızlı ceza düğmeleri: (anahtar, etiket, gereken izin).
+const QUICK_ACTIONS: [(&str, &str, serenity::Permissions); 6] = [
+    ("t10m", "Sustur 10 dk", serenity::Permissions::MODERATE_MEMBERS),
+    ("t1h", "Sustur 1 sa", serenity::Permissions::MODERATE_MEMBERS),
+    ("t1d", "Sustur 1 gün", serenity::Permissions::MODERATE_MEMBERS),
+    ("quarantine", "Karantina", serenity::Permissions::MODERATE_MEMBERS),
+    ("kick", "At", serenity::Permissions::KICK_MEMBERS),
+    ("ban", "Yasakla", serenity::Permissions::BAN_MEMBERS),
+];
+
+/// Üyeye tek tıkla ceza: susturma (10 dk / 1 sa / 1 gün), karantina, atma, yasaklama. Yalnızca iznin olan düğmeler görünür.
+#[poise::command(context_menu_command = "Hızlı ceza", guild_only, required_permissions = "MODERATE_MEMBERS", default_member_permissions = "MODERATE_MEMBERS")]
+pub async fn hizli_ceza(ctx: AppContext<'_>, user: serenity::User) -> Result<(), Error> {
+    use std::time::Duration;
+    let pctx = poise::Context::Application(ctx);
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let allowed = ctx.interaction.member.as_ref().and_then(|m| m.permissions).unwrap_or_else(serenity::Permissions::empty);
+    let usable = |need: serenity::Permissions| allowed.contains(serenity::Permissions::ADMINISTRATOR) || allowed.contains(need);
+    let prefix = format!("hizli:{}:", ctx.id());
+    let buttons: Vec<serenity::CreateButton> = QUICK_ACTIONS
+        .iter()
+        .filter(|(_, _, need)| usable(*need))
+        .map(|(key, label, _)| {
+            let style = if matches!(*key, "kick" | "ban") { serenity::ButtonStyle::Danger } else { serenity::ButtonStyle::Secondary };
+            serenity::CreateButton::new(format!("{prefix}{key}")).label(*label).style(style)
+        })
+        .collect();
+    let rows: Vec<serenity::CreateActionRow> = buttons.chunks(5).map(|c| serenity::CreateActionRow::Buttons(c.to_vec())).collect();
+    let text = format!("**{}** için ceza seç (60 sn). Sebep: \"Hızlı ceza\" — ayrıntılı sebep için `/mod` komutlarını kullan.", user.tag());
+    let reply = pctx.send(CreateReply::default().content(text).components(rows).ephemeral(true)).await?;
+
+    let Some(press) = serenity::ComponentInteractionCollector::new(ctx.serenity_context())
+        .author_id(ctx.author().id)
+        .filter(move |i| i.data.custom_id.starts_with(&prefix))
+        .timeout(Duration::from_secs(60))
+        .await
+    else {
+        let _ = reply.edit(pctx, CreateReply::default().content("⌛ Süre doldu.").components(Vec::new())).await;
+        return Ok(());
+    };
+    let key = press.data.custom_id.rsplit(':').next().unwrap_or_default().to_owned();
+    let done = serenity::CreateInteractionResponseMessage::new().content("⏳ Uygulanıyor…").components(Vec::new());
+    press.create_response(ctx.http(), serenity::CreateInteractionResponse::UpdateMessage(done)).await?;
+    // Düğme listesi izne göre süzüldü; yine de basılan düğmenin izni yeniden denetlenir.
+    if !QUICK_ACTIONS.iter().any(|(k, _, need)| *k == key && usable(*need)) {
+        return reply_private(pctx, "Bu işlem için iznin yok.").await;
+    }
+    let reason = Some("Hızlı ceza".to_owned());
+    if key == "ban" {
+        return super::moderation::do_ban(pctx, user, reason, 0, None).await;
+    }
+    let member = match guild_id.member(ctx.serenity_context(), user.id).await {
+        Ok(member) => member,
+        Err(_) => return reply_private(pctx, "Bu kullanıcı sunucuda değil.").await,
+    };
+    let hours = |h: u64| Duration::from_secs(h * 3600);
+    match key.as_str() {
+        "t10m" => super::moderation::do_timeout(pctx, member, Duration::from_secs(600), reason).await,
+        "t1h" => super::moderation::do_timeout(pctx, member, hours(1), reason).await,
+        "t1d" => super::moderation::do_timeout(pctx, member, hours(24), reason).await,
+        "quarantine" => super::moderation::do_quarantine(pctx, member, reason).await,
+        "kick" => super::moderation::do_kick(pctx, member, reason).await,
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]

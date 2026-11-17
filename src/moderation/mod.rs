@@ -22,6 +22,8 @@ pub enum ModAction {
     Timeout,
     Untimeout,
     Warn,
+    Quarantine,
+    Unquarantine,
 }
 
 impl ModAction {
@@ -34,6 +36,8 @@ impl ModAction {
             Self::Timeout => "timeout",
             Self::Untimeout => "untimeout",
             Self::Warn => "warn",
+            Self::Quarantine => "quarantine",
+            Self::Unquarantine => "unquarantine",
         }
     }
 
@@ -45,6 +49,8 @@ impl ModAction {
             Self::Timeout => "🔇 Susturma",
             Self::Untimeout => "🔊 Susturma kaldırma",
             Self::Warn => "⚠️ Uyarı",
+            Self::Quarantine => "🚧 Karantina",
+            Self::Unquarantine => "✅ Karantinadan çıkarma",
         }
     }
 
@@ -57,6 +63,8 @@ impl ModAction {
             Self::Timeout => "susturuldu",
             Self::Untimeout => "susturması kaldırıldı",
             Self::Warn => "uyarıldı",
+            Self::Quarantine => "karantinaya alındı",
+            Self::Unquarantine => "karantinadan çıkarıldı",
         }
     }
 
@@ -64,9 +72,9 @@ impl ModAction {
         match self {
             Self::Ban => Colour::DARK_RED,
             Self::Kick => Colour::ORANGE,
-            Self::Timeout => Colour::GOLD,
+            Self::Timeout | Self::Quarantine => Colour::GOLD,
             Self::Warn => Colour::from_rgb(250, 200, 50),
-            Self::Unban | Self::Untimeout => Colour::DARK_GREEN,
+            Self::Unban | Self::Untimeout | Self::Unquarantine => Colour::DARK_GREEN,
         }
     }
 }
@@ -128,6 +136,19 @@ pub struct WarningRow {
     pub moderator_id: i64,
     pub reason: Option<String>,
     pub created_unix: i64,
+    /// Uyarı puanı (varsayılan 1); otomatik cezalar puan toplamına bakar.
+    pub points: i32,
+}
+
+/// Uyarıya 1 dışında bir puan verir (kayıt `record_case` ile 1 puanla açılır).
+pub async fn set_points(db: &PgPool, guild_id: GuildId, case_number: i32, points: i32) -> anyhow::Result<()> {
+    sqlx::query("UPDATE mod_cases SET points = $3 WHERE guild_id = $1 AND case_number = $2")
+        .bind(snowflake(guild_id.get())?)
+        .bind(case_number)
+        .bind(points)
+        .execute(db)
+        .await?;
+    Ok(())
 }
 
 /// Üyenin aktif uyarıları, en yeniden eskiye.
@@ -138,10 +159,10 @@ pub async fn active_warnings(
 ) -> anyhow::Result<Vec<WarningRow>> {
     let rows = sqlx::query_as::<_, WarningRow>(
         "SELECT case_number, moderator_id, reason,
-                EXTRACT(EPOCH FROM created_at)::BIGINT AS created_unix
+                EXTRACT(EPOCH FROM created_at)::BIGINT AS created_unix, points
          FROM mod_cases
          WHERE guild_id = $1 AND target_id = $2 AND action = 'warn' AND active
-         ORDER BY created_at DESC",
+         ORDER BY created_at DESC, case_number DESC",
     )
     .bind(snowflake(guild_id.get())?)
     .bind(snowflake(target.get())?)
@@ -310,6 +331,8 @@ impl CaseRow {
             "timeout" => ModAction::Timeout.title(),
             "untimeout" => ModAction::Untimeout.title(),
             "warn" => ModAction::Warn.title(),
+            "quarantine" => ModAction::Quarantine.title(),
+            "unquarantine" => ModAction::Unquarantine.title(),
             _ => "❔ Bilinmeyen",
         }
     }

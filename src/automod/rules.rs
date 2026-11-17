@@ -245,6 +245,8 @@ pub struct ModSettings {
     pub dehoist: bool,
     /// Ad tamamen temizlenirse ya da küfürlüyse verilecek takma ad.
     pub nick_replacement: String,
+    /// `/mod karantina` ile verilen rol (kanalları görmemesi rolün izinleriyle ayarlanır).
+    pub quarantine_role: Option<u64>,
 }
 
 impl Default for ModSettings {
@@ -266,6 +268,7 @@ impl Default for ModSettings {
             nick_filter: false,
             dehoist: false,
             nick_replacement: "Üye".to_owned(),
+            quarantine_role: None,
         }
     }
 }

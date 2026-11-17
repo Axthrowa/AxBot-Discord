@@ -15,21 +15,16 @@ use crate::scheduler::Task;
 /// Süresi verilmemiş otomatik susturmanın uzunluğu.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3600);
 
-/// Verilen uyarı zamanlarına göre tetiklenen kural: penceresindeki uyarı sayısı tam olarak
-/// eşiğe eşit olan kurallardan en ağırı (eşik bir kez tetiklenir).
-pub fn due_rule(rules: Vec<PunishmentRule>, warning_times: &[i64], now: i64) -> Option<(PunishmentRule, i32)> {
+/// Aktif uyarılara (zaman, puan) göre tetiklenen kural. Eşik uyarı PUANI toplamıdır; son uyarının (`latest` puan)
+/// toplamı eşiğin altından eşiğe ya da üstüne taşıdığı kurallardan en ağırı seçilir (eşik bir kez tetiklenir).
+/// Bütün uyarılar 1 puanken bu, "uyarı sayısı tam eşikte" demektir.
+pub fn due_rule(rules: Vec<PunishmentRule>, warnings: &[(i64, i32)], now: i64, latest: i32) -> Option<(PunishmentRule, i32)> {
     rules
         .into_iter()
         .filter_map(|rule| {
-            let count = match rule.window {
-                Some(window) => {
-                    let since = now - i64::try_from(window.as_secs()).unwrap_or(i64::MAX);
-                    warning_times.iter().filter(|t| **t >= since).count()
-                }
-                None => warning_times.len(),
-            };
-            let count = i32::try_from(count).ok()?;
-            (count == rule.warn_count).then_some((rule, count))
+            let since = rule.window.map_or(i64::MIN, |window| now - i64::try_from(window.as_secs()).unwrap_or(i64::MAX));
+            let total: i32 = warnings.iter().filter(|(t, _)| *t >= since).map(|(_, p)| *p).sum();
+            (total >= rule.warn_count && total - latest < rule.warn_count).then_some((rule, total))
         })
         .max_by_key(|(rule, _)| rule.warn_count)
 }
@@ -40,12 +35,15 @@ pub async fn due_punishment(data: &Data, guild_id: GuildId, user: &User) -> anyh
     if rules.is_empty() {
         return Ok(None);
     }
-    let times: Vec<i64> = super::active_warnings(&data.db, guild_id, user.id).await?.iter().map(|w| w.created_unix).collect();
-    Ok(due_rule(rules, &times, serenity::Timestamp::now().unix_timestamp()))
+    // En yeni uyarı (listenin başı) az önce verilendir; eşiği onun geçirip geçirmediğine bakılır.
+    let warnings = super::active_warnings(&data.db, guild_id, user.id).await?;
+    let latest = warnings.first().map_or(0, |w| w.points);
+    let rows: Vec<(i64, i32)> = warnings.iter().map(|w| (w.created_unix, w.points)).collect();
+    Ok(due_rule(rules, &rows, serenity::Timestamp::now().unix_timestamp(), latest))
 }
 
 pub fn punishment_reason(count: i32) -> String {
-    format!("Otomatik ceza: {count} uyarıya ulaştı")
+    format!("Otomatik ceza: uyarı puanı {count} oldu")
 }
 
 /// Cezayı Discord'da uygular, vakayı kaydeder ve log kanalına yazar.
@@ -144,25 +142,42 @@ mod tests {
         PunishmentRule { warn_count, punishment, duration: None, window: window_secs.map(Duration::from_secs) }
     }
 
+    /// Her uyarı 1 puan.
+    fn ones(times: &[i64]) -> Vec<(i64, i32)> {
+        times.iter().map(|t| (*t, 1)).collect()
+    }
+
     #[test]
     fn rule_fires_exactly_at_its_threshold() {
         let now = 10_000;
-        let times = [9_990, 9_000, 100];
-        let due = due_rule(vec![rule(3, Punishment::Kick, None), rule(5, Punishment::Ban, None)], &times, now);
+        let times = ones(&[9_990, 9_000, 100]);
+        let due = due_rule(vec![rule(3, Punishment::Kick, None), rule(5, Punishment::Ban, None)], &times, now, 1);
         assert!(matches!(due, Some((r, 3)) if r.punishment == Punishment::Kick));
         // Dördüncü uyarıda 3'lük kural yeniden tetiklenmez.
-        assert!(due_rule(vec![rule(3, Punishment::Kick, None)], &[1, 2, 3, 4], now).is_none());
+        assert!(due_rule(vec![rule(3, Punishment::Kick, None)], &ones(&[1, 2, 3, 4]), now, 1).is_none());
     }
 
     #[test]
     fn window_counts_only_recent_warnings() {
         let now = 10_000;
-        let times = [9_990, 9_500, 100];
+        let times = ones(&[9_990, 9_500, 100]);
         // Son 1 saatte 2 uyarı var: pencereli 2'lik kural tetiklenir, pencereli 3'lük tetiklenmez.
-        assert!(due_rule(vec![rule(2, Punishment::Timeout, Some(3600))], &times, now).is_some());
-        assert!(due_rule(vec![rule(3, Punishment::Timeout, Some(3600))], &times, now).is_none());
+        assert!(due_rule(vec![rule(2, Punishment::Timeout, Some(3600))], &times, now, 1).is_some());
+        assert!(due_rule(vec![rule(3, Punishment::Timeout, Some(3600))], &times, now, 1).is_none());
         // Aynı anda iki kural tutarsa ağır olan (eşiği yüksek) uygulanır.
-        let both = due_rule(vec![rule(2, Punishment::Timeout, Some(3600)), rule(3, Punishment::Ban, None)], &times, now);
+        let both = due_rule(vec![rule(2, Punishment::Timeout, Some(3600)), rule(3, Punishment::Ban, None)], &times, now, 1);
         assert!(matches!(both, Some((r, 3)) if r.punishment == Punishment::Ban));
+    }
+
+    #[test]
+    fn heavy_warning_can_jump_past_a_threshold() {
+        let now = 10_000;
+        let rules = || vec![rule(3, Punishment::Timeout, None), rule(5, Punishment::Kick, None)];
+        // 2 puan vardı, 3 puanlık uyarı geldi (toplam 5): iki eşik birden geçildi, ağır olan seçilir.
+        let warnings = [(9_990, 3), (9_000, 1), (8_000, 1)];
+        assert!(matches!(due_rule(rules(), &warnings, now, 3), Some((r, 5)) if r.punishment == Punishment::Kick));
+        // Sonraki 1 puanlık uyarı (toplam 6) geçilmiş eşikleri yeniden tetiklemez.
+        let later = [(9_995, 1), (9_990, 3), (9_000, 1), (8_000, 1)];
+        assert!(due_rule(rules(), &later, now, 1).is_none());
     }
 }

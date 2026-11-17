@@ -52,6 +52,7 @@ mod nativeautomod;
 mod nickguard;
 mod panel;
 mod presence;
+mod quarantine;
 mod profile;
 mod rand_util;
 mod rankcard;

@@ -51,6 +51,12 @@ pub async fn on_join(ctx: &serenity::Context, data: &Data, member: &Member) -> a
     if member.user.bot {
         return Ok(());
     }
+    // Karantinadan kaçmak için çıkıp giren üye karşılanmaz, rolü geri verilir.
+    match crate::quarantine::on_rejoin(&ctx.http, data, member).await {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(e) => warn!(guild = %guild_id, error = %e, "Karantina rolü yeniden verilemedi"),
+    }
     let cfg = data.guild_configs.get(&data.db, guild_id).await?;
     let age_days = (serenity::Timestamp::now().unix_timestamp() - member.user.created_at().unix_timestamp()) / 86_400;
     // Davet, koruma üyeyi atsa bile kaydedilir (kimin sahte hesap getirdiği görülsün).

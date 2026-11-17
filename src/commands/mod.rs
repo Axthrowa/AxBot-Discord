@@ -74,6 +74,7 @@ fn every() -> Vec<poise::Command<Data, Error>> {
         context::ozetle(),
         context::starboard_ekle(),
         context::not_ekle_menu(),
+        context::hizli_ceza(),
         social::afk(),
         social::itiraf(),
         social::cevir(),

@@ -91,8 +91,8 @@ impl ModLog {
 
     pub async fn case(&self, http: &Http, db: &PgPool, guild_id: GuildId, log: CaseLog<'_>) {
         let event = match log.action {
-            ModAction::Timeout => "mod_mute",
-            ModAction::Untimeout => "mod_unmute",
+            ModAction::Timeout | ModAction::Quarantine => "mod_mute",
+            ModAction::Untimeout | ModAction::Unquarantine => "mod_unmute",
             ModAction::Unban => "mod_unban",
             ModAction::Ban | ModAction::Kick | ModAction::Warn => "mod_ban",
         };

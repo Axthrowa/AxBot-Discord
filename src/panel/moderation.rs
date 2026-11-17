@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::time::Duration;
 
-use poise::serenity_prelude::{ChannelId, GuildId};
+use poise::serenity_prelude::{ChannelId, GuildId, RoleId};
 use tracing::warn;
 
 use super::plugins::{checkbox, checklist, field, section, Input, Options};
@@ -104,6 +104,15 @@ pub async fn fields(state: &WebState, guild_id: GuildId, options: &Options) -> a
         "Muaf roller",
         "<p class=\"note\" style=\"margin:0 0 8px\">Bu rollerden birine sahip üyeler otomatik moderasyondan etkilenmez.</p>".to_owned()
             + &checklist("exempt_role", &options.all_roles, "@ ", &settings.exempt_roles),
+    ));
+
+    out.push_str(&section(
+        "Karantina",
+        field(
+            "Karantina rolü",
+            &options.role_select("quarantine_role", settings.quarantine_role.map(RoleId::new)),
+            "/mod karantina bu rolü verir, üyenin diğer rollerini saklayıp alır. Rolün kanalları görmemesini rol izinlerinden ayarla.",
+        ),
     ));
 
     // Kısıtlı kanallar.
@@ -284,6 +293,7 @@ pub async fn save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Res
         return Err("limit");
     }
     settings.exempt_roles = input.ids("exempt_role", &input.options.all_roles, "rol")?;
+    settings.quarantine_role = input.role("quarantine_role")?.map(RoleId::get);
 
     let removed: Vec<u64> = input.all("restricted_del").into_iter().map(|raw| raw.parse().map_err(|_| "kanal")).collect::<Result<_, _>>()?;
     settings.restricted.retain(|r| !removed.contains(&r.channel));
