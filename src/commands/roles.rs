@@ -29,7 +29,8 @@ const MAX_PENDING: i64 = 500;
         "super::utility::rol_bilgi",
         "sureli_ver",
         "sureli_al",
-        "sureliler"
+        "sureliler",
+        "toplu"
     ),
     subcommand_required,
     category = "Topluluk"
@@ -139,4 +140,134 @@ async fn sureliler(ctx: Context<'_>) -> Result<(), Error> {
         .map(|(user, role, ends)| format!("• <@{user}> — <@&{role}> · <t:{ends}:R> bitiyor"))
         .collect();
     reply_private(ctx, format!("**⏳ Süreli roller** (ilk {})\n{}", list.len(), lines.join("\n"))).await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, poise::ChoiceParameter)]
+pub enum BulkAction {
+    #[name = "Ver"]
+    Give,
+    #[name = "Al"]
+    Take,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, poise::ChoiceParameter)]
+pub enum BulkTarget {
+    #[name = "Herkes"]
+    Everyone,
+    #[name = "Yalnızca insanlar"]
+    Humans,
+    #[name = "Yalnızca botlar"]
+    Bots,
+    #[name = "Filtre rolüne sahip olanlar"]
+    WithRole,
+}
+
+/// İşlemin bu üyeye uygulanıp uygulanmayacağı (rol zaten istenen durumdaysa atlanır).
+pub fn bulk_applies(action: BulkAction, target: BulkTarget, is_bot: bool, has_role: bool, has_filter: bool) -> bool {
+    let chosen = match target {
+        BulkTarget::Everyone => true,
+        BulkTarget::Humans => !is_bot,
+        BulkTarget::Bots => is_bot,
+        BulkTarget::WithRole => has_filter,
+    };
+    chosen && (action == BulkAction::Give) != has_role
+}
+
+/// Aynı sunucuda aynı anda tek toplu işlem.
+static BULK_RUNNING: std::sync::LazyLock<dashmap::DashSet<serenity::GuildId>> = std::sync::LazyLock::new(dashmap::DashSet::new);
+
+/// Bir rolü çok sayıda üyeye toplu verir ya da alır (ör. otorolü eski üyelere vermek).
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "toplu",
+    required_permissions = "MANAGE_ROLES",
+    required_bot_permissions = "MANAGE_ROLES",
+    user_cooldown = 30
+)]
+async fn toplu(
+    ctx: Context<'_>,
+    #[rename = "işlem"]
+    #[description = "Rolü ver mi, al mı?"]
+    action: BulkAction,
+    #[description = "Rol"] rol: Role,
+    #[description = "Kimlere?"] hedef: BulkTarget,
+    #[rename = "filtre-rol"]
+    #[description = "Hedef 'Filtre rolüne sahip olanlar' ise bu role sahip üyeler"]
+    filtre: Option<Role>,
+) -> Result<(), Error> {
+    let guild = guild_id(ctx)?;
+    if hedef == BulkTarget::WithRole && filtre.is_none() {
+        return reply_private(ctx, "❌ Bu hedef için `filtre-rol` seçmelisin.").await;
+    }
+    if let Err(reason) = rolepanel::check_role(ctx.serenity_context(), guild, &rol) {
+        return reply_private(ctx, format!("❌ {reason}")).await;
+    }
+    let Some(author) = ctx.author_member().await else {
+        return reply_private(ctx, "❌ Üyelik bilgin alınamadı, tekrar dene.").await;
+    };
+    if !author_outranks(ctx, &author, &rol) {
+        return reply_private(ctx, format!("❌ {} rolü senin en yüksek rolünün üstünde ya da ona eşit.", rol.id.mention())).await;
+    }
+    if !BULK_RUNNING.insert(guild) {
+        return reply_private(ctx, "⏳ Bu sunucuda zaten bir toplu rol işlemi sürüyor; bitince tekrar dene.").await;
+    }
+    reply_private(ctx, "⏳ Toplu işlem başladı. Üye sayısına göre birkaç dakika sürebilir; bitince bu kanala yazacağım.").await?;
+
+    let http = ctx.serenity_context().http.clone();
+    let (channel, author_id, role_id, filter) = (ctx.channel_id(), ctx.author().id, rol.id, filtre.map(|r| r.id));
+    let reason = format!("Toplu rol işlemi — {}", ctx.author().name);
+    tokio::spawn(async move {
+        use poise::futures_util::StreamExt;
+        let (mut changed, mut failed) = (0u32, 0u32);
+        let mut members = guild.members_iter(&http).boxed();
+        while let Some(member) = members.next().await {
+            let Ok(member) = member else {
+                failed += 1;
+                break;
+            };
+            let has_filter = filter.is_some_and(|f| member.roles.contains(&f));
+            if !bulk_applies(action, hedef, member.user.bot, member.roles.contains(&role_id), has_filter) {
+                continue;
+            }
+            // Discord'un hız sınırlarını serenity bekletir; istekler sırayla gider.
+            let result = match action {
+                BulkAction::Give => http.add_member_role(guild, member.user.id, role_id, Some(&reason)).await,
+                BulkAction::Take => http.remove_member_role(guild, member.user.id, role_id, Some(&reason)).await,
+            };
+            match result {
+                Ok(()) => changed += 1,
+                Err(_) => failed += 1,
+            }
+        }
+        BULK_RUNNING.remove(&guild);
+        let verb = if action == BulkAction::Give { "verildi" } else { "alındı" };
+        let mut text = format!("{} toplu rol işlemi bitti: {} rolü **{changed}** üyeye {verb}.", author_id.mention(), role_id.mention());
+        if failed > 0 {
+            text.push_str(&format!(" {failed} üyede hata oldu (botun rol sırası / izinleri)."));
+        }
+        let message = serenity::CreateMessage::new().content(text).allowed_mentions(serenity::CreateAllowedMentions::new().users(vec![author_id]));
+        if let Err(e) = channel.send_message(&http, message).await {
+            tracing::warn!(guild = %guild, error = %e, "Toplu rol sonucu gönderilemedi");
+        }
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+mod bulk_tests {
+    use super::*;
+
+    #[test]
+    fn bulk_skips_members_already_in_the_wanted_state() {
+        use BulkAction::*;
+        use BulkTarget::*;
+        assert!(bulk_applies(Give, Everyone, false, false, false));
+        assert!(!bulk_applies(Give, Everyone, false, true, false));
+        assert!(bulk_applies(Take, Everyone, true, true, false));
+        assert!(!bulk_applies(Give, Humans, true, false, false));
+        assert!(bulk_applies(Give, Bots, true, false, false));
+        assert!(!bulk_applies(Give, WithRole, false, false, false));
+        assert!(bulk_applies(Give, WithRole, false, false, true));
+    }
 }
