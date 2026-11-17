@@ -17,6 +17,7 @@ pub mod extra;
 pub mod filters;
 pub mod icons;
 pub mod playlists;
+pub mod soundboard;
 mod prefetch;
 
 use std::collections::VecDeque;

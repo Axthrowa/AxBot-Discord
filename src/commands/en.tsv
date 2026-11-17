@@ -149,6 +149,8 @@ K | müzik radyo | istasyon | Virgin Radio | Virgin Radio
 K | müzik radyo | istasyon | Lofi / Chillhop | Lofi / Chillhop
 C | müzik sözler | lyrics | Shows song lyrics (empty = the current song).
 P | müzik sözler | şarkı | song | Song name (empty = now playing)
+C | müzik efekt | sfx | Plays a soundboard sound over the music (server and Discord default sounds).
+P | müzik efekt | ses | sound | Soundboard sound
 C | müzik filtre | filter | Audio filter (bass boost, nightcore…), applied from the next song.
 P | müzik filtre | tür | type | Filter
 K | müzik filtre | tür | Kapalı | Off

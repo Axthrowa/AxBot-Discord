@@ -491,7 +491,7 @@ pub async fn karistir(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     guild_only,
     rename = "müzik",
-    subcommands("gec", "durdur", "ayril", "duraklat", "devam", "simdi", "sira", "ses", "dongu", "karistir", "m_247", "m_otomatik", "m_radyo", "m_sozler", "m_sar", "m_sil", "m_tasi", "m_dj", "m_liste_kaydet", "m_liste_cal", "m_listelerim", "m_liste_sil", "m_soyle", "m_filtre"),
+    subcommands("gec", "durdur", "ayril", "duraklat", "devam", "simdi", "sira", "ses", "dongu", "karistir", "m_247", "m_otomatik", "m_radyo", "m_sozler", "m_sar", "m_sil", "m_tasi", "m_dj", "m_liste_kaydet", "m_liste_cal", "m_listelerim", "m_liste_sil", "m_soyle", "m_filtre", "m_efekt"),
     subcommand_required,
     category = "Müzik"
 )]
@@ -633,6 +633,47 @@ async fn m_sozler(
         .colour(serenity::Colour::BLURPLE);
     ctx.send(CreateReply::default().embed(embed)).await?;
     Ok(())
+}
+
+/// Ses panosundan bir sesi müziğin üstüne çalar (sunucunun ve Discord'un hazır sesleri).
+#[poise::command(slash_command, guild_only, rename = "efekt")]
+async fn m_efekt(
+    ctx: Context<'_>,
+    #[rename = "ses"]
+    #[description = "Ses panosundaki ses"]
+    #[autocomplete = "autocomplete_sound"]
+    name: String,
+) -> Result<(), Error> {
+    use crate::music::soundboard;
+    let Some((guild_id, call)) = same_channel_call(ctx).await? else {
+        return Ok(());
+    };
+    let sounds = soundboard::sounds(&ctx.serenity_context().http, guild_id).await;
+    let Some(sound) = soundboard::find(&sounds, &name) else {
+        return private(ctx, "❌ Bu adda bir ses bulunamadı. Listeden seç.").await;
+    };
+    if !soundboard::claim(guild_id) {
+        return private(ctx, "⏳ Biraz bekle; efektler arasında 3 saniye olmalı.").await;
+    }
+    let handle = call.lock().await.play_input(soundboard::input(sound));
+    if let Err(e) = handle.set_volume(sound.volume) {
+        tracing::debug!(error = %e, "Efekt ses seviyesi ayarlanamadı");
+    }
+    private(ctx, &format!("🔊 **{}**", sound.name)).await
+}
+
+async fn autocomplete_sound(ctx: Context<'_>, partial: &str) -> Vec<String> {
+    let Some(guild_id) = ctx.guild_id() else {
+        return Vec::new();
+    };
+    let wanted = partial.to_lowercase();
+    crate::music::soundboard::sounds(&ctx.serenity_context().http, guild_id)
+        .await
+        .iter()
+        .map(|s| s.name.clone())
+        .filter(|n| n.to_lowercase().contains(&wanted))
+        .take(25)
+        .collect()
 }
 
 /// Ses filtresi (bass boost, nightcore…); sıradaki şarkıdan itibaren geçerli.
