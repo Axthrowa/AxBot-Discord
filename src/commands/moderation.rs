@@ -15,7 +15,7 @@ use tracing::debug;
 use crate::data::Context;
 use crate::error::Error;
 use crate::guild_config::Setting;
-use crate::moderation::{self, clean_reason, duration, hierarchy, ModAction};
+use crate::moderation::{self, duration, hierarchy, ModAction};
 use crate::modlog::CaseLog;
 use crate::scheduler::Task;
 
@@ -58,7 +58,7 @@ pub async fn ban(
 /// Yasaklama akışı (`/mod yasakla` ve sağ tık "Hızlı ceza" ortak kullanır).
 pub(super) async fn do_ban(ctx: Context<'_>, user: User, reason: Option<String>, delete_days: u8, length: Option<Duration>) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
-    let reason = clean_reason(reason);
+    let reason = reason_text(ctx, reason).await;
 
     // Sunucudaysa hiyerarşi kontrol edilir ve yasaklanmadan önce DM atılır
     // (yasaktan sonra ortak sunucu kalmadığı için DM gönderilemez).
@@ -123,7 +123,7 @@ pub async fn unban(
     reason: Option<String>,
 ) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
-    let reason = clean_reason(reason);
+    let reason = reason_text(ctx, reason).await;
 
     // Buradan sonra birkaç Discord isteği yapılır (DM, işlem, log); 3 sn sınırını aşmamak için erteleriz.
     ctx.defer().await?;
@@ -166,7 +166,7 @@ pub async fn kick(
 /// Atma akışı (komut ve sağ tık ortak).
 pub(super) async fn do_kick(ctx: Context<'_>, member: Member, reason: Option<String>) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
-    let reason = clean_reason(reason);
+    let reason = reason_text(ctx, reason).await;
 
     if let Some(problem) = hierarchy_problem(ctx, guild_id, &member).await {
         return reply_private(ctx, problem).await;
@@ -223,7 +223,7 @@ pub async fn timeout(
 /// Susturma akışı (komut ve sağ tık ortak). `length` en fazla 28 gün olmalı.
 pub(super) async fn do_timeout(ctx: Context<'_>, member: Member, length: Duration, reason: Option<String>) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
-    let reason = clean_reason(reason);
+    let reason = reason_text(ctx, reason).await;
 
     if let Some(problem) = hierarchy_problem(ctx, guild_id, &member).await {
         return reply_private(ctx, problem).await;
@@ -269,7 +269,7 @@ pub async fn untimeout(
     reason: Option<String>,
 ) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
-    let reason = clean_reason(reason);
+    let reason = reason_text(ctx, reason).await;
 
     let muted = member
         .communication_disabled_until
@@ -317,7 +317,7 @@ pub async fn karantina(
 /// Karantina akışı (komut ve sağ tık ortak).
 pub(super) async fn do_quarantine(ctx: Context<'_>, member: Member, reason: Option<String>) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
-    let reason = clean_reason(reason);
+    let reason = reason_text(ctx, reason).await;
     let Some(role) = quarantine_role(ctx, guild_id).await? else {
         return reply_private(ctx, "Önce panelin Moderasyon sayfasından bir karantina rolü seç.").await;
     };
@@ -355,7 +355,7 @@ pub async fn karantina_kaldir(
     reason: Option<String>,
 ) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
-    let reason = clean_reason(reason);
+    let reason = reason_text(ctx, reason).await;
     let role = quarantine_role(ctx, guild_id).await?;
     ctx.defer().await?;
     let data = ctx.data();
@@ -372,6 +372,16 @@ async fn quarantine_role(ctx: Context<'_>, guild_id: GuildId) -> Result<Option<s
     let data = ctx.data();
     let settings = data.settings.get::<crate::automod::rules::ModSettings>(&data.db, guild_id).await?;
     Ok(settings.quarantine_role.filter(|r| *r != 0).map(serenity::RoleId::new))
+}
+
+/// Sebebi temizler; sunucunun sebep kısayollarından biriyse tam metne çevirir.
+async fn reason_text(ctx: Context<'_>, reason: Option<String>) -> Option<String> {
+    let data = ctx.data();
+    let shortcuts = match ctx.guild_id() {
+        Some(guild_id) => data.settings.get::<crate::automod::rules::ModSettings>(&data.db, guild_id).await.map(|s| s.reason_shortcuts.clone()).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    moderation::expand_reason(reason, &shortcuts)
 }
 
 fn quarantine_error(e: &anyhow::Error) -> String {
@@ -405,7 +415,7 @@ pub async fn warn(
 ) -> Result<(), Error> {
     let points = points.unwrap_or(1).clamp(1, 10);
     let guild_id = guild_id(ctx)?;
-    let Some(reason) = clean_reason(Some(reason)) else {
+    let Some(reason) = reason_text(ctx, Some(reason)).await else {
         return reply_private(ctx, "Uyarı için bir sebep yazmalısın.").await;
     };
 

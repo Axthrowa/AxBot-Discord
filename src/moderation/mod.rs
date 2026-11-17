@@ -202,6 +202,64 @@ pub fn clean_reason(reason: Option<String>) -> Option<String> {
     Some(reason.chars().take(MAX_REASON_LEN).collect())
 }
 
+/// En fazla bu kadar sebep kısayolu; kısa ad ve metin uzunluk sınırları.
+pub const MAX_SHORTCUTS: usize = 25;
+const MAX_SHORTCUT_NAME: usize = 20;
+
+/// Sebep yalnızca bir kısayolun adıysa (büyük/küçük harf önemsiz) tam metni döner.
+pub fn expand_reason(reason: Option<String>, shortcuts: &[(String, String)]) -> Option<String> {
+    let reason = clean_reason(reason)?;
+    let key = reason.to_lowercase();
+    match shortcuts.iter().find(|(name, _)| name.to_lowercase() == key) {
+        Some((_, text)) => clean_reason(Some(text.clone())),
+        None => Some(reason),
+    }
+}
+
+/// Panel metnindeki "kısa = tam metin" satırlarını okur; hatalı satırda `Err(satır numarası)`.
+pub fn parse_shortcuts(raw: &str) -> Result<Vec<(String, String)>, usize> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (i, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (name, text) = line.split_once('=').ok_or(i + 1)?;
+        let (name, text) = (name.trim(), text.trim());
+        if name.is_empty() || text.is_empty() || name.chars().count() > MAX_SHORTCUT_NAME || text.chars().count() > MAX_REASON_LEN {
+            return Err(i + 1);
+        }
+        out.retain(|(n, _)| n.to_lowercase() != name.to_lowercase());
+        out.push((name.to_owned(), text.to_owned()));
+    }
+    if out.len() > MAX_SHORTCUTS {
+        return Err(0);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    #[test]
+    fn shortcuts_expand_only_exact_names() -> Result<(), usize> {
+        let list = parse_shortcuts("spam = Spam yapmak (kural 3)
+
+ Reklam=Sunucu reklamı
+spam = Tekrarlayan mesaj")?;
+        assert_eq!(list.len(), 2);
+        assert_eq!(expand_reason(Some(" SPAM ".into()), &list).as_deref(), Some("Tekrarlayan mesaj"));
+        assert_eq!(expand_reason(Some("reklam".into()), &list).as_deref(), Some("Sunucu reklamı"));
+        assert_eq!(expand_reason(Some("spam yaptı".into()), &list).as_deref(), Some("spam yaptı"));
+        assert_eq!(expand_reason(None, &list), None);
+        assert_eq!(parse_shortcuts("eşittir yok"), Err(1));
+        assert_eq!(parse_shortcuts("a = b
+ = boş ad"), Err(2));
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------- Uyarı eşiği cezaları
 
 /// Belirli sayıda aktif uyarıya ulaşınca otomatik uygulanan ceza.

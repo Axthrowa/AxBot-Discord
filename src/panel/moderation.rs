@@ -115,6 +115,16 @@ pub async fn fields(state: &WebState, guild_id: GuildId, options: &Options) -> a
         ),
     ));
 
+    let shortcuts: Vec<String> = settings.reason_shortcuts.iter().map(|(name, text)| format!("{name} = {text}")).collect();
+    out.push_str(&section(
+        "Sebep kısayolları",
+        field(
+            "Kısa ad = tam sebep (her satıra bir tane)",
+            &words_area("reason_shortcuts", &shortcuts, "spam = Kanalı tekrarlayan mesajlarla doldurmak (Kural 3)"),
+            "Moderasyon komutlarında sebep olarak yalnızca kısa adı yazınca (ör. spam) tam metin kaydedilir. En fazla 25.",
+        ),
+    ));
+
     // Kısıtlı kanallar.
     let mut restricted = String::new();
     if settings.restricted.is_empty() {
@@ -294,6 +304,7 @@ pub async fn save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Res
     }
     settings.exempt_roles = input.ids("exempt_role", &input.options.all_roles, "rol")?;
     settings.quarantine_role = input.role("quarantine_role")?.map(RoleId::get);
+    settings.reason_shortcuts = moderation::parse_shortcuts(input.raw("reason_shortcuts")).map_err(|_| "kisayol")?;
 
     let removed: Vec<u64> = input.all("restricted_del").into_iter().map(|raw| raw.parse().map_err(|_| "kanal")).collect::<Result<_, _>>()?;
     settings.restricted.retain(|r| !removed.contains(&r.channel));

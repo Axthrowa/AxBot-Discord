@@ -247,6 +247,8 @@ pub struct ModSettings {
     pub nick_replacement: String,
     /// `/mod karantina` ile verilen rol (kanalları görmemesi rolün izinleriyle ayarlanır).
     pub quarantine_role: Option<u64>,
+    /// Sebep kısayolları (kısa ad, tam metin): moderasyon komutunda sebep yalnızca kısa adsa tam metin yazılır.
+    pub reason_shortcuts: Vec<(String, String)>,
 }
 
 impl Default for ModSettings {
@@ -269,6 +271,7 @@ impl Default for ModSettings {
             dehoist: false,
             nick_replacement: "Üye".to_owned(),
             quarantine_role: None,
+            reason_shortcuts: Vec::new(),
         }
     }
 }

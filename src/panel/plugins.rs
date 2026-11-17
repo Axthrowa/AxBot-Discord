@@ -664,6 +664,7 @@ fn flash(code: Option<&str>) -> &'static str {
         Some("rol") => "<div class=\"flash err\">❌ Seçilen rol verilemez (silinmiş, yetkili ya da botun rolünün üstünde).</div>",
         Some("metin") => "<div class=\"flash err\">❌ Mesaj en fazla 1500 karakter olabilir.</div>",
         Some("sayi") => "<div class=\"flash err\">❌ Sayı izin verilen aralıkta değil.</div>",
+        Some("kisayol") => "<div class=\"flash err\">❌ Sebep kısayolları \"kısa = tam metin\" biçiminde olmalı (kısa ad en fazla 20, metin 512 karakter, en fazla 25 satır).</div>",
         Some("emoji") => "<div class=\"flash err\">❌ Emoji geçersiz ya da eksik. Tepki türünde her rol için bir emoji gerekir; sunucu emojisi &lt;:ad:kimlik&gt; biçiminde olmalı.</div>",
         Some("tekrar") => "<div class=\"flash err\">❌ Aynı rol ya da aynı emoji bir menüde iki kez kullanılamaz.</div>",
         Some("bos") => "<div class=\"flash err\">❌ Zorunlu bir alan boş (başlık, cevap, mesaj ya da en az bir rol).</div>",
