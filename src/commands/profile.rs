@@ -49,8 +49,8 @@ pub async fn profil(
         .field("Seviye", format!("**{}** · {} XP", progress.level, rank.total_xp), true)
         .field("Sıra", rank.position.map_or_else(|| "—".to_owned(), |p| format!("#{p}")), true)
         .field("İtibar", format!("⭐ {rep}"), true)
-        .field("Cüzdan", economy::money(account.wallet), true)
-        .field("Banka", economy::money(account.bank), true)
+        .field("Cüzdan", economy::cash(guild_id, account.wallet), true)
+        .field("Banka", economy::cash(guild_id, account.bank), true)
         .field("Başarım", format!("🏅 {earned}"), true);
     if let Some(joined) = joined {
         embed = embed.field("Sunucuya katılım", format!("<t:{joined}:D>"), true);

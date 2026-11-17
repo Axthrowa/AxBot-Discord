@@ -37,18 +37,116 @@ const ROB_SUCCESS_PERCENT: u64 = 45;
 /// Hedefin cüzdanında en az bu kadar olmalı.
 pub const ROB_MIN_TARGET: i64 = 100;
 
-/// 1234567 → "1.234.567 🪙"
-pub fn money(amount: i64) -> String {
+// ---------------------------------------------------------------- Sunucu ayarları
+
+/// Panelden: para biriminin adı/simgesi ve banka faizi.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct EconomySettings {
+    /// Boşsa 🪙 (ör. "₺", "altın", "<:para:123>").
+    pub currency: String,
+    /// Günlük banka faizi, binde (10 = %1). 0 = kapalı.
+    pub interest_permille: u32,
+    /// Bir üyeye günde verilebilecek en fazla faiz.
+    pub interest_cap: u32,
+}
+
+impl crate::settings::PluginConfig for EconomySettings {
+    const KEY: &'static str = "economy";
+}
+
+pub const MAX_CURRENCY: usize = 40;
+pub const MAX_INTEREST_PERMILLE: u32 = 50;
+pub const MAX_INTEREST_CAP: u32 = 1_000_000;
+
+/// Sunucuların para birimi (senkron `cash` için bellekte; ayar okunduğunda ya da kaydedildiğinde güncellenir).
+static CURRENCIES: std::sync::LazyLock<dashmap::DashMap<GuildId, String>> = std::sync::LazyLock::new(dashmap::DashMap::new);
+
+/// Ayarı okur ve para birimini belleğe yazar (komutlardan önce `pre_command` çağırır).
+pub async fn load_settings(settings: &crate::settings::PluginSettings, db: &PgPool, guild_id: GuildId) -> anyhow::Result<std::sync::Arc<EconomySettings>> {
+    let current = settings.get::<EconomySettings>(db, guild_id).await?;
+    remember_currency(guild_id, &current.currency);
+    Ok(current)
+}
+
+pub fn remember_currency(guild_id: GuildId, currency: &str) {
+    if currency.trim().is_empty() {
+        CURRENCIES.remove(&guild_id);
+    } else {
+        CURRENCIES.insert(guild_id, currency.trim().to_owned());
+    }
+}
+
+/// Sunucunun para birimiyle: 1234567 → "1.234.567 ₺"
+pub fn cash(guild_id: GuildId, amount: i64) -> String {
+    match CURRENCIES.get(&guild_id) {
+        Some(symbol) => format!("{} {}", grouped(amount), symbol.value()),
+        None => money(amount),
+    }
+}
+
+/// Saatte bir bakar; faizi açık sunucularda günde bir kez (Türkiye günü) bankadaki paraya faiz ekler.
+pub fn spawn_interest(ctx: poise::serenity_prelude::Context, db: PgPool, redis: redis::aio::ConnectionManager, settings: crate::settings::PluginSettings) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(3600));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            crate::supervise::round("banka faizi", Duration::from_secs(300), async {
+                let day = (chrono::Utc::now() + chrono::Duration::hours(3)).format("%Y-%m-%d").to_string();
+                for guild_id in ctx.cache.guilds() {
+                    let Ok(current) = load_settings(&settings, &db, guild_id).await else { continue };
+                    if current.interest_permille == 0 || current.interest_cap == 0 {
+                        continue;
+                    }
+                    // NX: aynı gün iki kez faiz verilmez (yeniden başlatmada da).
+                    let mut conn = redis.clone();
+                    let first: Option<String> =
+                        redis::cmd("SET").arg(format!("eko:faiz:{guild_id}:{day}")).arg(1).arg("EX").arg(3 * 86_400).arg("NX").query_async(&mut conn).await.unwrap_or(None);
+                    if first.is_none() {
+                        continue;
+                    }
+                    let paid = async {
+                        let done = sqlx::query(
+                            "UPDATE economy_accounts SET bank = bank + LEAST(bank::numeric * $2 / 1000, $3)::bigint
+                             WHERE guild_id = $1 AND bank > 0",
+                        )
+                        .bind(snowflake(guild_id.get())?)
+                        .bind(i64::from(current.interest_permille.min(MAX_INTEREST_PERMILLE)))
+                        .bind(i64::from(current.interest_cap.min(MAX_INTEREST_CAP)))
+                        .execute(&db)
+                        .await?;
+                        anyhow::Ok(done.rows_affected())
+                    };
+                    match paid.await {
+                        Ok(rows) => tracing::info!(guild = %guild_id, rows, "Banka faizi verildi"),
+                        Err(e) => tracing::warn!(guild = %guild_id, error = ?e, "Banka faizi verilemedi"),
+                    }
+                }
+            })
+            .await;
+        }
+    });
+}
+
+fn grouped(amount: i64) -> String {
     let digits = amount.unsigned_abs().to_string();
     let mut out = String::new();
+    if amount < 0 {
+        out.push('-');
+    }
     for (i, ch) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push('.');
         }
         out.push(ch);
     }
-    let sign = if amount < 0 { "-" } else { "" };
-    format!("{sign}{out} {CURRENCY}")
+    out
+}
+
+/// 1234567 → "1.234.567 🪙" (sunucu bilinmiyorsa; bilinen yerde `cash`).
+pub fn money(amount: i64) -> String {
+    format!("{} {CURRENCY}", grouped(amount))
 }
 
 /// "500", "1.5k", "2m", "hepsi", "yarısı" → miktar. `available` "hepsi"/"yarısı" için kullanılır.

@@ -82,7 +82,7 @@ async fn reward(ctx: Context<'_>, user: UserId, amount: i64) -> String {
         return " _(saatlik oyun ödülü sınırı doldu)_".to_owned();
     }
     match economy::add(&ctx.data().db, guild, user, amount).await {
-        Ok(_) => format!(" **+{}**", economy::money(amount)),
+        Ok(_) => format!(" **+{}**", economy::cash(guild, amount)),
         Err(_) => String::new(),
     }
 }
@@ -1107,9 +1107,12 @@ async fn hayvan_siralama(ctx: Context<'_>) -> Result<(), Error> {
 /// Tüm hayvanlar ve nadirlikleri.
 #[poise::command(slash_command, guild_only, rename = "liste")]
 async fn hayvan_liste(ctx: Context<'_>) -> Result<(), Error> {
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
     let lines = ANIMALS
         .iter()
-        .map(|a| format!("{} **{}** · _{}_ · {}", a.emoji, a.name, a.rarity.label(), economy::money(a.rarity.reward())))
+        .map(|a| format!("{} **{}** · _{}_ · {}", a.emoji, a.name, a.rarity.label(), economy::cash(guild_id, a.rarity.reward())))
         .collect::<Vec<_>>()
         .join("\n");
     let embed = game_embed("📖 Hayvan ansiklopedisi", lines)

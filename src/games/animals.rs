@@ -147,7 +147,7 @@ impl Animals {
             .description(format!(
                 "{} yakaladı! **+{}**\nKoleksiyonunda {} tane {} var.",
                 user.mention(),
-                economy::money(reward),
+                economy::cash(guild_id, reward),
                 count,
                 animal.name
             ))

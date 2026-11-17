@@ -11,7 +11,7 @@ use poise::CreateReply;
 
 use super::moderation::reply_private;
 use crate::data::Context;
-use crate::economy::{self, money};
+use crate::economy::{self, cash};
 use crate::error::Error;
 
 /// Katılmak için yatırılan pay (başarısız olursa yanar).
@@ -50,7 +50,7 @@ pub async fn run(ctx: Context<'_>) -> Result<(), Error> {
     // Başlatan ilk üyedir; payını yatıramıyorsa soygun başlamaz ve bekleme geri alınır.
     if economy::spend(&data.db, guild_id, ctx.author().id, STAKE).await?.is_none() {
         let _: redis::RedisResult<()> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
-        return reply_private(ctx, format!("Soygun için cüzdanında en az {} olmalı (giriş payı).", money(STAKE))).await;
+        return reply_private(ctx, format!("Soygun için cüzdanında en az {} olmalı (giriş payı).", cash(guild_id, STAKE))).await;
     }
 
     let id = ctx.id();
@@ -61,7 +61,7 @@ pub async fn run(ctx: Context<'_>) -> Result<(), Error> {
             .title("🏦 Banka soygunu planlanıyor!")
             .description(format!(
                 "Giriş payı **{}** (başarısız olursa yanar). Ekip büyüdükçe başarı ihtimali artar.\n\n**Ekip ({}):** {}\nBaşarı ihtimali: **%{}**\n\n⏳ Başlangıç: <t:{ends}:R>",
-                money(STAKE),
+                cash(guild_id, STAKE),
                 crew.len(),
                 crew.iter().map(|u| format!("<@{u}>")).collect::<Vec<_>>().join(" "),
                 success_chance(crew.len())
@@ -88,7 +88,7 @@ pub async fn run(ctx: Context<'_>) -> Result<(), Error> {
             continue;
         }
         if press.user.bot || economy::spend(&data.db, guild_id, press.user.id, STAKE).await?.is_none() {
-            let _ = press.create_response(ctx, note(format!("Katılmak için cüzdanında {} olmalı.", money(STAKE)))).await;
+            let _ = press.create_response(ctx, note(format!("Katılmak için cüzdanında {} olmalı.", cash(guild_id, STAKE)))).await;
             continue;
         }
         crew.push(press.user.id);
@@ -104,12 +104,12 @@ pub async fn run(ctx: Context<'_>) -> Result<(), Error> {
         }
         CreateEmbed::new()
             .title("💰 Soygun başarılı!")
-            .description(format!("{names}\n\nKasa boşaltıldı! Herkes **{}** aldı (giriş payı dahil).", money(each)))
+            .description(format!("{names}\n\nKasa boşaltıldı! Herkes **{}** aldı (giriş payı dahil).", cash(guild_id, each)))
             .colour(serenity::Colour::DARK_GREEN)
     } else {
         CreateEmbed::new()
             .title("🚓 Soygun başarısız!")
-            .description(format!("{names}\n\nAlarm çaldı, ekip dağıldı. Herkes **{}** giriş payını kaybetti.", money(STAKE)))
+            .description(format!("{names}\n\nAlarm çaldı, ekip dağıldı. Herkes **{}** giriş payını kaybetti.", cash(guild_id, STAKE)))
             .colour(serenity::Colour::DARK_GREY)
     };
     reply.edit(ctx, CreateReply::default().embed(result).components(button(true)).allowed_mentions(CreateAllowedMentions::new())).await?;

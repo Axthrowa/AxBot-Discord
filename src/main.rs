@@ -283,6 +283,12 @@ async fn run() -> anyhow::Result<()> {
                         "Komut çalıştırılıyor"
                     );
                     ctx.set_invocation_data(std::time::Instant::now()).await;
+                    // Para birimi bellekte hazır olsun (ayar önbellekli; çoğu zaman veritabanına gidilmez).
+                    if let Some(guild_id) = ctx.guild_id() {
+                        if let Err(e) = economy::load_settings(&ctx.data().settings, &ctx.data().db, guild_id).await {
+                            debug!(guild = %guild_id, error = ?e, "Ekonomi ayarı okunamadı");
+                        }
+                    }
                 })
             },
             // Yavaş komutlar loglanır (panelin Loglar sayfasında görünür); hız sorunları ölçülebilsin.
@@ -345,6 +351,7 @@ async fn run() -> anyhow::Result<()> {
                 });
                 rsvp::spawn(ctx.clone(), db.clone(), plugin_settings.clone());
                 backup::spawn_auto(ctx.clone(), db.clone(), plugin_settings.clone());
+                economy::spawn_interest(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone());
                 tickets::spawn_auto_close(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone(), Arc::clone(&modlog));
                 if let Err(e) = tickets::load_awaiting(&db).await {
                     tracing::warn!(error = ?e, "Cevap bekleyen biletler yüklenemedi");

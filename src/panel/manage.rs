@@ -151,6 +151,23 @@ const ITEM_PRICE_MAX: u32 = 1_000_000_000;
 pub async fn economy_fields(state: &WebState, guild_id: GuildId, options: &Options) -> anyhow::Result<(String, bool)> {
     let items = economy::shop(&state.db, guild_id).await?;
     let richest = economy::leaderboard(&state.db, guild_id, 10).await?;
+    let current = economy::load_settings(&state.settings, &state.db, guild_id).await?;
+    let mut out = section(
+        "Para birimi ve banka faizi",
+        field(
+            "Para biriminin adı ya da simgesi",
+            &text_input("eco_currency", &current.currency, "🪙", economy::MAX_CURRENCY),
+            "Örn. <code>₺</code>, <code>altın</code> ya da sunucu emojisi <code>&lt;:para:123&gt;</code>. Boşsa 🪙.",
+        ) + &field(
+            "Günlük banka faizi (binde)",
+            &number_input("eco_interest", current.interest_permille, 0, economy::MAX_INTEREST_PERMILLE),
+            "Her gün (Türkiye saatiyle) bankadaki paraya eklenir. 10 = %1, 0 = kapalı. Cüzdandaki para faiz almaz.",
+        ) + &field(
+            "Bir üyeye günde en fazla faiz",
+            &number_input("eco_cap", if current.interest_cap == 0 { 500 } else { current.interest_cap }, 1, economy::MAX_INTEREST_CAP),
+            "Zenginin daha da zenginleşmesini sınırlar.",
+        ),
+    );
 
     let mut list = String::new();
     if items.is_empty() {
@@ -166,14 +183,14 @@ pub async fn economy_fields(state: &WebState, guild_id: GuildId, options: &Optio
                 list,
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td><input type=\"checkbox\" name=\"item_del\" value=\"{}\"></td></tr>",
                 escape(&item.name),
-                escape(&economy::money(item.price)),
+                escape(&economy::cash(guild_id, item.price)),
                 escape(&role),
                 item.id
             );
         }
         list.push_str("</table>");
     }
-    let mut out = section("Mağaza", list);
+    out.push_str(&section("Mağaza", list));
     out.push_str(&section(
         "Yeni ürün",
         field("Ad", &text_input("item_name", "", "VIP rolü", ITEM_NAME_MAX), "Boş bırakırsan yeni ürün eklenmez.")
@@ -196,7 +213,7 @@ pub async fn economy_fields(state: &WebState, guild_id: GuildId, options: &Optio
         };
         board.push_str("<table><tr><th>#</th><th>Üye</th><th>Toplam</th></tr>");
         for (i, ((_, total), name)) in richest.iter().zip(names).enumerate() {
-            let _ = write!(board, "<tr><td>{}</td><td>{}</td><td>{}</td></tr>", i + 1, escape(&name), escape(&economy::money(*total)));
+            let _ = write!(board, "<tr><td>{}</td><td>{}</td><td>{}</td></tr>", i + 1, escape(&name), escape(&economy::cash(guild_id, *total)));
         }
         board.push_str("</table>");
     }
@@ -209,6 +226,15 @@ pub async fn economy_fields(state: &WebState, guild_id: GuildId, options: &Optio
 
 pub async fn economy_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Result<(), &'static str> {
     let failed = failed(guild_id, "mağaza");
+    let currency = input.raw("eco_currency").trim().to_owned();
+    if currency.chars().count() > economy::MAX_CURRENCY || currency.contains('@') {
+        return Err("metin");
+    }
+    let settings = economy::EconomySettings {
+        currency,
+        interest_permille: input.number("eco_interest", 0, economy::MAX_INTEREST_PERMILLE)?,
+        interest_cap: input.number("eco_cap", 1, economy::MAX_INTEREST_CAP)?,
+    };
     let removed = input.all("item_del").into_iter().map(|raw| raw.parse::<i64>().map_err(|_| "hata")).collect::<Result<Vec<_>, _>>()?;
     let items = economy::shop(&state.db, guild_id).await.map_err(&failed)?;
     let addition = if input.raw("item_name").is_empty() {
@@ -236,7 +262,8 @@ pub async fn economy_save(state: &WebState, guild_id: GuildId, input: &Input<'_>
     if let Some((name, price, role, description)) = addition {
         economy::add_item(&state.db, guild_id, &name, price, role, description.as_deref()).await.map_err(&failed)?;
     }
-    Ok(())
+    economy::remember_currency(guild_id, &settings.currency);
+    state.settings.set(&state.db, guild_id, settings).await.map_err(&failed)
 }
 
 // ---------------------------------------------------------------- Sayaç kanalları

@@ -781,7 +781,7 @@ pub fn spawn_seasons(ctx: serenity::Context, db: sqlx::PgPool, redis: Connection
                             let prize = i64::from(current.season_reward.min(MAX_SEASON_REWARD)) >> place;
                             let mut line = format!("{} <@{user}> — **{:.0}** XP", ["🥇", "🥈", "🥉"].get(place).copied().unwrap_or("•"), xp);
                             if prize > 0 && *user != 0 && crate::economy::add(&db, guild_id, UserId::new(*user), prize).await.is_ok() {
-                                line.push_str(&format!(" · ödül {}", crate::economy::money(prize)));
+                                line.push_str(&format!(" · ödül {}", crate::economy::cash(guild_id, prize)));
                             }
                             lines.push(line);
                         }

@@ -6,7 +6,7 @@ use poise::CreateReply;
 use super::moderation::reply_private;
 use crate::data::Context;
 use crate::economy::stocks::{self, Stock, Trade, STOCKS};
-use crate::economy::{self, money};
+use crate::economy::{self, cash};
 use crate::error::Error;
 
 /// Sahte borsa: hayali şirketlerin hisselerini al, sat.
@@ -36,12 +36,15 @@ fn pick(symbol: &str) -> Result<&'static Stock, String> {
 /// Hisselerin şu anki fiyatlarını gösterir (fiyatlar saatte bir değişir).
 #[poise::command(slash_command, guild_only, rename = "fiyatlar")]
 async fn fiyatlar(ctx: Context<'_>) -> Result<(), Error> {
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
     let unix = now();
     let lines: Vec<String> = STOCKS
         .iter()
         .map(|stock| {
             let (price, change) = stocks::quote(stock, unix);
-            format!("{} {} **{}** — {} · {} · {change:+.1}%", arrow(change), stock.emoji, stock.symbol, stock.name, money(price))
+            format!("{} {} **{}** — {} · {} · {change:+.1}%", arrow(change), stock.emoji, stock.symbol, stock.name, cash(guild_id, price))
         })
         .collect();
     let next = (stocks::hour_of(unix) + 1) * 3600;
@@ -67,7 +70,7 @@ async fn trade(ctx: Context<'_>, symbol: &str, count: i64, buying: bool) -> Resu
     match outcome {
         Trade::Done { total, wallet, shares } => {
             let verb = if buying { "aldın" } else { "sattın" };
-            let text = format!("{} **{count}** adet **{}** hissesi {verb}: toplam **{}**.\nElindeki {}: **{shares}** · Cüzdan: {}", stock.emoji, stock.symbol, money(total), stock.symbol, money(wallet));
+            let text = format!("{} **{count}** adet **{}** hissesi {verb}: toplam **{}**.\nElindeki {}: **{shares}** · Cüzdan: {}", stock.emoji, stock.symbol, cash(guild_id, total), stock.symbol, cash(guild_id, wallet));
             ctx.send(CreateReply::default().embed(CreateEmbed::new().title("📈 Borsa işlemi").description(text).colour(serenity::Colour::DARK_GREEN))).await?;
             Ok(())
         }
@@ -126,13 +129,13 @@ async fn portfoy(ctx: Context<'_>) -> Result<(), Error> {
             let stock = stocks::find(symbol)?;
             let (price, change) = stocks::quote(stock, unix);
             total += price * shares;
-            Some(format!("{} {} **{}** × {shares} = {} ({change:+.1}%)", arrow(change), stock.emoji, stock.symbol, money(price * shares)))
+            Some(format!("{} {} **{}** × {shares} = {} ({change:+.1}%)", arrow(change), stock.emoji, stock.symbol, cash(guild_id, price * shares)))
         })
         .collect();
     let account = economy::account(db, guild_id, ctx.author().id).await?;
     let embed = CreateEmbed::new()
         .title("💼 Portföyün")
-        .description(format!("{}\n\nHisselerin değeri: **{}**\nCüzdan: {}", lines.join("\n"), money(total), money(account.wallet)))
+        .description(format!("{}\n\nHisselerin değeri: **{}**\nCüzdan: {}", lines.join("\n"), cash(guild_id, total), cash(guild_id, account.wallet)))
         .colour(serenity::Colour::DARK_GREEN);
     ctx.send(CreateReply::default().embed(embed).ephemeral(true)).await?;
     Ok(())
