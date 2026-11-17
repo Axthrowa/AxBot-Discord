@@ -1,4 +1,4 @@
-//! Seviye komutları: `/seviye`, `/sıralama`, `/seviye-ödül`.
+//! Seviye komutları: `/seviye göster`, `/seviye sıralama`, `/seviye ödül`.
 
 use anyhow::anyhow;
 use poise::serenity_prelude::{self as serenity, CreateEmbed, CreateEmbedFooter, GuildId, Mentionable};
@@ -12,7 +12,7 @@ use crate::leveling::{formula, ExclusionKind};
 const LEADERBOARD_SIZE: usize = 10;
 
 /// Bir üyenin seviyesini ve sıralamasını gösterir.
-#[poise::command(slash_command, guild_only, category = "Seviye")]
+#[poise::command(slash_command, rename = "göster", guild_only, category = "Seviye")]
 pub async fn seviye(
     ctx: Context<'_>,
     #[rename = "kullanıcı"]
@@ -151,8 +151,8 @@ pub async fn siralama(
 #[poise::command(
     slash_command,
     guild_only,
-    rename = "seviye-ödül",
-    default_member_permissions = "MANAGE_ROLES",
+    rename = "ödül",
+    default_member_permissions = "MANAGE_ROLES", required_permissions = "MANAGE_ROLES",
     subcommands("odul_ekle", "odul_sil", "odul_liste"),
     subcommand_required,
     category = "Seviye"
@@ -222,7 +222,7 @@ async fn odul_liste(ctx: Context<'_>) -> Result<(), Error> {
     let rewards = data.leveling.rewards(&data.db, guild_id).await?;
 
     let text = if rewards.is_empty() {
-        "Henüz seviye ödülü yok. `/seviye-ödül ekle` ile ekleyebilirsin.".to_owned()
+        "Henüz seviye ödülü yok. `/seviye ödül ekle` ile ekleyebilirsin.".to_owned()
     } else {
         rewards
             .iter()
@@ -237,8 +237,8 @@ async fn odul_liste(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(
     slash_command,
     guild_only,
-    rename = "xp-muaf",
-    default_member_permissions = "MANAGE_GUILD",
+    rename = "muaf",
+    default_member_permissions = "MANAGE_GUILD", required_permissions = "MANAGE_GUILD",
     category = "Seviye"
 )]
 pub async fn xp_muaf(
@@ -308,7 +308,7 @@ async fn reply(ctx: Context<'_>, content: String) -> Result<(), Error> {
     slash_command,
     guild_only,
     rename = "xp",
-    default_member_permissions = "MANAGE_GUILD",
+    default_member_permissions = "MANAGE_GUILD", required_permissions = "MANAGE_GUILD",
     subcommands("xp_ver", "xp_al"),
     subcommand_required,
     category = "Seviye"
@@ -444,5 +444,18 @@ pub async fn basarimlar(
         }
     }
     ctx.send(CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
+/// Seviye kartı, sıralama, ödüller ve XP ayarları.
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "seviye",
+    subcommands("seviye", "siralama", "basarimlar", "seviye_odul", "xp_muaf", "xp"),
+    subcommand_required,
+    category = "Seviye"
+)]
+pub async fn seviye_grup(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }

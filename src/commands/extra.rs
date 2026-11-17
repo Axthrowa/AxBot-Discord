@@ -183,7 +183,7 @@ async fn kart_ayarla(
         card.background = Some(url);
     }
     rankcard::set(&data.db, guild_id, ctx.author().id, &card).await?;
-    reply_private(ctx, "✅ Rütbe kartın güncellendi. `/seviye` ile görebilirsin.").await
+    reply_private(ctx, "✅ Rütbe kartın güncellendi. `/seviye göster` ile görebilirsin.").await
 }
 
 /// Rütbe kartını varsayılana döndürür (yöneticiler başkasınınkini de sıfırlayabilir).

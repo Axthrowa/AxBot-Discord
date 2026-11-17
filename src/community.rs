@@ -739,7 +739,7 @@ pub fn spawn_seasons(ctx: serenity::Context, db: sqlx::PgPool, redis: Connection
                         }
                         let embed = CreateEmbed::new()
                             .title(format!("🏆 {label} en aktifleri"))
-                            .description(format!("{}\n\nYeni dönem başladı; sıralama için `/sıralama dönem:`", lines.join("\n")))
+                            .description(format!("{}\n\nYeni dönem başladı; sıralama için `/seviye sıralama dönem:`", lines.join("\n")))
                             .colour(serenity::Colour::GOLD);
                         let users: Vec<UserId> = winners.iter().filter(|(u, _)| *u != 0).map(|(u, _)| UserId::new(*u)).collect();
                         let message = CreateMessage::new().embed(embed).allowed_mentions(CreateAllowedMentions::new().users(users));

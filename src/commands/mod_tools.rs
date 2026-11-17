@@ -1,5 +1,5 @@
-//! Kanal ve geçmiş araçları: `/temizle`, `/yavaşmod`, `/kilitle`, `/kilidi-aç`, `/sicil`,
-//! `/uyarı-cezası`.
+//! Kanal ve geçmiş araçları: `/kanal temizle`, `/kanal yavaşmod`, `/kanal kilitle`, `/kanal kilidi-aç`, `/sicil`,
+//! `/mod uyarı-cezası`.
 
 use poise::serenity_prelude::{
     self as serenity, CreateEmbed, CreateEmbedFooter, EditChannel, GetMessages, Mentionable, MessageId,
@@ -20,7 +20,7 @@ const BULK_DELETE_MAX_AGE_SECS: i64 = 14 * 24 * 3600 - 60;
     slash_command,
     guild_only,
     rename = "temizle",
-    default_member_permissions = "MANAGE_MESSAGES",
+    default_member_permissions = "MANAGE_MESSAGES", required_permissions = "MANAGE_MESSAGES",
     required_bot_permissions = "MANAGE_MESSAGES | READ_MESSAGE_HISTORY",
     category = "Moderasyon"
 )]
@@ -82,7 +82,7 @@ pub async fn temizle(
     slash_command,
     guild_only,
     rename = "yavaşmod",
-    default_member_permissions = "MANAGE_CHANNELS",
+    default_member_permissions = "MANAGE_CHANNELS", required_permissions = "MANAGE_CHANNELS",
     required_bot_permissions = "MANAGE_CHANNELS",
     category = "Moderasyon"
 )]
@@ -116,7 +116,7 @@ use crate::lockdown::send_permissions;
     slash_command,
     guild_only,
     rename = "kilitle",
-    default_member_permissions = "MANAGE_CHANNELS",
+    default_member_permissions = "MANAGE_CHANNELS", required_permissions = "MANAGE_CHANNELS",
     required_bot_permissions = "MANAGE_CHANNELS | MANAGE_ROLES",
     category = "Moderasyon"
 )]
@@ -135,7 +135,7 @@ pub async fn kilitle(
     slash_command,
     guild_only,
     rename = "kilidi-aç",
-    default_member_permissions = "MANAGE_CHANNELS",
+    default_member_permissions = "MANAGE_CHANNELS", required_permissions = "MANAGE_CHANNELS",
     required_bot_permissions = "MANAGE_CHANNELS | MANAGE_ROLES",
     category = "Moderasyon"
 )]
@@ -264,7 +264,7 @@ pub async fn sicil(
     slash_command,
     guild_only,
     rename = "uyarı-cezası",
-    default_member_permissions = "MANAGE_GUILD",
+    default_member_permissions = "MANAGE_GUILD", required_permissions = "MANAGE_GUILD",
     subcommands("ceza_ekle", "ceza_sil", "ceza_liste"),
     subcommand_required,
     category = "Moderasyon"
@@ -344,7 +344,7 @@ async fn ceza_liste(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
     let rules = moderation::punishments(&ctx.data().db, guild_id).await?;
     let text = if rules.is_empty() {
-        "Henüz otomatik ceza yok. Örnek: `/uyarı-cezası ekle uyarı_sayısı:3 ceza:Susturma süre:1sa`".to_owned()
+        "Henüz otomatik ceza yok. Örnek: `/mod uyarı-cezası ekle uyarı_sayısı:3 ceza:Susturma süre:1sa`".to_owned()
     } else {
         rules
             .iter()
@@ -368,7 +368,7 @@ fn describe(rule: &PunishmentRule) -> String {
     slash_command,
     guild_only,
     rename = "uyarıları-sıfırla",
-    default_member_permissions = "MANAGE_GUILD",
+    default_member_permissions = "MANAGE_GUILD", required_permissions = "MANAGE_GUILD",
     category = "Moderasyon"
 )]
 pub async fn uyarilari_sifirla(
@@ -387,4 +387,18 @@ pub async fn uyarilari_sifirla(
     let cleared = moderation::clear_warnings(&ctx.data().db, guild_id, user.as_ref().map(|u| u.id)).await?;
     let whose = user.map_or_else(|| "Sunucudaki".to_owned(), |u| format!("{} üyesinin", u.id.mention()));
     reply_private(ctx, format!("🧹 {whose} **{cleared}** aktif uyarısı temizlendi. (Kayıtlar sicilde durur.)")).await
+}
+
+/// Kanal araçları: toplu silme, yavaş mod, kilitleme.
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "kanal",
+    default_member_permissions = "MANAGE_MESSAGES",
+    subcommands("temizle", "yavasmod", "kilitle", "kilidi_ac"),
+    subcommand_required,
+    category = "Moderasyon"
+)]
+pub async fn kanal(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
 }

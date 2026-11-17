@@ -1,5 +1,5 @@
-//! Öneri kanalı: üyeler `/öneri` ile öneri gönderir, diğerleri butonla oylar,
-//! yetkililer `/öneri-yanıtla` ile sonuçlandırır.
+//! Öneri kanalı: üyeler `/öneri gönder` ile öneri gönderir, diğerleri butonla oylar,
+//! yetkililer `/öneri yanıtla` ile sonuçlandırır.
 //!
 //! Butonlar `sg:up:<id>` / `sg:down:<id>` biçimindedir; bot yeniden başlasa da çalışır.
 //! Oy sayıları buton etiketlerinde gösterilir.

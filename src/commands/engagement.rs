@@ -1,4 +1,4 @@
-//! Topluluk etkileşimi: `/starboard`, `/etiket`, `/öneri`, `/öneri-kanalı`, `/öneri-yanıtla`.
+//! Topluluk etkileşimi: `/starboard`, `/etiket`, `/öneri gönder`, `/öneri kanal`, `/öneri yanıtla`.
 
 use poise::serenity_prelude::{self as serenity, CreateEmbed, Mentionable};
 use poise::CreateReply;
@@ -189,8 +189,8 @@ async fn etiket_liste(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(
     slash_command,
     guild_only,
-    rename = "öneri-kanalı",
-    default_member_permissions = "MANAGE_GUILD",
+    rename = "kanal",
+    default_member_permissions = "MANAGE_GUILD", required_permissions = "MANAGE_GUILD",
     category = "Topluluk"
 )]
 pub async fn oneri_kanali(
@@ -216,8 +216,8 @@ pub async fn oneri_kanali(
     reply_private(
         ctx,
         format!(
-            "💡 Öneriler {} kanalına gönderilecek. Üyeler `/öneri` ile öneri yazabilir, \
-             yetkililer `/öneri-yanıtla` ile sonuçlandırır.\n\
+            "💡 Öneriler {} kanalına gönderilecek. Üyeler `/öneri gönder` ile öneri yazabilir, \
+             yetkililer `/öneri yanıtla` ile sonuçlandırır.\n\
              _Her öneriye tartışma için alt başlık açılır; bunun için 'Herkese Açık Alt Başlık Oluştur' iznim olmalı._",
             kanal.id.mention()
         ),
@@ -226,7 +226,7 @@ pub async fn oneri_kanali(
 }
 
 /// Sunucu için bir öneri gönderir; diğer üyeler oylar.
-#[poise::command(slash_command, guild_only, rename = "öneri", user_cooldown = 60, category = "Topluluk")]
+#[poise::command(slash_command, guild_only, rename = "gönder", user_cooldown = 60, category = "Topluluk")]
 pub async fn oneri(
     ctx: Context<'_>,
     #[rename = "öneri"]
@@ -239,7 +239,7 @@ pub async fn oneri(
     let data = ctx.data();
     let cfg = data.guild_configs.get(&data.db, guild_id).await?;
     let Some(channel) = cfg.suggestion_channel else {
-        return reply_private(ctx, "Bu sunucuda öneri sistemi kapalı. Bir yöneticinin `/öneri-kanalı` ayarlaması gerekiyor.").await;
+        return reply_private(ctx, "Bu sunucuda öneri sistemi kapalı. Bir yöneticinin `/öneri kanal` ayarlaması gerekiyor.").await;
     };
     ctx.defer_ephemeral().await?;
     let number = suggestions::create(ctx.http(), &data.db, guild_id, channel, ctx.author(), content.trim()).await?;
@@ -250,8 +250,8 @@ pub async fn oneri(
 #[poise::command(
     slash_command,
     guild_only,
-    rename = "öneri-yanıtla",
-    default_member_permissions = "MANAGE_GUILD",
+    rename = "yanıtla",
+    default_member_permissions = "MANAGE_GUILD", required_permissions = "MANAGE_GUILD",
     category = "Topluluk"
 )]
 pub async fn oneri_yanitla(
@@ -292,4 +292,17 @@ pub async fn oneri_yanitla(
         }
     };
     reply_private(ctx, text).await
+}
+
+/// Öneri gönderme ve yönetme.
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "öneri",
+    subcommands("oneri", "oneri_kanali", "oneri_yanitla"),
+    subcommand_required,
+    category = "Topluluk"
+)]
+pub async fn oneri_grup(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
 }

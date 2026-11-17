@@ -235,7 +235,7 @@ pub async fn achievement_fields(state: &WebState, guild_id: GuildId, options: &O
                 &Options::select("channel", &options.channels, "# ", settings.channel, "— Başarımın kazanıldığı kanal —"),
                 "Kanal seçilmezse seste kazanılan başarımlar duyurulmaz (bir kanalda kazanılmadıkları için).",
             )
-            + "<p class=\"note\">Üyeler ilerlemelerini Discord'da <code>/başarımlar</code> ile görür. Sayaçlar başarımlar açıkken işler.</p>",
+            + "<p class=\"note\">Üyeler ilerlemelerini Discord'da <code>/seviye başarımlar</code> ile görür. Sayaçlar başarımlar açıkken işler.</p>",
     );
 
     let mut defaults = String::from("<div class=\"checks\" style=\"max-height:none\">");

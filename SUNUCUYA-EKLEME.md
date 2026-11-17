@@ -30,15 +30,15 @@ Her satırın yanında o özelliği açan komut yazar.
 
 | Özellik | Komut |
 |---|---|
-| Moderasyon logu | `/log-kanalı kanal:#mod-log` |
-| Sunucu olay logu | `/log-kanalı kanal:#olay-log tür:Sunucu olayları` |
+| Moderasyon logu | `/mod log-kanalı kanal:#mod-log` |
+| Sunucu olay logu | `/mod log-kanalı kanal:#olay-log tür:Sunucu olayları` |
 | Karşılama / veda | `/karşılama hoşgeldin` · `/karşılama veda` |
 | Otomatik rol | `/rol otomatik rol:@Üye` |
 | Destek biletleri | `/bilet kur kanal:#destek` |
 | Doğrulama | `/doğrulama kur` |
-| Seviye ödülleri | `/seviye-ödül ekle` |
+| Seviye ödülleri | `/seviye ödül ekle` |
 | Starboard | `/starboard kanal:#yıldızlar` |
-| Öneriler | `/öneri-kanalı kanal:#öneriler` |
+| Öneriler | `/öneri kanal kanal:#öneriler` |
 | Yapay zekâ sohbet kanalı | `/ai kanal-ekle` |
 | Ban itirazı | `/başvuru itiraz-kanalı kanal:#itirazlar` |
 

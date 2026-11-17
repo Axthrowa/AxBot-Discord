@@ -1,5 +1,5 @@
-//! Balık tutma ve madencilik: `/çalış tür:` ile oynanır. Her denemede ağırlıklı rastgele bir şey çıkar
-//! ve değeri cüzdana eklenir. Bekleme süresi Redis'te tutulur (normal `/çalış` beklemesinden ayrıdır).
+//! Balık tutma ve madencilik: `/ekonomi çalış tür:` ile oynanır. Her denemede ağırlıklı rastgele bir şey çıkar
+//! ve değeri cüzdana eklenir. Bekleme süresi Redis'te tutulur (normal `/ekonomi çalış` beklemesinden ayrıdır).
 
 use poise::serenity_prelude::{GuildId, UserId};
 use redis::aio::ConnectionManager;

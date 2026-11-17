@@ -519,7 +519,7 @@ async fn muzik_yarismasi(
         return reply_private(ctx, "🔊 Önce bir ses kanalına gir; şarkıları orada çalacağım.").await;
     };
     if data.music.card_state(guild_id).await.is_some() {
-        return reply_private(ctx, "Şu an müzik çalıyor. Yarışma için önce `/durdur` ile müziği bitir.").await;
+        return reply_private(ctx, "Şu an müzik çalıyor. Yarışma için önce `/müzik durdur` ile müziği bitir.").await;
     }
     if data.music.settings(guild_id).autoplay {
         return reply_private(ctx, "Otomatik çalma açıkken yarışma yapılamaz (araya şarkı ekler). Önce `/müzik otomatik` ile kapat.").await;

@@ -111,7 +111,7 @@ pub async fn fields(state: &WebState, guild_id: GuildId, options: &Options) -> a
                 ),
                 "",
             )
-            + &checkbox("remove_on_loss", settings.remove_on_loss, "Üye XP kaybedip seviyesi düşerse ödül rolünü geri al (/xp al sonrası)"),
+            + &checkbox("remove_on_loss", settings.remove_on_loss, "Üye XP kaybedip seviyesi düşerse ödül rolünü geri al (/seviye xp al sonrası)"),
     ));
 
     // TP oranı.

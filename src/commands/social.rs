@@ -201,7 +201,12 @@ fn command_list(ctx: Context<'_>) -> CreateEmbed {
         if command.hide_in_help || (command.slash_action.is_none() && command.subcommands.is_empty()) {
             continue;
         }
-        groups.entry(command.category.as_deref().unwrap_or("Diğer")).or_default().push(format!("`/{}`", command.name));
+        let mut line = format!("`/{}`", command.name);
+        if !command.subcommands.is_empty() {
+            let subs: Vec<&str> = command.subcommands.iter().map(|s| s.name.as_str()).collect();
+            line.push_str(&format!(" {}", subs.join(" · ")));
+        }
+        groups.entry(command.category.as_deref().unwrap_or("Diğer")).or_default().push(line);
     }
     let mut embed = CreateEmbed::new()
         .title("📜 Tüm komutlar")
@@ -216,7 +221,7 @@ fn command_list(ctx: Context<'_>) -> CreateEmbed {
                 break;
             }
             if !text.is_empty() {
-                text.push(' ');
+                text.push('\n');
             }
             text.push_str(&name);
         }

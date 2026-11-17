@@ -1,6 +1,6 @@
 //! Kişisel rütbe kartı: üyenin kendi seçtiği vurgu rengi, arka plan resmi ve yazı tipi (`/kartım`).
 //!
-//! Yalnızca `/seviye` çağrıldığında okunur (mesaj başına değil), bu yüzden doğrudan veritabanındadır.
+//! Yalnızca `/seviye göster` çağrıldığında okunur (mesaj başına değil), bu yüzden doğrudan veritabanındadır.
 
 use poise::serenity_prelude::{GuildId, UserId};
 use sqlx::PgPool;

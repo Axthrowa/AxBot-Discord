@@ -1,4 +1,4 @@
-//! Genel araçlar: `/hatırlat`, `/kullanıcı-bilgi`, `/sunucu-bilgi`, `/avatar`.
+//! Genel araçlar: `/hatırlat`, `/bilgi kullanıcı`, `/bilgi sunucu`, `/bilgi avatar`.
 
 use poise::serenity_prelude::{self as serenity, CreateEmbed, CreateEmbedFooter, Mentionable, User};
 use poise::CreateReply;
@@ -50,7 +50,7 @@ pub async fn hatirlat(
 }
 
 /// Bir kullanıcının hesap ve sunucu bilgilerini gösterir.
-#[poise::command(slash_command, guild_only, rename = "kullanıcı-bilgi", category = "Genel")]
+#[poise::command(slash_command, guild_only, rename = "kullanıcı", category = "Genel")]
 pub async fn kullanici_bilgi(
     ctx: Context<'_>,
     #[rename = "kullanıcı"]
@@ -96,7 +96,7 @@ pub async fn kullanici_bilgi(
 }
 
 /// Sunucu hakkında bilgi gösterir.
-#[poise::command(slash_command, guild_only, rename = "sunucu-bilgi", category = "Genel")]
+#[poise::command(slash_command, guild_only, rename = "sunucu", category = "Genel")]
 pub async fn sunucu_bilgi(ctx: Context<'_>) -> Result<(), Error> {
     // Önbellekten tek seferde topla; await öncesinde kilit bırakılır.
     let info = ctx.guild().map(|g| {
@@ -188,5 +188,11 @@ pub async fn rol_bilgi(ctx: Context<'_>, #[description = "Bakılacak rol"] rol: 
         .field("İzinler", permissions.chars().take(1000).collect::<String>(), false)
         .footer(CreateEmbedFooter::new(format!("ID: {}", rol.id)));
     ctx.send(CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
+/// Kullanıcı, sunucu ve avatar bilgisi.
+#[poise::command(slash_command, rename = "bilgi", subcommands("kullanici_bilgi", "sunucu_bilgi", "avatar"), subcommand_required, category = "Genel")]
+pub async fn bilgi(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }

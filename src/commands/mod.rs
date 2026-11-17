@@ -61,19 +61,7 @@ fn every() -> Vec<poise::Command<Data, Error>> {
         setup::kurulum(),
         panel::panel(),
         automod::automod(),
-        moderation::ban(),
-        moderation::unban(),
-        moderation::kick(),
-        moderation::timeout(),
-        moderation::untimeout(),
-        moderation::warn(),
-        moderation::uyarilar(),
-        moderation::uyari_sil(),
-        moderation::log_kanali(),
         tickets::ticket(),
-        leveling::seviye(),
-        leveling::siralama(),
-        leveling::seviye_odul(),
         ai::ai(),
         ai::yaz(),
         extra::hayal_et(),
@@ -92,15 +80,6 @@ fn every() -> Vec<poise::Command<Data, Error>> {
         social::yardim(),
         streams::yayin(),
         music::cal(),
-        music::gec(),
-        music::durdur(),
-        music::duraklat(),
-        music::devam(),
-        music::simdi(),
-        music::sira(),
-        music::ses(),
-        music::dongu(),
-        music::karistir(),
         music::muzik(),
         forms::dogrulama(),
         forms::basvuru(),
@@ -111,14 +90,7 @@ fn every() -> Vec<poise::Command<Data, Error>> {
         tools::otocevap(),
         search::ara(),
         search::emoji(),
-        music::ayril(),
-        mod_tools::temizle(),
-        mod_tools::yavasmod(),
-        mod_tools::kilitle(),
-        mod_tools::kilidi_ac(),
         mod_tools::sicil(),
-        mod_tools::uyari_cezasi(),
-        mod_tools::uyarilari_sifirla(),
         community::karsilama(),
         roles::rol(),
         highlight::vurgu(),
@@ -126,17 +98,8 @@ fn every() -> Vec<poise::Command<Data, Error>> {
         community::koruma(),
         giveaway::cekilis(),
         utility::hatirlat(),
-        utility::kullanici_bilgi(),
-        utility::sunucu_bilgi(),
-        utility::avatar(),
         engagement::starboard(),
         engagement::etiket(),
-        engagement::oneri(),
-        engagement::oneri_kanali(),
-        engagement::oneri_yanitla(),
-        leveling::xp_muaf(),
-        leveling::xp(),
-        leveling::basarimlar(),
         server::davetler(),
         server::davet_siralama(),
         server::sayac(),
@@ -145,23 +108,14 @@ fn every() -> Vec<poise::Command<Data, Error>> {
         server::oda(),
         server::youtube(),
         feeds::akis(),
-        economy::bakiye(),
-        economy::gunluk(),
-        economy::calis(),
-        economy::yatir(),
-        economy::cek(),
-        economy::gonder(),
-        economy::soy(),
-        economy::zenginler(),
-        economy::yazi_tura(),
-        economy::slot(),
-        economy::blackjack(),
-        economy::magaza(),
-        economy::satin_al(),
-        economy::envanter(),
+        economy::ekonomi(),
+        moderation::moderasyon(),
+        mod_tools::kanal(),
+        engagement::oneri_grup(),
+        leveling::seviye_grup(),
+        utility::bilgi(),
         economy::magaza_yonet(),
         economy::ekonomi_yonet(),
-        stocks::borsa(),
     ]
 }
 
@@ -286,5 +240,43 @@ mod tree_tests {
         for cmd in super::every() {
             walk(&cmd, "");
         }
+    }
+
+    type Cmd = poise::Command<crate::data::Data, crate::error::Error>;
+
+    /// Discord'un sınırları: en fazla 100 slash üst komutu, komut başına 25 alt komut, en fazla iki kat iç içe.
+    #[test]
+    fn command_tree_fits_discord_limits() -> Result<(), String> {
+        let all = super::every();
+        let slash = all.iter().filter(|c| c.slash_action.is_some() || !c.subcommands.is_empty()).count();
+        if slash > 100 {
+            return Err(format!("{slash} slash üst komutu var (sınır 100)"));
+        }
+        for top in &all {
+            if top.subcommands.len() > 25 {
+                return Err(format!("/{} altında {} alt komut var (sınır 25)", top.name, top.subcommands.len()));
+            }
+            for group in &top.subcommands {
+                if group.subcommands.iter().any(|leaf| !leaf.subcommands.is_empty()) {
+                    return Err(format!("/{} {} üç kat iç içe", top.name, group.name));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Discord alt komutlarda `default_member_permissions`'ı yok sayar: alt komutta izin istendiyse
+    /// poise'un çalışma anı denetimi (`required_permissions`) de aynı izni istemeli.
+    #[test]
+    fn subcommand_permissions_are_checked_at_run_time() -> Result<(), String> {
+        fn walk(cmd: &Cmd, path: &str, top: bool) -> Result<(), String> {
+            let path = format!("{path} {}", cmd.name);
+            let wanted = cmd.default_member_permissions;
+            if !top && !wanted.is_empty() && !cmd.required_permissions.contains(wanted) {
+                return Err(format!("/{} izni yalnızca Discord tarafında denetleniyor", path.trim()));
+            }
+            cmd.subcommands.iter().try_for_each(|sub| walk(sub, &path, false))
+        }
+        super::every().iter().try_for_each(|cmd| walk(cmd, "", true))
     }
 }

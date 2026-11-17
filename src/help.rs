@@ -31,7 +31,7 @@ pub const PAGES: &[Page] = &[
         admin: false,
         body: "**Komutları bulmak:** `/` yaz → listeden AxBot'u seç. Her komutun altında kısa açıklaması yazar.\n\
 **Bilgi komutları**\n\
-• `/kullanıcı-bilgi`, `/sunucu-bilgi`, `/rol bilgi`, `/avatar` — hesap, sunucu, rol ve profil resmi\n\
+• `/bilgi kullanıcı`, `/bilgi sunucu`, `/rol bilgi`, `/bilgi avatar` — hesap, sunucu, rol ve profil resmi\n\
 • `/ping` — botun gecikmesi\n\
 • `/hatırlat süre:30dk mesaj:…` — belirtilen sürede sana hatırlatır\n\
 • `/afk sebep:…` — biri seni etiketlerse bot AFK olduğunu söyler; ilk mesajında AFK kalkar\n\n\
@@ -45,8 +45,8 @@ pub const PAGES: &[Page] = &[
         admin: false,
         body: "Önce bir **ses kanalına gir**, sonra:\n\
 • `/çal şarkı:Tarkan Şımarık` — şarkı adı, YouTube / Spotify / SoundCloud bağlantısı ya da çalma listesi olabilir\n\
-• `/sıra` kuyruğu gösterir · `/geç` sonraki şarkı · `/duraklat` `/devam` · `/ses` (%0-150) · `/döngü` · `/karıştır`\n\
-• `/şimdi` çalan şarkı · `/durdur` müziği kapatır · `/ayrıl` kanaldan çıkar\n\n\
+• `/müzik sıra` kuyruğu gösterir · `/müzik geç` sonraki şarkı · `/müzik duraklat` `/müzik devam` · `/müzik ses` (%0-150) · `/müzik döngü` · `/müzik karıştır`\n\
+• `/müzik şimdi` çalan şarkı · `/müzik durdur` müziği kapatır · `/müzik ayrıl` kanaldan çıkar\n\n\
 **Şarkı kartındaki butonlar:** ⏮ baştan başlat · ⏯ oynat/duraklat · ⏭ sonraki · ⏹ kapat · 🔀 karıştır · 🔊 ses · 🔁 döngü · \
 📜 sıra · 🔍 şarkı ekle · 🧹 sırayı temizle · 🔗 şarkının bağlantısı. Açılır menüden şarkının istediğin yerine atlayabilirsin.\n\n\
 **`/müzik` alt komutları**\n\
@@ -60,8 +60,8 @@ pub const PAGES: &[Page] = &[
         emoji: "⭐",
         admin: false,
         body: "Sohbete yazdıkça (ve sesli kanalda vakit geçirdikçe) **XP** kazanırsın; seviye atlayınca bazı sunucularda rol ödülü verilir.\n\
-• `/seviye` — seviye kartın (resimli) · `/sıralama dönem:Haftalık` — en aktifler (tüm zamanlar / haftalık / aylık)\n\
-• `/başarımlar` — kazandığın başarımlar ve ilerlemen\n\n\
+• `/seviye göster` — seviye kartın (resimli) · `/seviye sıralama dönem:Haftalık` — en aktifler (tüm zamanlar / haftalık / aylık)\n\
+• `/seviye başarımlar` — kazandığın başarımlar ve ilerlemen\n\n\
 **`/kartım`**\n\
 • `profil` — seviye, bakiye, itibar, başarımlar tek kartta\n\
 • `ayarla` — kartının rengini, arka planını, yazı tipini değiştir · `sıfırla`\n\
@@ -72,12 +72,12 @@ pub const PAGES: &[Page] = &[
         label: "Ekonomi",
         emoji: "💰",
         admin: false,
-        body: "**Para kazan:** `/günlük` (her gün, seri bonusu artar) · `/çalış tür:` mesai (saatte bir), balık tutma veya madencilik (20 dakikada bir)\n\
-**Para yönet:** `/bakiye` · `/yatır` (bankadaki para soyulamaz) · `/çek` · `/gönder üye:@… miktar:…` · `/zenginler`\n\
-**Şans oyunları:** `/yazı-tura` · `/slot` · `/blackjack` (butonlarla oynanır)\n\
-**Soygun:** `/soy üye:@…` biri soyulur (riskli!) · üyesiz `/soy` → sunucu çapında banka soygunu, ekip toplanır\n\
-**Mağaza:** `/mağaza` · `/satın-al ürün:…` · `/envanter` (bazı ürünler rol verir)\n\
-**Borsa:** `/borsa fiyatlar` · `al` · `sat` · `portföy` — fiyatlar saatte bir değişir",
+        body: "**Para kazan:** `/ekonomi günlük` (her gün, seri bonusu artar) · `/ekonomi çalış tür:` mesai (saatte bir), balık tutma veya madencilik (20 dakikada bir)\n\
+**Para yönet:** `/ekonomi bakiye` · `/ekonomi yatır` (bankadaki para soyulamaz) · `/ekonomi çek` · `/ekonomi gönder üye:@… miktar:…` · `/ekonomi zenginler`\n\
+**Şans oyunları:** `/ekonomi yazı-tura` · `/ekonomi slot` · `/ekonomi blackjack` (butonlarla oynanır)\n\
+**Soygun:** `/ekonomi soy üye:@…` biri soyulur (riskli!) · üyesiz `/ekonomi soy` → sunucu çapında banka soygunu, ekip toplanır\n\
+**Mağaza:** `/ekonomi mağaza` · `/ekonomi satın-al ürün:…` · `/ekonomi envanter` (bazı ürünler rol verir)\n\
+**Borsa:** `/ekonomi borsa fiyatlar` · `al` · `sat` · `portföy` — fiyatlar saatte bir değişir",
     },
     Page {
         key: "u_fun",
@@ -90,7 +90,7 @@ pub const PAGES: &[Page] = &[
 **`/tavsiye`** (feelm.org; ulaşılamazsa TMDB · RAWG): `film` · `dizi` · `oyun` — tür, yıl ve puana göre rastgele öneri, **🎲 Başka öner** butonu · `ara sorgu:…`\n\
 **`/hayvan`**: ayarlı kanalda arada bir hayvan belirir, **Yakala!** butonuna ilk basan alır → `koleksiyon` · `sıralama` · `liste`\n\
 **Kanal oyunları** (sunucu açtıysa): sayma oyunu (sırayla 1, 2, 3…), kelime zinciri (kelime öncekinin son harfiyle başlar)\n\
-**Diğer:** `/itiraf metin:…` adın görünmeden itiraf · `/öneri` sunucuya öneri gönder, diğerleri oylar",
+**Diğer:** `/itiraf metin:…` adın görünmeden itiraf · `/öneri gönder` sunucuya öneri gönder, diğerleri oylar",
     },
     Page {
         key: "u_tools",
@@ -129,7 +129,7 @@ pub const PAGES: &[Page] = &[
         admin: true,
         body: "1. **`/kurulum`** — eksik bot izinlerini, rol sırasını ve açık/kapalı özellikleri tek ekranda gösterir.\n\
 2. Sunucu Ayarları → Roller → **AxBot rolünü en üste** taşı (yoksa üstündeki rolleri veremez, o üyelere ceza veremez).\n\
-3. **`/log-kanalı`** — moderasyon kayıtları ve sunucu olayları (`tür:Sunucu olayları`) için kanal.\n\
+3. **`/mod log-kanalı`** — moderasyon kayıtları ve sunucu olayları (`tür:Sunucu olayları`) için kanal.\n\
 4. **`/panel`** — sana özel, 10 dakika geçerli giriş bağlantısı. Tarayıcıda hemen her ayar formla yapılır: \
 karşılama, otomod, seviye, rol menüleri, özel komutlar, otomasyonlar, istatistikler, sağlık kontrolü…\n\n\
 **Botu başka sunucuya eklemek:** `/kurulum` içindeki *Davet bağlantısı*. Komutlar eklendiği anda görünür.",
@@ -155,10 +155,10 @@ Super Mario ya da hepsi karışık (panelde birden fazlası seçilebilir)\n\
         label: "Moderasyon ve koruma",
         emoji: "🛡️",
         admin: true,
-        body: "**Cezalar:** `/uyar` · `/sustur süre:10dk` · `/susturmayı-kaldır` · `/at` · `/yasakla süre:1g` (süresiz de olur) · `/yasağı-kaldır`\n\
-**Kayıtlar:** `/uyarılar` · `/uyarı-sil vaka:…` · `/uyarıları-sıfırla` · `/sicil` (tüm geçmiş) · `/üye-notu ekle/liste/sil`\n\
-**Otomatik ceza:** `/uyarı-cezası ekle uyarı_sayısı:3 ceza:Sustur pencere:1sa` — eşiğe ulaşan otomatik cezalandırılır\n\
-**Kanal:** `/temizle miktar:50` (üye/bot/bağlantı filtresi) · `/yavaşmod` · `/kilitle` · `/kilidi-aç`\n\n\
+        body: "**Cezalar:** `/mod uyar` · `/mod sustur süre:10dk` · `/mod susturmayı-kaldır` · `/mod at` · `/mod yasakla süre:1g` (süresiz de olur) · `/mod yasağı-kaldır`\n\
+**Kayıtlar:** `/mod uyarılar` · `/mod uyarı-sil vaka:…` · `/mod uyarıları-sıfırla` · `/sicil` (tüm geçmiş) · `/üye-notu ekle/liste/sil`\n\
+**Otomatik ceza:** `/mod uyarı-cezası ekle uyarı_sayısı:3 ceza:Sustur pencere:1sa` — eşiğe ulaşan otomatik cezalandırılır\n\
+**Kanal:** `/kanal temizle miktar:50` (üye/bot/bağlantı filtresi) · `/kanal yavaşmod` · `/kanal kilitle` · `/kanal kilidi-aç`\n\n\
 **Otomatik moderasyon — `/automod`:** `durum` · `ayarla` (küfür, davet, bağlantı, spam) · `kelime-ekle/sil` · `istisna-ekle/sil` · \
 `spam-limiti`. Panelde 10 kural (büyük harf, emoji, bahsetme, zalgo…), her biri için sil / uyar, muaf roller, kısıtlı kanallar, YZ moderasyonu.\n\
 **Ban itirazı:** `/başvuru itiraz-kanalı kanal:#…` — yasaklananın DM'ine itiraz butonu gider\n\
@@ -174,7 +174,7 @@ izinsiz verilen yönetici yetkisi geri alınır · **Yedek — `/yedek al/liste/
         admin: true,
         body: "**Bilet:** `/bilet kur kanal:#… destek_rolü:@…` → panel gönderilir. Bilette `üstlen` · `ekle` · `çıkar` · `kapat` · `yeniden-aç` · `sil`. \
 Panelde konular, SSS (YZ ilk cevabı dener), üye başına sınır, hareketsiz bileti otomatik kapatma ve 1-5 ⭐ memnuniyet puanı.\n\
-**Öneriler:** `/öneri-kanalı kanal:#…` · `/öneri-yanıtla numara:1 durum:Kabul edildi`\n\
+**Öneriler:** `/öneri kanal kanal:#…` · `/öneri yanıtla numara:1 durum:Kabul edildi`\n\
 **Starboard:** `/starboard kanal:#… eşik:3` (panelde ek panolar) · **Çekiliş:** `/çekiliş başlat/bitir/yeniden-çek` \
 (şartlar: `gereken_rol` · `en_az_seviye` · `hesap_yaşı` · `ek_şans_rolü` 2 kat şans)\n\
 **Başvuru formları:** `/başvuru form-ekle` (5 soruya kadar) · `panel` · `form-liste` · `form-sil`\n\
@@ -189,8 +189,8 @@ Panelde konular, SSS (YZ ilk cevabı dener), üye başına sınır, hareketsiz b
         emoji: "📈",
         admin: true,
         body: "**Seviye**\n\
-• `/seviye-ödül ekle seviye:10 rol:@…` · `sil` · `liste`\n\
-• `/xp ver` / `/xp al` · `/xp-muaf` — XP kazanılmayacak kanal, kategori ya da rol\n\
+• `/seviye ödül ekle seviye:10 rol:@…` · `sil` · `liste`\n\
+• `/seviye xp ver` / `/seviye xp al` · `/seviye muaf` — XP kazanılmayacak kanal, kategori ya da rol\n\
 • Panel → **Seviye**: duyuru yeri ve metni, XP oranı (%25-300), role göre XP çarpanı (ör. takviyecilere 2 kat), ödüllerin birikmesi, herkese açık sıralama sayfası; \
 **Başarımlar** ve sezon (haftalık/aylık) ödülleri **Topluluk** sayfasında\n\n\
 **Ekonomi**\n\

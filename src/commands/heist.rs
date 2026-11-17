@@ -1,4 +1,4 @@
-//! Sunucu çapında soygun: `/soy` komutu üye verilmeden çalıştırılınca başlar. Üyeler butonla ekibe katılır,
+//! Sunucu çapında soygun: `/ekonomi soy` komutu üye verilmeden çalıştırılınca başlar. Üyeler butonla ekibe katılır,
 //! herkes giriş payını yatırır; ekip büyüdükçe başarı ihtimali artar, ganimet eşit paylaşılır.
 
 use std::time::{Duration, Instant};

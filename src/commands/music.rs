@@ -343,7 +343,7 @@ pub async fn duraklat(ctx: Context<'_>) -> Result<(), Error> {
         return private(ctx, "Şu an çalan bir şarkı yok.").await;
     }
     call.lock().await.queue().pause()?;
-    ctx.say("⏸️ Duraklatıldı. Devam etmek için `/devam`.").await?;
+    ctx.say("⏸️ Duraklatıldı. Devam etmek için `/müzik devam`.").await?;
     Ok(())
 }
 
@@ -491,7 +491,7 @@ pub async fn karistir(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     guild_only,
     rename = "müzik",
-    subcommands("m_247", "m_otomatik", "m_radyo", "m_sozler", "m_sar", "m_sil", "m_tasi", "m_dj", "m_liste_kaydet", "m_liste_cal", "m_listelerim", "m_liste_sil", "m_soyle"),
+    subcommands("gec", "durdur", "ayril", "duraklat", "devam", "simdi", "sira", "ses", "dongu", "karistir", "m_247", "m_otomatik", "m_radyo", "m_sozler", "m_sar", "m_sil", "m_tasi", "m_dj", "m_liste_kaydet", "m_liste_cal", "m_listelerim", "m_liste_sil", "m_soyle"),
     subcommand_required,
     category = "Müzik"
 )]
@@ -513,7 +513,7 @@ async fn m_247(
     settings.always_on = on;
     data.music.save_settings(&data.db, guild_id, settings).await?;
     let text = if on {
-        "🌙 **7/24 modu açık:** Kanal boşalsa ya da kuyruk bitse de ses kanalından ayrılmayacağım. (`/ayrıl` ile çıkarabilirsin.)"
+        "🌙 **7/24 modu açık:** Kanal boşalsa ya da kuyruk bitse de ses kanalından ayrılmayacağım. (`/müzik ayrıl` ile çıkarabilirsin.)"
     } else {
         "☀️ 7/24 modu kapalı: Kanal boşalınca veya 5 dakika müzik çalmazsa ayrılırım."
     };
@@ -679,7 +679,7 @@ async fn m_sar(
 async fn m_sil(
     ctx: Context<'_>,
     #[rename = "sıra"]
-    #[description = "Kuyruktaki sırası (/sıra listesindeki numara)"]
+    #[description = "Kuyruktaki sırası (/müzik sıra listesindeki numara)"]
     #[min = 1]
     index: u32,
 ) -> Result<(), Error> {
@@ -690,7 +690,7 @@ async fn m_sil(
         Some(info) => {
             ctx.say(format!("🗑️ Kuyruktan çıkarıldı: **{}**", info.title)).await?;
         }
-        None => return private(ctx, "Kuyrukta bu numarada şarkı yok. `/sıra` ile bakabilirsin.").await,
+        None => return private(ctx, "Kuyrukta bu numarada şarkı yok. `/müzik sıra` ile bakabilirsin.").await,
     }
     Ok(())
 }
@@ -715,7 +715,7 @@ async fn m_tasi(
         Some(title) => {
             ctx.say(format!("↕️ **{title}** artık {to}. sırada.")).await?;
         }
-        None => return private(ctx, "Bu numaralar kuyrukta yok. `/sıra` ile bakabilirsin.").await,
+        None => return private(ctx, "Bu numaralar kuyrukta yok. `/müzik sıra` ile bakabilirsin.").await,
     }
     Ok(())
 }

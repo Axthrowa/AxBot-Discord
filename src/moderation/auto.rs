@@ -1,5 +1,5 @@
 //! Bot adına yapılan moderasyon: otomatik moderasyonun verdiği uyarılar ve uyarı sayısı bir
-//! eşiğe ulaşınca uygulanan otomatik cezalar. Hem `/uyar` komutu hem otomatik moderasyon kullanır.
+//! eşiğe ulaşınca uygulanan otomatik cezalar. Hem `/mod uyar` komutu hem otomatik moderasyon kullanır.
 
 use std::time::Duration;
 

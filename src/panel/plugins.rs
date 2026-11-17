@@ -640,7 +640,7 @@ fn form_fields(slug: &str, cfg: &GuildConfig, options: &Options) -> String {
         ),
         "oneriler" => section(
             "Öneriler",
-            field("Öneri kanalı", &options.channel_select("channel", cfg.suggestion_channel), "Üyeler <code>/öneri</code> ile gönderir."),
+            field("Öneri kanalı", &options.channel_select("channel", cfg.suggestion_channel), "Üyeler <code>/öneri gönder</code> ile gönderir."),
         ),
         "hayvanlar" => section(
             "Hayvan yakalama",

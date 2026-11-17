@@ -184,7 +184,7 @@ pub async fn economy_fields(state: &WebState, guild_id: GuildId, options: &Optio
 
     let mut board = String::new();
     if richest.is_empty() {
-        board.push_str("<p class=\"note\">Henüz kimse para kazanmadı. Üyeler <code>/günlük</code> ve <code>/çalış</code> ile başlar.</p>");
+        board.push_str("<p class=\"note\">Henüz kimse para kazanmadı. Üyeler <code>/ekonomi günlük</code> ve <code>/ekonomi çalış</code> ile başlar.</p>");
     } else {
         // Adlar önbellekten; kilit hemen bırakılır.
         let names: Vec<String> = {
@@ -202,7 +202,7 @@ pub async fn economy_fields(state: &WebState, guild_id: GuildId, options: &Optio
     }
     out.push_str(&section(
         "En zenginler",
-        board + "<p class=\"note\">Üyelere para vermek, almak ya da hesabı sıfırlamak için: <code>/ekonomi-yönet</code>. Oyunlar: <code>/yazı-tura · slot · blackjack</code>.</p>",
+        board + "<p class=\"note\">Üyelere para vermek, almak ya da hesabı sıfırlamak için: <code>/ekonomi-yönet</code>. Oyunlar: <code>/ekonomi yazı-tura · slot · blackjack</code>.</p>",
     ));
     Ok((out, !items.is_empty() || !richest.is_empty()))
 }

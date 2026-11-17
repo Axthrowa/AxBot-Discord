@@ -26,7 +26,7 @@ const DEFAULT_REASON: &str = "Sebep belirtilmedi";
     slash_command,
     rename = "yasakla",
     guild_only,
-    default_member_permissions = "BAN_MEMBERS",
+    default_member_permissions = "BAN_MEMBERS", required_permissions = "BAN_MEMBERS",
     required_bot_permissions = "BAN_MEMBERS",
     category = "Moderasyon"
 )]
@@ -104,7 +104,7 @@ async fn schedule_unban(ctx: Context<'_>, guild_id: GuildId, user: serenity::Use
     slash_command,
     rename = "yasağı-kaldır",
     guild_only,
-    default_member_permissions = "BAN_MEMBERS",
+    default_member_permissions = "BAN_MEMBERS", required_permissions = "BAN_MEMBERS",
     required_bot_permissions = "BAN_MEMBERS",
     category = "Moderasyon"
 )]
@@ -142,7 +142,7 @@ pub async fn unban(
     slash_command,
     rename = "at",
     guild_only,
-    default_member_permissions = "KICK_MEMBERS",
+    default_member_permissions = "KICK_MEMBERS", required_permissions = "KICK_MEMBERS",
     required_bot_permissions = "KICK_MEMBERS",
     category = "Moderasyon"
 )]
@@ -184,7 +184,7 @@ pub async fn kick(
     slash_command,
     rename = "sustur",
     guild_only,
-    default_member_permissions = "MODERATE_MEMBERS",
+    default_member_permissions = "MODERATE_MEMBERS", required_permissions = "MODERATE_MEMBERS",
     required_bot_permissions = "MODERATE_MEMBERS",
     category = "Moderasyon"
 )]
@@ -241,7 +241,7 @@ pub async fn timeout(
     slash_command,
     rename = "susturmayı-kaldır",
     guild_only,
-    default_member_permissions = "MODERATE_MEMBERS",
+    default_member_permissions = "MODERATE_MEMBERS", required_permissions = "MODERATE_MEMBERS",
     required_bot_permissions = "MODERATE_MEMBERS",
     category = "Moderasyon"
 )]
@@ -284,7 +284,7 @@ pub async fn untimeout(
     slash_command,
     rename = "uyar",
     guild_only,
-    default_member_permissions = "MODERATE_MEMBERS",
+    default_member_permissions = "MODERATE_MEMBERS", required_permissions = "MODERATE_MEMBERS",
     category = "Moderasyon"
 )]
 pub async fn warn(
@@ -336,7 +336,7 @@ async fn auto_punish(ctx: Context<'_>, guild_id: GuildId, member: &Member) -> Re
     slash_command,
     guild_only,
     rename = "uyarılar",
-    default_member_permissions = "MODERATE_MEMBERS",
+    default_member_permissions = "MODERATE_MEMBERS", required_permissions = "MODERATE_MEMBERS",
     category = "Moderasyon"
 )]
 pub async fn uyarilar(
@@ -386,12 +386,12 @@ pub async fn uyarilar(
     slash_command,
     guild_only,
     rename = "uyarı-sil",
-    default_member_permissions = "MODERATE_MEMBERS",
+    default_member_permissions = "MODERATE_MEMBERS", required_permissions = "MODERATE_MEMBERS",
     category = "Moderasyon"
 )]
 pub async fn uyari_sil(
     ctx: Context<'_>,
-    #[description = "Kaldırılacak uyarının vaka numarası (/uyarılar ile görebilirsin)"]
+    #[description = "Kaldırılacak uyarının vaka numarası (/mod uyarılar ile görebilirsin)"]
     #[min = 1]
     vaka: i32,
 ) -> Result<(), Error> {
@@ -420,7 +420,7 @@ pub enum LogKind {
     slash_command,
     guild_only,
     rename = "log-kanalı",
-    default_member_permissions = "MANAGE_GUILD",
+    default_member_permissions = "MANAGE_GUILD", required_permissions = "MANAGE_GUILD",
     category = "Moderasyon"
 )]
 pub async fn log_kanali(
@@ -645,4 +645,30 @@ pub(super) fn discord_error(e: &serenity::Error) -> String {
     } else {
         format!("Discord hatası: {text}")
     }
+}
+
+/// Moderasyon: yasaklama, atma, susturma, uyarılar. Her alt komut kendi iznini ayrıca denetler.
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "mod",
+    default_member_permissions = "MODERATE_MEMBERS",
+    subcommands(
+        "ban",
+        "unban",
+        "kick",
+        "timeout",
+        "untimeout",
+        "warn",
+        "uyarilar",
+        "uyari_sil",
+        "super::mod_tools::uyarilari_sifirla",
+        "super::mod_tools::uyari_cezasi",
+        "log_kanali"
+    ),
+    subcommand_required,
+    category = "Moderasyon"
+)]
+pub async fn moderasyon(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
 }

@@ -1,4 +1,4 @@
-//! `/borsa`: sunucu parasıyla oynanan sahte borsa.
+//! `/ekonomi borsa`: sunucu parasıyla oynanan sahte borsa.
 
 use poise::serenity_prelude::{self as serenity, CreateEmbed, CreateEmbedFooter};
 use poise::CreateReply;
@@ -49,7 +49,7 @@ async fn fiyatlar(ctx: Context<'_>) -> Result<(), Error> {
         .title("📈 Borsa")
         .description(format!("{}\n\nSonraki fiyat değişimi: <t:{next}:R>", lines.join("\n")))
         .colour(serenity::Colour::DARK_GREEN)
-        .footer(CreateEmbedFooter::new("Hayali şirketler, sunucu parası. Al: /borsa al · Sat: /borsa sat"));
+        .footer(CreateEmbedFooter::new("Hayali şirketler, sunucu parası. Al: /ekonomi borsa al · Sat: /ekonomi borsa sat"));
     ctx.send(CreateReply::default().embed(embed)).await?;
     Ok(())
 }
@@ -116,7 +116,7 @@ async fn portfoy(ctx: Context<'_>) -> Result<(), Error> {
     let db = &ctx.data().db;
     let owned = stocks::holdings(db, guild_id, ctx.author().id).await?;
     if owned.is_empty() {
-        return reply_private(ctx, "Hiç hissen yok. Fiyatlara bak: `/borsa fiyatlar`").await;
+        return reply_private(ctx, "Hiç hissen yok. Fiyatlara bak: `/ekonomi borsa fiyatlar`").await;
     }
     let unix = now();
     let mut total = 0;

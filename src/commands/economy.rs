@@ -69,7 +69,7 @@ pub async fn bakiye(
         .field("👛 Cüzdan", money(acc.wallet), true)
         .field("🏦 Banka", money(acc.bank), true)
         .field("💰 Toplam", money(acc.wallet + acc.bank), true)
-        .footer(CreateEmbedFooter::new("Bankadaki para soyulamaz. /günlük ve /çalış ile para kazan."));
+        .footer(CreateEmbedFooter::new("Bankadaki para soyulamaz. /ekonomi günlük ve /ekonomi çalış ile para kazan."));
     send(ctx, e).await
 }
 
@@ -215,7 +215,7 @@ pub async fn zenginler(ctx: Context<'_>) -> Result<(), Error> {
     let guild = guild_id(ctx)?;
     let top = economy::leaderboard(&ctx.data().db, guild, 10).await?;
     let description = if top.is_empty() {
-        "Henüz kimsenin parası yok. `/günlük` ile başla! 🪙".to_owned()
+        "Henüz kimsenin parası yok. `/ekonomi günlük` ile başla! 🪙".to_owned()
     } else {
         top.iter()
             .enumerate()
@@ -481,7 +481,7 @@ pub async fn magaza(ctx: Context<'_>) -> Result<(), Error> {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let e = embed("🛒 Mağaza", description).footer(CreateEmbedFooter::new("Satın almak için: /satın-al ürün"));
+    let e = embed("🛒 Mağaza", description).footer(CreateEmbedFooter::new("Satın almak için: /ekonomi satın-al ürün"));
     send(ctx, e).await
 }
 
@@ -553,7 +553,7 @@ pub async fn envanter(
     let user = user.unwrap_or_else(|| ctx.author().clone());
     let items = economy::inventory(&ctx.data().db, guild, user.id).await?;
     let description = if items.is_empty() {
-        "Envanter boş. 🛒 `/mağaza`".to_owned()
+        "Envanter boş. 🛒 `/ekonomi mağaza`".to_owned()
     } else {
         items.iter().map(|(name, n)| format!("• **{name}** ×{n}")).collect::<Vec<_>>().join("\n")
     };
@@ -681,4 +681,33 @@ async fn eko_sifirla(
     let guild = guild_id(ctx)?;
     economy::reset(&ctx.data().db, guild, user.id).await?;
     reply_private(ctx, format!("✅ {} adlı üyenin parası ve envanteri sıfırlandı.", user.id.mention())).await
+}
+
+/// Ekonomi komutları (bakiye, günlük ödül, iş, oyunlar, mağaza, borsa).
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "ekonomi",
+    subcommands(
+        "bakiye",
+        "gunluk",
+        "calis",
+        "yatir",
+        "cek",
+        "gonder",
+        "soy",
+        "zenginler",
+        "yazi_tura",
+        "slot",
+        "blackjack",
+        "magaza",
+        "satin_al",
+        "envanter",
+        "super::stocks::borsa"
+    ),
+    subcommand_required,
+    category = "Ekonomi"
+)]
+pub async fn ekonomi(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
 }
