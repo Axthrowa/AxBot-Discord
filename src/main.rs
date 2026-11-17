@@ -344,6 +344,7 @@ async fn run() -> anyhow::Result<()> {
                     ai: Arc::clone(&ai),
                 });
                 rsvp::spawn(ctx.clone(), db.clone(), plugin_settings.clone());
+                backup::spawn_auto(ctx.clone(), db.clone(), plugin_settings.clone());
                 tickets::spawn_auto_close(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone(), Arc::clone(&modlog));
                 if let Err(e) = tickets::load_awaiting(&db).await {
                     tracing::warn!(error = ?e, "Cevap bekleyen biletler yüklenemedi");

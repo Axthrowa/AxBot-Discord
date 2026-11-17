@@ -233,6 +233,42 @@ pub async fn settings_fields(state: &WebState, guild_id: GuildId, options: &Opti
         ) + "<p class=\"note\">Değişiklik en geç bir dakika içinde geçerli olur. Slash komutların izinleri Discord'dan ayarlanır: \
              Sunucu Ayarları → Entegrasyonlar → AxBot.</p>",
     );
+    let mut out = out;
+    let backup = state.settings.get::<crate::backup::BackupSettings>(&state.db, guild_id).await?;
+    let mut every = String::from("<select name=\"backup_every\">");
+    for days in crate::backup::AUTO_DAYS {
+        let label = match days {
+            0 => "Kapalı".to_owned(),
+            1 => "Her gün".to_owned(),
+            d => format!("{d} günde bir"),
+        };
+        let _ = std::fmt::Write::write_fmt(&mut every, format_args!("<option value=\"{days}\"{}>{label}</option>", if backup.every_days == days { " selected" } else { "" }));
+    }
+    every.push_str("</select>");
+    let last = if backup.last_unix > 0 {
+        chrono::DateTime::from_timestamp(backup.last_unix, 0).map_or_else(String::new, |t| format!(" Son otomatik yedek: {} (UTC).", t.format("%d.%m.%Y %H:%M")))
+    } else {
+        String::new()
+    };
+    out.push_str(&section(
+        "Zamanlanmış sunucu yedeği",
+        field(
+            "Otomatik yedek",
+            &every,
+            &format!("Roller, kanallar ve izinler yedeklenir (mesajlar değil). Son 3 otomatik yedek tutulur; /yedek liste ile görünür, /yedek yükle ile geri yüklenir.{last}"),
+        ),
+    ));
+    out.push_str(&section(
+        "Ayarları dışa / içe aktar",
+        format!(
+            "<p><a href=\"/panel/sunucu/{guild_id}/ayarlar-disa-aktar\">⬇️ Bu sunucunun eklenti ayarlarını indir (JSON)</a></p>"
+        ) + &field(
+            "İçe aktarılacak dosyanın içeriği",
+            "<textarea name=\"import_json\" rows=\"5\" placeholder=\"İndirdiğin dosyanın içeriğini buraya yapıştır; boş bırakırsan bir şey değişmez.\"></textarea>",
+            "Eklenti ayarlarının ÜZERİNE yazar. Rol menüleri, gömülü mesajlar, etkinlikler ve bot profili taşınmaz. Başka sunucudan geliyorsa kanal ve rolleri \
+             sonra Sağlık kontrolü sayfasından düzelt.",
+        ),
+    ));
     Ok((out, !settings.manager_roles.is_empty()))
 }
 
@@ -245,7 +281,20 @@ pub async fn settings_save(state: &WebState, guild_id: GuildId, input: &Input<'_
     let current = state.settings.get::<CommunitySettings>(&state.db, guild_id).await.map_err(&failed)?;
     let mut settings = (*current).clone();
     settings.manager_roles = manager_roles;
-    state.settings.set(&state.db, guild_id, settings).await.map_err(&failed)
+    let every_days: u32 = input.raw("backup_every").parse().ok().filter(|d| crate::backup::AUTO_DAYS.contains(d)).unwrap_or(0);
+    let import = input.raw("import_json").trim().to_owned();
+    // İçe aktarma önce doğrulanır; hatalıysa bu sayfadaki diğer değişiklikler de yazılmaz.
+    if !import.is_empty() {
+        super::transfer::import(state, guild_id, &import).await?;
+        // Dosyadaki yönetici rolleri / yedek ayarı yazıldı; formdakiler onların üzerine yazılmasın.
+        return Ok(());
+    }
+    state.settings.set(&state.db, guild_id, settings).await.map_err(&failed)?;
+    let backup = state.settings.get::<crate::backup::BackupSettings>(&state.db, guild_id).await.map_err(&failed)?;
+    if backup.every_days != every_days {
+        state.settings.set(&state.db, guild_id, crate::backup::BackupSettings { every_days, ..(*backup).clone() }).await.map_err(&failed)?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- Yayın ve video duyuruları

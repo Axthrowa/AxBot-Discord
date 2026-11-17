@@ -122,8 +122,83 @@ pub struct Stored {
     pub channels: usize,
 }
 
+/// Elle alınan yedekler (otomatik yedekler kendi sınırıyla ayrı sayılır).
 pub async fn count(db: &PgPool, guild_id: GuildId) -> anyhow::Result<i64> {
-    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM guild_backups WHERE guild_id = $1").bind(snowflake(guild_id.get())?).fetch_one(db).await?)
+    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM guild_backups WHERE guild_id = $1 AND name NOT LIKE $2")
+        .bind(snowflake(guild_id.get())?)
+        .bind(format!("{AUTO_PREFIX}%"))
+        .fetch_one(db)
+        .await?)
+}
+
+// ---------------------------------------------------------------- Zamanlanmış yedek
+
+/// Otomatik yedeklerin ad öneki; en fazla `MAX_AUTO` tanesi tutulur, eskisi silinir.
+pub const AUTO_PREFIX: &str = "Otomatik yedek";
+const MAX_AUTO: i64 = 3;
+/// Panelde seçilebilen aralıklar (gün; 0 = kapalı).
+pub const AUTO_DAYS: [u32; 5] = [0, 1, 3, 7, 30];
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackupSettings {
+    pub every_days: u32,
+    /// Son otomatik yedeğin zamanı (Unix saniyesi).
+    pub last_unix: i64,
+}
+
+impl crate::settings::PluginConfig for BackupSettings {
+    const KEY: &'static str = "backup";
+}
+
+/// Yedek zamanı geldi mi?
+pub fn auto_due(settings: &BackupSettings, now: i64) -> bool {
+    settings.every_days > 0 && now - settings.last_unix >= i64::from(settings.every_days) * 86_400
+}
+
+/// Saatte bir, zamanı gelen sunucuların yapısını (roller, kanallar, izinler) yedekler.
+pub fn spawn_auto(ctx: serenity::Context, db: PgPool, settings: crate::settings::PluginSettings) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            crate::supervise::round("otomatik sunucu yedeği", std::time::Duration::from_secs(600), async {
+                let now = serenity::Timestamp::now().unix_timestamp();
+                for guild_id in ctx.cache.guilds() {
+                    let Ok(current) = settings.get::<BackupSettings>(&db, guild_id).await else { continue };
+                    if !auto_due(&current, now) {
+                        continue;
+                    }
+                    let Some(snapshot) = take(&ctx.cache, guild_id) else { continue };
+                    // Önce zaman yazılır: hata olsa bile her saat yeniden denenip yedek yığılmaz.
+                    if let Err(e) = settings.set(&db, guild_id, BackupSettings { last_unix: now, ..(*current).clone() }).await {
+                        warn!(guild = %guild_id, error = ?e, "Otomatik yedek zamanı kaydedilemedi");
+                        continue;
+                    }
+                    let name = format!("{AUTO_PREFIX} {}", chrono::Utc::now().format("%Y-%m-%d"));
+                    let saved = async {
+                        save(&db, guild_id, &name, &snapshot).await?;
+                        sqlx::query(
+                            "DELETE FROM guild_backups WHERE guild_id = $1 AND name LIKE $2 AND id NOT IN \
+                             (SELECT id FROM guild_backups WHERE guild_id = $1 AND name LIKE $2 ORDER BY id DESC LIMIT $3)",
+                        )
+                        .bind(snowflake(guild_id.get())?)
+                        .bind(format!("{AUTO_PREFIX}%"))
+                        .bind(MAX_AUTO)
+                        .execute(&db)
+                        .await?;
+                        anyhow::Ok(())
+                    };
+                    match saved.await {
+                        Ok(()) => tracing::info!(guild = %guild_id, "Otomatik sunucu yedeği alındı"),
+                        Err(e) => warn!(guild = %guild_id, error = ?e, "Otomatik sunucu yedeği alınamadı"),
+                    }
+                }
+            })
+            .await;
+        }
+    });
 }
 
 pub async fn save(db: &PgPool, guild_id: GuildId, name: &str, snapshot: &Snapshot) -> anyhow::Result<i64> {
@@ -243,6 +318,17 @@ pub async fn restore(http: &serenity::Http, cache: &serenity::Cache, guild_id: G
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_backup_runs_on_schedule() {
+        let off = BackupSettings::default();
+        assert!(!auto_due(&off, 1_000_000));
+        let weekly = BackupSettings { every_days: 7, last_unix: 1_000_000 };
+        assert!(!auto_due(&weekly, 1_000_000 + 6 * 86_400));
+        assert!(auto_due(&weekly, 1_000_000 + 7 * 86_400));
+        // Hiç yedek alınmamışsa ilk turda alınır.
+        assert!(auto_due(&BackupSettings { every_days: 1, last_unix: 0 }, 1_000_000));
+    }
 
     fn role(name: &str) -> RoleSnap {
         RoleSnap { name: name.to_owned(), colour: 0, hoist: false, mentionable: false, permissions: 0, position: 1 }

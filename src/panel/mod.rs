@@ -22,6 +22,7 @@ mod moderation;
 mod pages;
 mod plugins;
 mod welcome;
+mod transfer;
 mod wizard;
 
 use std::collections::HashSet;
@@ -186,6 +187,7 @@ pub fn router() -> Router<WebState> {
         .route("/panel/sunucu/{guild}/istatistik", get(botpage::stats))
         .route("/panel/sunucu/{guild}/saglik", get(health::page))
         .route("/panel/sunucu/{guild}/kurulum", get(wizard::page))
+        .route("/panel/sunucu/{guild}/ayarlar-disa-aktar", get(transfer::export))
         .route("/panel/panel.js", get(pages::script))
 }
 
