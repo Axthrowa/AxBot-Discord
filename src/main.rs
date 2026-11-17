@@ -2,6 +2,7 @@
 //! ve Discord gateway'ine bağlanır.
 
 mod achievements;
+mod privacy;
 mod ai;
 mod alerts;
 mod antinuke;
@@ -352,6 +353,7 @@ async fn run() -> anyhow::Result<()> {
                 rsvp::spawn(ctx.clone(), db.clone(), plugin_settings.clone());
                 backup::spawn_auto(ctx.clone(), db.clone(), plugin_settings.clone());
                 economy::spawn_interest(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone());
+                privacy::spawn_purge(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone());
                 tickets::spawn_auto_close(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone(), Arc::clone(&modlog));
                 if let Err(e) = tickets::load_awaiting(&db).await {
                     tracing::warn!(error = ?e, "Cevap bekleyen biletler yüklenemedi");

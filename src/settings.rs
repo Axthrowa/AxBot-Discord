@@ -68,4 +68,9 @@ impl PluginSettings {
         self.cache.insert((guild_id, TypeId::of::<T>()), Arc::new(value) as Cached);
         Ok(())
     }
+
+    /// Sunucu verisi silindiğinde bellekteki ayarları da unutur.
+    pub fn forget_guild(&self, guild_id: GuildId) {
+        self.cache.retain(|(guild, _), _| *guild != guild_id);
+    }
 }

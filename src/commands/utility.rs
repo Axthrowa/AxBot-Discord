@@ -192,7 +192,78 @@ pub async fn rol_bilgi(ctx: Context<'_>, #[description = "Bakılacak rol"] rol: 
 }
 
 /// Kullanıcı, sunucu ve avatar bilgisi.
-#[poise::command(slash_command, rename = "bilgi", subcommands("kullanici_bilgi", "sunucu_bilgi", "avatar"), subcommand_required, category = "Genel")]
+#[poise::command(slash_command, rename = "bilgi", subcommands("kullanici_bilgi", "sunucu_bilgi", "avatar", "gizlilik", "verilerimi_sil", "sunucu_verisini_sil"), subcommand_required, category = "Genel")]
 pub async fn bilgi(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+// ---------------------------------------------------------------- Gizlilik
+
+/// Botun hangi verileri tuttuğunu ve nasıl silineceğini gösterir.
+#[poise::command(slash_command, rename = "gizlilik")]
+pub async fn gizlilik(ctx: Context<'_>) -> Result<(), Error> {
+    let link = ctx.data().public_url.public().map(|base| format!("\n\n📄 Tam metin: {}/gizlilik · English: {}/privacy", base.trim_end_matches('/'), base.trim_end_matches('/')));
+    let text = format!(
+        "**Tutulanlar:** Discord kimlikleri, XP/seviye, ekonomi, başarımlar, doğum günü (verirsen), çalma listelerin, moderasyon ve bilet kayıtları, sunucu ayarları.\n\
+         **Mesajlar saklanmaz.** İstisna: silinen mesaj kaydı açık sunucularda kopya en fazla 6 saat, yapay zekâ sohbetinde son mesajlar 1 saat tutulur. \
+         Yapay zekâya yazdığın mesaj cevap için yapay zekâ sağlayıcısına gönderilir.\n\
+         **Silme:** `/bilgi verilerimi-sil` kendi verini, sunucu sahibi `/bilgi sunucu-verisini-sil` sunucunun verisini siler. \
+         Bot sunucudan çıkarılıp {} gün içinde geri eklenmezse sunucu verisi kendiliğinden silinir.{}",
+        crate::privacy::PURGE_AFTER_DAYS,
+        link.unwrap_or_default()
+    );
+    let embed = CreateEmbed::new().title("🔒 Gizlilik").description(text).colour(serenity::Colour::DARK_GREEN);
+    ctx.send(CreateReply::default().embed(embed).ephemeral(true)).await?;
+    Ok(())
+}
+
+/// Bütün sunuculardaki kendi verini (XP, ekonomi, profil, doğum günü…) kalıcı olarak siler.
+#[poise::command(slash_command, rename = "verilerimi-sil")]
+pub async fn verilerimi_sil(
+    ctx: Context<'_>,
+    #[description = "Geri alınamaz; silmek için Evet seç"] onay: Option<bool>,
+) -> Result<(), Error> {
+    if onay != Some(true) {
+        return reply_private(
+            ctx,
+            "Bu komut bütün sunuculardaki **XP ve seviyeni, ekonomi hesabını, hisselerini, başarımlarını, prestijini, itibarını, \
+             rütbe kartını, doğum gününü, çalma listelerini, haber tercihlerini ve vurgu kelimelerini** kalıcı olarak siler.\n\
+             Moderasyon kayıtları, biletler, itirazlar, başvurular ve öneriler sunucuların güvenliği için silinmez.\n\n\
+             Emin isen: `/bilgi verilerimi-sil onay:True`",
+        )
+        .await;
+    }
+    ctx.defer_ephemeral().await?;
+    let guilds = ctx.cache().guilds();
+    let rows = crate::privacy::delete_user(&ctx.data().db, &ctx.data().redis, &guilds, ctx.author().id).await?;
+    reply_private(ctx, format!("🗑️ Verin silindi ({rows} kayıt). Botu kullanmaya devam edersen yeni kayıtlar baştan oluşur.")).await
+}
+
+/// (Sunucu sahibi) Bu sunucunun bottaki bütün verisini siler ve bot sunucudan çıkar.
+#[poise::command(slash_command, guild_only, rename = "sunucu-verisini-sil")]
+pub async fn sunucu_verisini_sil(
+    ctx: Context<'_>,
+    #[description = "Geri alınamaz; silmek için Evet seç"] onay: Option<bool>,
+) -> Result<(), Error> {
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let owner = ctx.guild().map(|g| g.owner_id);
+    if owner != Some(ctx.author().id) {
+        return reply_private(ctx, "❌ Bunu yalnızca sunucunun sahibi yapabilir.").await;
+    }
+    if onay != Some(true) {
+        return reply_private(
+            ctx,
+            "Bu komut sunucunun bottaki **bütün** verisini kalıcı olarak siler: ayarlar, XP, ekonomi, moderasyon kayıtları, biletler, \
+             yedekler… Ardından bot sunucudan çıkar. Geri alınamaz.\n\nEmin isen: `/bilgi sunucu-verisini-sil onay:True`",
+        )
+        .await;
+    }
+    ctx.defer_ephemeral().await?;
+    let data = ctx.data();
+    let rows = crate::privacy::delete_guild(&data.db, &data.redis, &data.settings, guild_id).await?;
+    reply_private(ctx, format!("🗑️ Sunucu verisi silindi ({rows} kayıt). Bot şimdi sunucudan çıkıyor.")).await?;
+    guild_id.leave(ctx.http()).await?;
     Ok(())
 }

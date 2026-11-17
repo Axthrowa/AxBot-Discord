@@ -38,6 +38,11 @@ pub async fn handle(
                 crate::commands::register_guild(ctx, &framework.options.commands, guild.id).await;
             }
             data.invites.refresh(&ctx.http, guild.id).await;
+            crate::privacy::on_present(&data.redis, guild.id).await;
+        }
+        // `unavailable` = Discord kesintisi; değilse bot sunucudan çıkarıldı.
+        serenity::FullEvent::GuildDelete { incomplete, .. } if !incomplete.unavailable => {
+            crate::privacy::on_removed(&data.redis, incomplete.id).await;
         }
         serenity::FullEvent::InviteCreate { data: invite } => {
             if let Some(guild_id) = invite.guild_id {

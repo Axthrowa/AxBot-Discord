@@ -167,6 +167,11 @@ pub async fn set_afk(redis: &ConnectionManager, guild_id: GuildId, user: UserId,
     AFK.insert((guild_id, user), Afk { reason, since });
 }
 
+/// Veri silme: bellekteki AFK kaydını atar (Redis'teki kaydı çağıran siler).
+pub fn forget_afk(guild_id: GuildId, user: UserId) {
+    AFK.remove(&(guild_id, user));
+}
+
 async fn clear_afk(redis: &ConnectionManager, guild_id: GuildId, user: UserId) -> Option<i64> {
     let (_, afk) = AFK.remove(&(guild_id, user))?;
     let mut conn = redis.clone();

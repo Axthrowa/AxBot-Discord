@@ -169,6 +169,8 @@ pub const ADMIN_ONLY_PLUGINS: &[&str] = &["ayarlar", "yikim-korumasi"];
 pub fn router() -> Router<WebState> {
     Router::new()
         .route("/saglik", get(health::probe))
+        .route("/gizlilik", get(crate::privacy::page_tr))
+        .route("/privacy", get(crate::privacy::page_en))
         .route("/panel", get(pages::home))
         .route("/panel/giris/{token}", get(auth::login_page).post(auth::login))
         .route("/panel/cikis", post(auth::logout))
