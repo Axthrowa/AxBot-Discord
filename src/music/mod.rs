@@ -2,7 +2,7 @@
 //!
 //! - Ses bağlantısı: songbird (Discord'un zorunlu uçtan uca ses şifrelemesi DAVE dahil).
 //! - Kaynak çözme: `yt-dlp` (proje içindeki `tools/` klasöründen ya da PATH'ten).
-//! - Ses çözme: symphonia (saf Rust). Yalnızca ses filtresi seçiliyse ffmpeg kullanılır (`filters`).
+//! - Ses çözme: symphonia (saf Rust). ffmpeg yalnızca ses filtresinde ve HLS akışlarında (SoundCloud) kullanılır (`filters`).
 //!
 //! Şarkı bilgileri songbird'ün tip-güvensiz `TrackHandle::data` alanı yerine burada,
 //! parça UUID'si ile anahtarlanan bir tabloda tutulur.
@@ -108,7 +108,6 @@ pub struct Shared {
     guild_names: DashMap<GuildId, String>,
     /// Sunucu başına ses filtresi (`/müzik filtre`).
     filters: filters::Filters,
-    ffmpeg: &'static str,
 }
 
 /// Müzik sistemi; ucuzca klonlanır, alanlarına `Deref` ile erişilir.
@@ -224,7 +223,7 @@ impl Music {
     pub fn new(songbird: Arc<Songbird>, http: reqwest::Client) -> Self {
         let tools = Path::new("tools");
         let ytdlp = find_tool(tools, "yt-dlp").unwrap_or_else(|| "yt-dlp".to_owned());
-        let ffmpeg = find_tool(tools, "ffmpeg").unwrap_or_else(|| "ffmpeg".to_owned());
+        filters::set_ffmpeg(find_tool(tools, "ffmpeg").unwrap_or_else(|| "ffmpeg".to_owned()));
 
         // YouTube'un bot korumasını çözmek için yt-dlp bir JavaScript motoru (deno) kullanır.
         let mut ytdlp_args = Vec::new();
@@ -250,7 +249,6 @@ impl Music {
             names: DashMap::new(),
             guild_names: DashMap::new(),
             filters: Arc::new(DashMap::new()),
-            ffmpeg: Box::leak(ffmpeg.into_boxed_str()),
         }))
     }
 
@@ -357,9 +355,9 @@ impl Music {
             .into_iter()
             .map(|t| {
                 let query = format!("{} - {}", t.artists, t.title);
-                let input: Input = YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), query.clone())
-                    .user_args(self.args())
-                    .into();
+                let input = prefetch::Prefetched::lazy(
+                    YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), query.clone()).user_args(self.args()),
+                );
                 let info = TrackInfo {
                     guild_id,
                     title: query,
@@ -398,7 +396,7 @@ impl Music {
                     Some(url) => YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), url.clone()),
                     None => YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), t.title.clone()),
                 };
-                let input: Input = source.user_args(self.args()).into();
+                let input = prefetch::Prefetched::lazy(source.user_args(self.args()));
                 let info = TrackInfo { guild_id, title: t.title, url, duration: None, thumbnail: None, requester, announce: false, spotify_url: None };
                 (input, info)
             })
@@ -626,9 +624,9 @@ impl Music {
         let tracks = entries
             .into_iter()
             .map(|entry| {
-                let input: Input = YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), entry.url.clone())
-                    .user_args(self.args())
-                    .into();
+                let input = prefetch::Prefetched::lazy(
+                    YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), entry.url.clone()).user_args(self.args()),
+                );
                 let info = TrackInfo {
                     guild_id,
                     title: entry.title,
@@ -1016,7 +1014,7 @@ impl Shared {
         };
         let volume = this.volumes.get(&guild_id).map_or(DEFAULT_VOLUME, |v| *v);
         for (input, mut info) in items {
-            let input = filters::wrap(input, guild_id, &this.filters, this.ffmpeg);
+            let input = filters::wrap(input, guild_id, &this.filters);
             // Sıraya eklenenler (veya otomatik çalınanlar) başlayınca duyurulur.
             info.announce = info.announce || !handler.queue().is_empty();
             // `Call::enqueue` her parça için süreyi öğrenmek üzere yt-dlp çalıştırır (parça başına
@@ -1076,9 +1074,9 @@ impl Shared {
                 return;
             }
         };
-        let input: Input = YoutubeDl::new_ytdl_like(this.ytdlp, this.http.clone(), next.url.clone())
-            .user_args(this.args())
-            .into();
+        let input = prefetch::Prefetched::lazy(
+            YoutubeDl::new_ytdl_like(this.ytdlp, this.http.clone(), next.url.clone()).user_args(this.args()),
+        );
         let info = TrackInfo {
             guild_id,
             title: next.title,

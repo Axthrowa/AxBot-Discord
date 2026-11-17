@@ -1,12 +1,15 @@
-//! Ses filtreleri (bass boost, nightcore, 8D…): şarkı çalmaya başlarken sunucuda bir filtre seçiliyse
-//! kaynağın ham baytları ffmpeg'e verilir, ffmpeg'in çıkardığı 48 kHz stereo f32 PCM çalınır.
+//! ffmpeg aşaması: ses filtreleri (bass boost, nightcore, 8D…) ve symphonia'nın çözemediği HLS akışları (SoundCloud).
 //!
-//! Filtre şarkı BAŞLARKEN okunur: seçim çalan şarkıyı değiştirmez, sıradaki şarkıdan itibaren geçerlidir.
-//! Filtreli şarkıda ileri/geri sarma çalışmaz (ffmpeg çıkışı geri sarılamaz).
+//! - Filtre şarkı BAŞLARKEN okunur: seçim çalan şarkıyı değiştirmez, sıradaki şarkıdan itibaren geçerlidir.
+//!   Seçiliyse kaynağın baytları ffmpeg'e verilir, ffmpeg'in çıkardığı 48 kHz stereo f32 PCM çalınır.
+//!   Filtreli şarkıda ileri/geri sarma çalışmaz (ffmpeg çıkışı geri sarılamaz).
+//! - HLS akışı (`open_url`): ffmpeg adresi kendisi okur (parçalı MP4'ün başlangıç parçası dahil) ve PCM verir.
+//!   Bu PCM'e filtre gerekirse songbird başlığı atılıp ham PCM olarak ikinci ffmpeg'e verilir.
 
-use std::io::Write;
+use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -44,30 +47,59 @@ impl Filter {
 /// Sunucu başına seçili filtre (bellekte; bot yeniden başlayınca kapanır).
 pub type Filters = Arc<DashMap<GuildId, Filter>>;
 
-/// Bir kaynağı sarar; çalmaya başlarken sunucunun filtresine bakar.
-pub struct Filtered {
-    inner: Box<dyn Compose>,
-    guild: GuildId,
-    filters: Filters,
-    ffmpeg: &'static str,
+static FFMPEG: OnceLock<String> = OnceLock::new();
+
+/// ffmpeg programının yolu (açılışta `Music::new` belirler; belirlenmediyse PATH'teki `ffmpeg`).
+pub fn set_ffmpeg(path: String) {
+    let _ = FFMPEG.set(path);
 }
 
-/// Tembel (henüz açılmamış) kaynakları filtre katmanıyla sarar; diğerlerine dokunmaz.
-pub fn wrap(input: Input, guild: GuildId, filters: &Filters, ffmpeg: &'static str) -> Input {
-    match input {
-        Input::Lazy(inner) => Input::Lazy(Box::new(Filtered { inner, guild, filters: Arc::clone(filters), ffmpeg })),
-        other => other,
-    }
+fn ffmpeg() -> &'static str {
+    FFMPEG.get().map_or("ffmpeg", String::as_str)
 }
 
-fn through_ffmpeg(ffmpeg: &str, chain: &str, source: Box<dyn MediaSource>) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-    let mut child = Command::new(ffmpeg)
-        .args(["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-af", chain, "-f", "f32le", "-ac", "2", "-ar", "48000", "pipe:1"])
-        .stdin(Stdio::piped())
+/// songbird'ün ham PCM başlığı (`RawAdapter`): imza + örnek hızı + kanal sayısı.
+const RAW_MAGIC: &[u8; 8] = b"SbirdRaw";
+const RAW_HEADER_LEN: usize = 16;
+const PCM_OUT: [&str; 7] = ["-f", "f32le", "-ac", "2", "-ar", "48000", "pipe:1"];
+
+fn spawn(args: &[&str], stdin: Stdio) -> Result<std::process::Child, AudioStreamError> {
+    Command::new(ffmpeg())
+        .args(["-hide_banner", "-loglevel", "error"])
+        .args(args)
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| AudioStreamError::Fail(format!("ffmpeg çalıştırılamadı: {e}").into()))?;
+        .map_err(|e| AudioStreamError::Fail(format!("ffmpeg çalıştırılamadı: {e}").into()))
+}
+
+fn pcm_stream(child: std::process::Child) -> AudioStream<Box<dyn MediaSource>> {
+    let pcm = ReadOnlySource::new(ChildContainer::from(child));
+    AudioStream { input: Box::new(RawAdapter::new(pcm, 48_000, 2)) as Box<dyn MediaSource> }
+}
+
+/// HLS (m3u8) adresini ffmpeg ile açar. Engelleyici; `spawn_blocking` içinde çağrılmalı.
+pub fn open_url(url: &str, headers: &HashMap<String, String>) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+    let headers: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
+    let mut args = Vec::new();
+    if !headers.is_empty() {
+        args.extend(["-headers", headers.as_str()]);
+    }
+    args.extend(["-i", url, "-vn"]);
+    args.extend(PCM_OUT);
+    Ok(pcm_stream(spawn(&args, Stdio::null())?))
+}
+
+/// Kaynağı filtre zincirinden geçirir. `raw_pcm`: kaynak başlıksız 48 kHz stereo f32 PCM.
+fn through_ffmpeg(chain: &str, source: Box<dyn MediaSource>, raw_pcm: bool) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+    let mut args = Vec::new();
+    if raw_pcm {
+        args.extend(["-f", "f32le", "-ar", "48000", "-ac", "2"]);
+    }
+    args.extend(["-i", "pipe:0", "-af", chain]);
+    args.extend(PCM_OUT);
+    let mut child = spawn(&args, Stdio::piped())?;
     let Some(mut stdin) = child.stdin.take() else {
         return Err(AudioStreamError::Fail("ffmpeg girişi açılamadı".into()));
     };
@@ -77,20 +109,73 @@ fn through_ffmpeg(ffmpeg: &str, chain: &str, source: Box<dyn MediaSource>) -> Re
         let _ = std::io::copy(&mut source, &mut stdin);
         let _ = stdin.flush();
     });
-    let pcm = ReadOnlySource::new(ChildContainer::from(child));
-    Ok(AudioStream { input: Box::new(RawAdapter::new(pcm, 48_000, 2)) as Box<dyn MediaSource> })
+    Ok(pcm_stream(child))
+}
+
+/// Filtre seçiliyse akışı ffmpeg'den geçirir. Engelleyici okuma yapabilir.
+fn prepare(stream: AudioStream<Box<dyn MediaSource>>, chain: Option<&str>) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+    let Some(chain) = chain else { return Ok(stream) };
+    if stream.input.is_seekable() {
+        return through_ffmpeg(chain, stream.input, false);
+    }
+    // Geri sarılamayan akış `open_url`'nin PCM'i olabilir: başlığına bakılır.
+    let mut source = stream.input;
+    let mut head = Vec::with_capacity(RAW_HEADER_LEN);
+    while head.len() < RAW_HEADER_LEN {
+        let mut buf = [0u8; RAW_HEADER_LEN];
+        match source.read(&mut buf[..RAW_HEADER_LEN - head.len()]) {
+            Ok(0) => break,
+            Ok(n) => head.extend_from_slice(&buf[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(AudioStreamError::Fail(e.into())),
+        }
+    }
+    if head.starts_with(RAW_MAGIC) && head.len() == RAW_HEADER_LEN {
+        return through_ffmpeg(chain, source, true);
+    }
+    // Okunan baytlar akışın önüne geri eklenir.
+    let joined: Box<dyn MediaSource> = Box::new(ReadOnlySource::new(std::io::Cursor::new(head).chain(source)));
+    through_ffmpeg(chain, joined, false)
+}
+
+/// Bir kaynağı sarar; çalmaya başlarken sunucunun filtresine bakar.
+pub struct Filtered {
+    inner: Box<dyn Compose>,
+    guild: GuildId,
+    filters: Filters,
+}
+
+/// Tembel (henüz açılmamış) kaynakları filtre katmanıyla sarar; diğerlerine dokunmaz.
+pub fn wrap(input: Input, guild: GuildId, filters: &Filters) -> Input {
+    match input {
+        Input::Lazy(inner) => Input::Lazy(Box::new(Filtered { inner, guild, filters: Arc::clone(filters) })),
+        other => other,
+    }
+}
+
+impl Filtered {
+    fn chain(&self) -> Option<&'static str> {
+        self.filters.get(&self.guild).and_then(|f| f.chain())
+    }
 }
 
 #[async_trait]
 impl Compose for Filtered {
     fn create(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
         let stream = self.inner.create()?;
-        self.apply(stream)
+        prepare(stream, self.chain())
     }
 
     async fn create_async(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
         let stream = self.inner.create_async().await?;
-        self.apply(stream)
+        let chain = self.chain();
+        if chain.is_none() {
+            return Ok(stream);
+        }
+        // Başlığı okumak (ağ beklemesi) çalışma zamanını bloklamasın.
+        tokio::task::spawn_blocking(move || prepare(stream, chain))
+            .await
+            .map_err(|e| AudioStreamError::Fail(e.into()))?
     }
 
     fn should_create_async(&self) -> bool {
@@ -102,26 +187,12 @@ impl Compose for Filtered {
     }
 }
 
-impl Filtered {
-    fn apply(&self, stream: AudioStream<Box<dyn MediaSource>>) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-        let filter = self.filters.get(&self.guild).map_or(Filter::Off, |f| *f);
-        match filter.chain() {
-            Some(chain) => through_ffmpeg(self.ffmpeg, chain, stream.input),
-            None => Ok(stream),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Gerçek ffmpeg ile: 1 sn'lik WAV sesi her filtreden geçer ve PCM çıkar.
-    #[tokio::test]
-    #[ignore = "ffmpeg gerektirir"]
-    async fn live_ffmpeg_filters_produce_pcm() -> Result<(), String> {
-        use std::io::Read;
-        // 48 kHz mono 16 bit 1 sn sessiz WAV.
+    /// 48 kHz mono 16 bit 1 sn sessiz WAV.
+    fn silent_wav() -> Vec<u8> {
         let samples = 48_000u32;
         let mut wav = Vec::new();
         wav.extend(b"RIFF");
@@ -137,37 +208,81 @@ mod tests {
         wav.extend(b"data");
         wav.extend((samples * 2).to_le_bytes());
         wav.resize(wav.len() + (samples * 2) as usize, 0);
-        for filter in [Filter::Bass, Filter::Nightcore, Filter::Vaporwave, Filter::EightD] {
-            let chain = filter.chain().ok_or("zincir yok")?;
-            let source: Box<dyn MediaSource> = Box::new(ReadOnlySource::new(std::io::Cursor::new(wav.clone())));
-            let mut stream = through_ffmpeg("ffmpeg", chain, source).map_err(|e| e.to_string())?;
-            let mut out = Vec::new();
-            stream.input.read_to_end(&mut out).map_err(|e| e.to_string())?;
-            assert!(out.len() > 100_000, "{filter:?}: {} bayt", out.len());
-        }
+        wav
+    }
 
-        // Asıl yol: sarılmış kaynak songbird'ün çözücüsünden geçebiliyor mu?
-        struct Wav(Vec<u8>);
-        #[async_trait]
-        impl Compose for Wav {
-            fn create(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-                Ok(AudioStream { input: Box::new(std::io::Cursor::new(self.0.clone())) as Box<dyn MediaSource> })
-            }
-            async fn create_async(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-                self.create()
-            }
-            fn should_create_async(&self) -> bool {
-                false
+    struct Bytes(Vec<u8>, bool);
+    #[async_trait]
+    impl Compose for Bytes {
+        fn create(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+            let input: Box<dyn MediaSource> = if self.1 {
+                Box::new(std::io::Cursor::new(self.0.clone()))
+            } else {
+                Box::new(ReadOnlySource::new(std::io::Cursor::new(self.0.clone())))
+            };
+            Ok(AudioStream { input })
+        }
+        async fn create_async(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+            self.create()
+        }
+        fn should_create_async(&self) -> bool {
+            false
+        }
+    }
+
+    async fn decoded_packets(input: Input) -> anyhow::Result<usize> {
+        let input = input.make_playable_async(songbird::input::codecs::get_codec_registry(), songbird::input::codecs::get_probe()).await?;
+        let Input::Live(songbird::input::LiveInput::Parsed(mut parsed), _) = input else {
+            anyhow::bail!("çözülemedi");
+        };
+        let mut decoded = 0;
+        while decoded < 40 {
+            let Ok(packet) = parsed.format.next_packet() else { break };
+            if packet.track_id() == parsed.track_id {
+                parsed.decoder.decode(&packet)?;
+                decoded += 1;
             }
         }
-        let filters: Filters = Arc::new(DashMap::new());
-        filters.insert(GuildId::new(1), Filter::Nightcore);
-        let input = wrap(Input::Lazy(Box::new(Wav(wav))), GuildId::new(1), &filters, "ffmpeg");
-        let playable = input
-            .make_playable_async(songbird::input::codecs::get_codec_registry(), songbird::input::codecs::get_probe())
-            .await
-            .map_err(|e| e.to_string())?;
-        assert!(playable.is_playable());
+        Ok(decoded)
+    }
+
+    /// Gerçek ffmpeg ile: her filtre (geri sarılabilen, sarılamayan ve ham PCM kaynakta) çözülebilir ses verir.
+    #[tokio::test]
+    #[ignore = "ffmpeg gerektirir"]
+    async fn live_ffmpeg_filters_produce_pcm() -> anyhow::Result<()> {
+        let wav = silent_wav();
+        // songbird ham PCM'i: başlık + 0,5 sn sessizlik.
+        let mut raw = Vec::new();
+        RawAdapter::new(ReadOnlySource::new(std::io::Cursor::new(vec![0u8; 48_000 * 8 / 2])), 48_000, 2).read_to_end(&mut raw)?;
+        for filter in [Filter::Bass, Filter::Nightcore, Filter::Vaporwave, Filter::EightD] {
+            for (bytes, seekable) in [(wav.clone(), true), (wav.clone(), false), (raw.clone(), false)] {
+                let filters: Filters = Arc::new(DashMap::new());
+                filters.insert(GuildId::new(1), filter);
+                let input = wrap(Input::Lazy(Box::new(Bytes(bytes, seekable))), GuildId::new(1), &filters);
+                let n = decoded_packets(input).await?;
+                anyhow::ensure!(n > 5, "{filter:?} seekable={seekable}: {n} paket");
+            }
+        }
+        Ok(())
+    }
+
+    /// Gerçek SoundCloud şarkısı (HLS) çalınabilir hâle geliyor, filtreli ve filtresiz ses paketleri çözülüyor.
+    #[tokio::test]
+    #[ignore = "gerçek yt-dlp, ffmpeg ve SoundCloud'a istek atar"]
+    async fn live_soundcloud_plays() -> anyhow::Result<()> {
+        use poise::serenity_prelude::UserId;
+        let music = super::super::Music::new(songbird::Songbird::serenity(), reqwest::Client::new());
+        for filter in [Filter::Off, Filter::Nightcore] {
+            let (input, info) = music
+                .resolve("https://soundcloud.com/forss/flickermood", UserId::new(1), GuildId::new(1))
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{} {:?} {filter:?}", info.title, info.duration);
+            let filters: Filters = Arc::new(DashMap::new());
+            filters.insert(GuildId::new(1), filter);
+            let n = decoded_packets(wrap(input, GuildId::new(1), &filters)).await?;
+            anyhow::ensure!(n >= 40, "{filter:?}: yalnızca {n} paket");
+        }
         Ok(())
     }
 }
