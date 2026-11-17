@@ -199,6 +199,12 @@ pub async fn layout(state: &WebState, session: &Session, nav: Nav, guild: Option
         );
         let _ = write!(
             aside,
+            "<a class=\"nav sm{}\" href=\"/panel/sunucu/{}/kurulum\">🧭 Kurulum sihirbazı</a>",
+            if guild.active == "kurulum" { " on" } else { "" },
+            guild.id
+        );
+        let _ = write!(
+            aside,
             "<a class=\"nav sm{}\" href=\"/panel/sunucu/{}/siralama\">📊 Sıralama</a>",
             if guild.active == "siralama" { " on" } else { "" },
             guild.id

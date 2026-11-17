@@ -376,7 +376,7 @@ impl Extra {
     }
 }
 
-fn is_enabled(slug: &str, cfg: &GuildConfig, extra: Extra) -> bool {
+pub(super) fn is_enabled(slug: &str, cfg: &GuildConfig, extra: Extra) -> bool {
     match slug {
         "seviye" => extra.levels,
         "moderasyon" => extra.moderation,

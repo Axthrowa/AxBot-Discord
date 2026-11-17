@@ -22,6 +22,7 @@ mod moderation;
 mod pages;
 mod plugins;
 mod welcome;
+mod wizard;
 
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -184,6 +185,7 @@ pub fn router() -> Router<WebState> {
         .route("/panel/sistem/durum", post(botpage::presence_save))
         .route("/panel/sunucu/{guild}/istatistik", get(botpage::stats))
         .route("/panel/sunucu/{guild}/saglik", get(health::page))
+        .route("/panel/sunucu/{guild}/kurulum", get(wizard::page))
         .route("/panel/panel.js", get(pages::script))
 }
 
