@@ -121,6 +121,14 @@ pub async fn fields(state: &WebState, guild_id: GuildId, options: &Options) -> a
     }
     rates.push_str("</select>");
     out.push_str(&section("TP oranı", field("Kazanılan XP çarpanı", &rates, "Seviye atlamayı zorlaştırmak ya da kolaylaştırmak için.")));
+    out.push_str(&section(
+        "Prestij",
+        field(
+            "Prestij seviyesi",
+            &format!("<input type=\"number\" name=\"prestige_level\" value=\"{}\" min=\"0\" max=\"500\">", settings.prestige_level),
+            "Bu seviyeye ulaşan üye /seviye prestij ile XP'sini sıfırlar ve bir prestij yıldızı kazanır. 0 = kapalı.",
+        ),
+    ));
 
     // Role göre ek XP.
     let mut boosts = String::new();
@@ -230,6 +238,8 @@ pub async fn save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Res
         roles_allow_only: mode("roles_mode")?,
         channels_allow_only: mode("channels_mode")?,
         public_leaderboard: input.checked("public_leaderboard"),
+        // Eski formlarda alan yoktur: kapalı sayılır.
+        prestige_level: if input.raw("prestige_level").is_empty() { 0 } else { input.number("prestige_level", 0, 500)? },
     };
 
     let mut channel_items = input.options.channels.clone();

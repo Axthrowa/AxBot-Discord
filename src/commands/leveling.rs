@@ -47,10 +47,15 @@ pub async fn seviye(
         }
     };
     let (avatar, backdrop) = tokio::join!(crate::members::avatar_image(&user), backdrop);
+    let prestige = prestige_of(&data.db, guild_id, user.id).await.unwrap_or(0);
     let drawn = tokio::task::spawn_blocking(move || crate::cards::render_rank(&card, avatar.as_ref(), backdrop.as_ref())).await;
     if let Ok(Ok(bytes)) = drawn {
         let file = serenity::CreateAttachment::bytes(bytes, "seviye.jpg");
-        ctx.send(CreateReply::default().attachment(file)).await?;
+        let mut reply = CreateReply::default().attachment(file);
+        if prestige > 0 {
+            reply = reply.content(format!("⭐ Prestij {prestige}"));
+        }
+        ctx.send(reply).await?;
         return Ok(());
     }
 
@@ -63,6 +68,7 @@ pub async fn seviye(
         .field("Seviye", format!("**{}**", progress.level), true)
         .field("Sıra", position, true)
         .field("Toplam XP", rank.total_xp.to_string(), true)
+        .field("Prestij", format!("⭐ {prestige}"), true)
         .field(
             format!("İlerleme ({} / {} XP)", progress.current, progress.needed),
             formula::bar(progress, 16),
@@ -352,9 +358,15 @@ async fn change_xp(ctx: Context<'_>, user: serenity::User, delta: i64) -> Result
     if user.bot {
         return reply(ctx, "Botların XP'si olmaz.".to_owned()).await;
     }
+    ctx.defer_ephemeral().await?;
+    let text = apply_xp_change(ctx, &user, delta).await?;
+    reply(ctx, text).await
+}
+
+/// `change_xp` ve prestijin ortak kısmı: XP'yi değiştirir, ödül rollerini ayarlar, sonucu anlatan metni döner.
+async fn apply_xp_change(ctx: Context<'_>, user: &serenity::User, delta: i64) -> Result<String, Error> {
     let guild_id = guild_id(ctx)?;
     let data = ctx.data();
-    ctx.defer_ephemeral().await?;
 
     let (old_xp, new_xp) = data.leveling.add_xp(&data.db, &data.redis, guild_id, user.id, delta).await?;
     let (old, new) = (formula::level(old_xp), formula::level(new_xp));
@@ -391,7 +403,57 @@ async fn change_xp(ctx: Context<'_>, user: serenity::User, delta: i64) -> Result
     if !notes.is_empty() {
         text.push_str(&format!("\nÖdül rolleri: {}", notes.join(", ")));
     }
-    reply(ctx, text).await
+    Ok(text)
+}
+
+/// Üyenin prestij sayısı.
+async fn prestige_of(db: &sqlx::PgPool, guild_id: GuildId, user: serenity::UserId) -> anyhow::Result<i32> {
+    let count: Option<i32> = sqlx::query_scalar("SELECT prestige FROM member_prestige WHERE guild_id = $1 AND user_id = $2")
+        .bind(crate::db::snowflake(guild_id.get())?)
+        .bind(crate::db::snowflake(user.get())?)
+        .fetch_optional(db)
+        .await?;
+    Ok(count.unwrap_or(0))
+}
+
+/// Prestij seviyesine ulaştıysan XP'ni sıfırlayıp bir prestij yıldızı kazanırsın.
+#[poise::command(slash_command, guild_only, rename = "prestij", user_cooldown = 10, category = "Seviye")]
+pub async fn prestij(
+    ctx: Context<'_>,
+    #[description = "Evet: XP'm sıfırlansın (geri alınamaz). Boşsa yalnızca durumu gösterir."] onay: Option<bool>,
+) -> Result<(), Error> {
+    let guild_id = guild_id(ctx)?;
+    let data = ctx.data();
+    let settings = data.settings.get::<LevelSettings>(&data.db, guild_id).await?;
+    if settings.prestige_level == 0 {
+        return reply(ctx, "Bu sunucuda prestij kapalı (yöneticiler panelin Seviye sayfasından açabilir).".to_owned()).await;
+    }
+    let user = ctx.author().clone();
+    let rank = data.leveling.rank(&data.db, &data.redis, guild_id, user.id).await?;
+    let level = formula::progress(rank.total_xp).level;
+    let current = prestige_of(&data.db, guild_id, user.id).await?;
+    if level < settings.prestige_level {
+        return reply(ctx, format!("Prestij için **{}**. seviye gerekli; sen {level}. seviyedesin. Şu anki prestijin: ⭐ {current}.", settings.prestige_level)).await;
+    }
+    if onay != Some(true) {
+        return reply(
+            ctx,
+            format!("Prestij yapabilirsin: XP'n (**{}**) sıfırlanır, prestijin ⭐ {current} → ⭐ {}. Onaylamak için `/seviye prestij onay:True`.", rank.total_xp, current + 1),
+        )
+        .await;
+    }
+    ctx.defer_ephemeral().await?;
+    let delta = -i64::try_from(rank.total_xp)?;
+    let text = apply_xp_change(ctx, &user, delta).await?;
+    let new: i32 = sqlx::query_scalar(
+        "INSERT INTO member_prestige (guild_id, user_id, prestige) VALUES ($1, $2, 1) \
+         ON CONFLICT (guild_id, user_id) DO UPDATE SET prestige = member_prestige.prestige + 1 RETURNING prestige",
+    )
+    .bind(crate::db::snowflake(guild_id.get())?)
+    .bind(crate::db::snowflake(user.id.get())?)
+    .fetch_one(&data.db)
+    .await?;
+    reply(ctx, format!("🌟 Prestij yaptın! Artık ⭐ {new}.\n{text}")).await
 }
 
 /// Bir üyenin kazandığı başarımları ve ilerlemesini gösterir.
@@ -452,7 +514,7 @@ pub async fn basarimlar(
     slash_command,
     guild_only,
     rename = "seviye",
-    subcommands("seviye", "siralama", "basarimlar", "seviye_odul", "xp_muaf", "xp"),
+    subcommands("seviye", "siralama", "basarimlar", "prestij", "seviye_odul", "xp_muaf", "xp"),
     subcommand_required,
     category = "Seviye"
 )]

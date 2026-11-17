@@ -73,6 +73,8 @@ pub struct LevelSettings {
     pub public_leaderboard: bool,
     /// Role göre ek XP (ör. takviyecilere 2 kat).
     pub role_boosts: Vec<RoleBoost>,
+    /// Bu seviyeye ulaşan üye `/seviye prestij` ile XP'sini sıfırlayıp prestij kazanabilir (0 = kapalı).
+    pub prestige_level: u32,
 }
 
 impl Default for LevelSettings {
@@ -89,6 +91,7 @@ impl Default for LevelSettings {
             channels_allow_only: false,
             public_leaderboard: false,
             role_boosts: Vec::new(),
+            prestige_level: 0,
         }
     }
 }
