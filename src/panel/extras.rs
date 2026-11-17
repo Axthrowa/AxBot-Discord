@@ -253,10 +253,11 @@ pub async fn command_fields(state: &WebState, guild_id: GuildId, options: &Optio
             if command.cooldown_secs > 0 {
                 traits.push(format!("{} sn bekleme", command.cooldown_secs));
             }
+            let trigger = if command.pattern.is_empty() { format!("!{}", command.name) } else { format!("{} → /{}/", command.name, command.pattern) };
             let _ = write!(
                 list,
-                "<tr><td><code>!{}</code></td><td>{}</td><td>{}</td><td><input type=\"checkbox\" name=\"cmd_del\" value=\"{}\"></td></tr>",
-                escape(&command.name),
+                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td><input type=\"checkbox\" name=\"cmd_del\" value=\"{}\"></td></tr>",
+                escape(&trigger),
                 escape(&preview(&command.response, 80)),
                 escape(&traits.join(", ")),
                 escape(&command.name)
@@ -271,7 +272,15 @@ pub async fn command_fields(state: &WebState, guild_id: GuildId, options: &Optio
             + &field(
                 "Cevap",
                 &big_textarea("cmd_response", "", customcmd::MAX_RESPONSE, 5, "Komut yazılınca gönderilecek metin"),
-                "Değişkenler: <code>{kullanıcı}</code> (etiket), <code>{isim}</code>, <code>{sunucu}</code>, <code>{kanal}</code>.",
+                "Değişkenler: <code>{kullanıcı}</code> (etiket), <code>{isim}</code>, <code>{kimlik}</code>, <code>{sunucu}</code>, <code>{kanal}</code>, \
+                 <code>{üye_sayısı}</code>, <code>{argümanlar}</code> (komuttan sonra yazılanlar), <code>{1}</code>…<code>{9}</code> (tek tek kelimeler ya da \
+                 regex grupları), <code>{rastgele:a|b|c}</code> (biri rastgele seçilir).",
+            )
+            + &field(
+                "Düzenli ifade (regex, isteğe bağlı)",
+                &text_input("cmd_pattern", "", "^merhaba (\\w+)", customcmd::MAX_PATTERN),
+                "Doluysa komut <code>!ad</code> ile değil, bu kalıba uyan HER mesajda çalışır (büyük/küçük harf önemsiz). Parantezle yakalanan \
+                 parçalar <code>{1}</code>, <code>{2}</code>… olur. Sık eşleşen kalıba bekleme süresi ver.",
             )
             + &checkbox("cmd_embed", false, "Cevabı gömülü mesaj olarak gönder")
             + &checkbox("cmd_dm", false, "Cevabı kanala değil, komutu yazana özelden gönder")
@@ -311,6 +320,10 @@ fn parse_command(input: &Input<'_>) -> Result<Option<Command>, &'static str> {
         remove_roles: input.ids("cmd_remove_role", &input.options.roles, "rol")?,
         required_roles: input.ids("cmd_required_role", &input.options.all_roles, "rol")?,
         channels: input.ids("cmd_channel", &input.options.channels, "kanal")?,
+        pattern: match input.raw("cmd_pattern").trim() {
+            "" => String::new(),
+            p => customcmd::compile(p).map(|_| p.to_owned()).ok_or("regex")?,
+        },
     }))
 }
 

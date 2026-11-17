@@ -665,6 +665,7 @@ fn flash(code: Option<&str>) -> &'static str {
         Some("metin") => "<div class=\"flash err\">❌ Mesaj en fazla 1500 karakter olabilir.</div>",
         Some("sayi") => "<div class=\"flash err\">❌ Sayı izin verilen aralıkta değil.</div>",
         Some("ice") => "<div class=\"flash err\">❌ İçe aktarılan dosya okunamadı: AxBot'un ayar dosyası değil ya da içinde geçersiz bir ayar var. Hiçbir şey değiştirilmedi.</div>",
+        Some("regex") => "<div class=\"flash err\">❌ Düzenli ifade (regex) geçersiz ya da çok uzun (en fazla 200 karakter).</div>",
         Some("ters") => "<div class=\"flash err\">❌ Ters davranış yalnızca emoji tepkili menülerde kullanılabilir.</div>",
         Some("kisayol") => "<div class=\"flash err\">❌ Sebep kısayolları \"kısa = tam metin\" biçiminde olmalı (kısa ad en fazla 20, metin 512 karakter, en fazla 25 satır).</div>",
         Some("emoji") => "<div class=\"flash err\">❌ Emoji geçersiz ya da eksik. Tepki türünde her rol için bir emoji gerekir; sunucu emojisi &lt;:ad:kimlik&gt; biçiminde olmalı.</div>",
