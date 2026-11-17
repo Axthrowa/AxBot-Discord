@@ -97,39 +97,84 @@ pub async fn message_deleted(
         return;
     }
     let cached: Option<Message> = ctx.cache.message(channel_id, message_id).map(|m| m.clone());
+    // Önbellekte yoksa (bot yeniden başladıysa) Redis'teki kısa ömürlü kopyaya bakılır.
+    let saved = match cached {
+        Some(msg) => {
+            if log.skips_bot(&msg.author) {
+                return;
+            }
+            Some((user_line(&msg.author), msg.author.id.get(), msg.content, msg.attachments.into_iter().map(|a| a.filename).collect()))
+        }
+        None => recall(data, channel_id, message_id).await.map(|r| (format!("<@{}> ({})", r.author_id, r.author), r.author_id, r.content, r.files)),
+    };
 
     let mut embed = CreateEmbed::new()
         .title("🗑️ Mesaj silindi")
         .colour(serenity::Colour::from_rgb(237, 66, 69))
         .field("Kanal", channel_id.mention().to_string(), true);
 
-    match cached {
-        Some(msg) => {
-            if log.skips_bot(&msg.author) {
-                return;
-            }
+    match saved {
+        Some((author, author_id, content, files)) => {
             embed = embed
-                .field("Yazar", user_line(&msg.author), true)
-                .field("İçerik", quote(&msg.content), false)
-                .footer(CreateEmbedFooter::new(format!("Kullanıcı ID: {} • Mesaj ID: {message_id}", msg.author.id)));
-            if !msg.attachments.is_empty() {
-                let files = msg
-                    .attachments
-                    .iter()
-                    .map(|a| a.filename.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                embed = embed.field("Ekler", truncate(&files), false);
+                .field("Yazar", author, true)
+                .field("İçerik", quote(&content), false)
+                .footer(CreateEmbedFooter::new(format!("Kullanıcı ID: {author_id} • Mesaj ID: {message_id}")));
+            if !files.is_empty() {
+                embed = embed.field("Ekler", truncate(&files.join(", ")), false);
             }
         }
         None => {
-            // Bot açılmadan önce gönderilmiş mesaj; içerik bilinmiyor.
+            // Bot açılmadan önce ya da saklama süresinden önce gönderilmiş mesaj; içerik bilinmiyor.
             embed = embed
-                .field("İçerik", "_Mesaj önbellekte değildi (bot açılmadan önce gönderilmiş)._", false)
+                .field("İçerik", "_Mesajın içeriği bilinmiyor (bot açılmadan ya da 6 saatten önce gönderilmiş)._", false)
                 .footer(CreateEmbedFooter::new(format!("Mesaj ID: {message_id}")));
         }
     }
     send(ctx, log.channel, embed).await;
+}
+
+/// Silinen mesaj kaydı için Redis'te tutulan kopyanın ömrü.
+const REMEMBER_SECS: u64 = 6 * 3600;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Remembered {
+    author_id: u64,
+    author: String,
+    content: String,
+    files: Vec<String>,
+}
+
+fn remembered_key(channel: ChannelId, message: MessageId) -> String {
+    format!("silinen:{channel}:{message}")
+}
+
+/// Kayıt kanalı ve "mesaj silindi" olayı açıksa mesajın kopyası 6 saat Redis'te tutulur; bot yeniden başlasa
+/// da silinen mesajın içeriği yazılabilir (bellek önbelleği yeniden başlatmada boşalır).
+pub async fn remember(data: &Data, guild_id: GuildId, msg: &Message) {
+    let Some(log) = target(data, guild_id, "message_delete").await else { return };
+    if log.settings.log.ignores(msg.channel_id.get()) {
+        return;
+    }
+    let copy = Remembered {
+        author_id: msg.author.id.get(),
+        author: msg.author.tag(),
+        content: msg.content.chars().take(FIELD_MAX).collect(),
+        files: msg.attachments.iter().map(|a| a.filename.clone()).collect(),
+    };
+    let Ok(json) = serde_json::to_string(&copy) else { return };
+    let mut conn = data.redis.clone();
+    let saved: redis::RedisResult<()> =
+        redis::cmd("SET").arg(remembered_key(msg.channel_id, msg.id)).arg(json).arg("EX").arg(REMEMBER_SECS).query_async(&mut conn).await;
+    if let Err(e) = saved {
+        tracing::debug!(error = %e, "Mesaj kopyası Redis'e yazılamadı");
+    }
+}
+
+/// Redis'teki kopyayı okur ve siler (bir kez yazılır).
+async fn recall(data: &Data, channel: ChannelId, message: MessageId) -> Option<Remembered> {
+    let mut conn = data.redis.clone();
+    let raw: Option<String> = redis::cmd("GETDEL").arg(remembered_key(channel, message)).query_async(&mut conn).await.ok()?;
+    serde_json::from_str(&raw?).ok()
 }
 
 pub async fn messages_bulk_deleted(
@@ -303,8 +348,23 @@ pub async fn voice_changed(ctx: &serenity::Context, data: &Data, old: Option<&Vo
         (Some(from), Some(to)) if from != to => {
             format!("{} → {} kanalından {} kanalına geçti", new.user_id.mention(), from.mention(), to.mention())
         }
-        // Susturma/sağırlaştırma gibi değişiklikler loglanmaz.
-        _ => return,
+        // Aynı kanalda kalan üyede yalnızca yetkilinin sesi kapatması / sağırlaştırması yazılır.
+        _ => {
+            if let Some(old) = old {
+                let mut changes = Vec::new();
+                if old.mute != new.mute {
+                    changes.push(if new.mute { "sesi yetkilice kapatıldı" } else { "sesi yetkilice açıldı" });
+                }
+                if old.deaf != new.deaf {
+                    changes.push(if new.deaf { "yetkilice sağırlaştırıldı" } else { "sağırlaştırması kaldırıldı" });
+                }
+                if !changes.is_empty() {
+                    let text = format!("{}: {}", new.user_id.mention(), changes.join(", "));
+                    note(ctx, data, guild_id, "voice_mod", "🔇 Ses yetkisi", text, serenity::Colour::from_rgb(88, 101, 242)).await;
+                }
+            }
+            return;
+        }
     };
     let Some(log) = target(data, guild_id, "voice").await else { return };
     if new.member.as_ref().is_some_and(|m| log.skips_bot(&m.user)) {
@@ -490,6 +550,65 @@ pub async fn emojis_updated(ctx: &serenity::Context, data: &Data, guild_id: Guil
         serenity::Colour::BLURPLE,
     )
     .await;
+}
+
+pub async fn stickers_updated(ctx: &serenity::Context, data: &Data, guild_id: GuildId, count: usize) {
+    let text = format!("Sunucuda artık **{count}** çıkartma var.");
+    note(ctx, data, guild_id, "sticker_update", "🖼️ Çıkartmalar güncellendi", text, serenity::Colour::BLURPLE).await;
+}
+
+pub async fn webhooks_changed(ctx: &serenity::Context, data: &Data, guild_id: GuildId, channel: ChannelId) {
+    let text = format!("{} kanalının webhook'ları değişti (eklendi, düzenlendi ya da silindi).", channel.mention());
+    note(ctx, data, guild_id, "webhook_update", "🪝 Webhook değişti", text, serenity::Colour::ORANGE).await;
+}
+
+/// Davet oluşturuldu (`inviter` biliniyorsa) ya da silindi.
+pub async fn invite_changed(ctx: &serenity::Context, data: &Data, guild_id: GuildId, code: &str, channel: ChannelId, inviter: Option<&User>, created: bool) {
+    let Some(log) = target(data, guild_id, "invite_create").await else { return };
+    if inviter.is_some_and(|u| log.skips_bot(u)) {
+        return;
+    }
+    let mut text = format!("`{code}` → {}", channel.mention());
+    if let Some(user) = inviter {
+        text.push_str(&format!("\nOluşturan: {}", user_line(user)));
+    }
+    let (title, colour) = if created { ("✉️ Davet oluşturuldu", GREEN) } else { ("✉️ Davet silindi", RED) };
+    send(ctx, log.channel, CreateEmbed::new().title(title).description(text).colour(colour)).await;
+}
+
+/// Alt başlık açıldı ya da silindi.
+pub async fn thread_changed(ctx: &serenity::Context, data: &Data, guild_id: GuildId, name: Option<&str>, thread: ChannelId, parent: Option<ChannelId>, created: bool) {
+    let mut text = match (created, name) {
+        (true, _) => thread.mention().to_string(),
+        (false, Some(name)) => format!("`{name}`"),
+        (false, None) => format!("ID {thread}"),
+    };
+    if let Some(parent) = parent {
+        text.push_str(&format!(" ({} içinde)", parent.mention()));
+    }
+    let (title, colour) = if created { ("🧵 Alt başlık açıldı", GREEN) } else { ("🧵 Alt başlık silindi", RED) };
+    note(ctx, data, guild_id, "thread_create", title, text, colour).await;
+}
+
+pub async fn thread_updated(ctx: &serenity::Context, data: &Data, old: Option<&GuildChannel>, new: &GuildChannel) {
+    let Some(old) = old else { return };
+    let mut changes = Vec::new();
+    if old.name != new.name {
+        changes.push(format!("**Ad:** `{}` → `{}`", old.name, new.name));
+    }
+    let flags = |c: &GuildChannel| c.thread_metadata.map(|m| (m.archived, m.locked)).unwrap_or_default();
+    let ((old_archived, old_locked), (archived, locked)) = (flags(old), flags(new));
+    if old_archived != archived {
+        changes.push(format!("**Arşiv:** {}", on_off(archived)));
+    }
+    if old_locked != locked {
+        changes.push(format!("**Kilit:** {}", on_off(locked)));
+    }
+    if changes.is_empty() {
+        return;
+    }
+    let text = format!("{}\n{}", new.mention(), changes.join("\n"));
+    note(ctx, data, new.guild_id, "thread_update", "🧵 Alt başlık güncellendi", text, serenity::Colour::BLURPLE).await;
 }
 
 fn quote(content: &str) -> String {

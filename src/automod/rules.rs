@@ -164,7 +164,7 @@ pub struct Restricted {
 }
 
 /// Denetim kaydına yazılabilen olaylar: `(anahtar, grup, ad)`.
-pub const LOG_EVENTS: [(&str, &str, &str); 21] = [
+pub const LOG_EVENTS: [(&str, &str, &str); 27] = [
     ("mod_mute", "Moderatör olayları", "Üye susturuldu"),
     ("mod_unmute", "Moderatör olayları", "Üyenin susturması kaldırıldı"),
     ("mod_ban", "Moderatör olayları", "Moderatör yasakladı / attı / uyardı"),
@@ -172,6 +172,7 @@ pub const LOG_EVENTS: [(&str, &str, &str); 21] = [
     ("message_edit", "Mesaj olayları", "Mesaj düzenlendi"),
     ("message_delete", "Mesaj olayları", "Mesaj silindi"),
     ("invite_posted", "Mesaj olayları", "Davet bağlantısı paylaşıldı"),
+    ("invite_create", "Mesaj olayları", "Davet oluşturuldu / silindi"),
     ("nickname", "Üye olayları", "Takma ad değişti"),
     ("member_ban", "Üye olayları", "Üye yasaklandı"),
     ("member_join", "Üye olayları", "Üye sunucuya katıldı"),
@@ -182,10 +183,15 @@ pub const LOG_EVENTS: [(&str, &str, &str); 21] = [
     ("role_update", "Rol olayları", "Rol güncellendi"),
     ("role_delete", "Rol olayları", "Rol silindi"),
     ("voice", "Ses olayları", "Sesli kanala katılma / ayrılma / geçiş"),
+    ("voice_mod", "Ses olayları", "Yetkili sesini kapattı / sağırlaştırdı"),
     ("guild_update", "Sunucu olayları", "Sunucu düzenlendi"),
     ("emoji_update", "Sunucu olayları", "Emojiler güncellendi"),
+    ("sticker_update", "Sunucu olayları", "Çıkartmalar güncellendi"),
+    ("webhook_update", "Sunucu olayları", "Webhook eklendi / değişti / silindi"),
     ("channel_create", "Kanal olayları", "Kanal oluşturuldu / silindi"),
     ("channel_update", "Kanal olayları", "Kanal güncellendi"),
+    ("thread_create", "Kanal olayları", "Alt başlık açıldı / silindi"),
+    ("thread_update", "Kanal olayları", "Alt başlık güncellendi (ad, arşiv, kilit)"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

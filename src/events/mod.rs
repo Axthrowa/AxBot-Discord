@@ -42,11 +42,13 @@ pub async fn handle(
         serenity::FullEvent::InviteCreate { data: invite } => {
             if let Some(guild_id) = invite.guild_id {
                 data.invites.on_create(guild_id, &invite.code, invite.inviter.as_ref().map(|u| u.id), invite.uses);
+                eventlog::invite_changed(ctx, data, guild_id, &invite.code, invite.channel_id, invite.inviter.as_ref(), true).await;
             }
         }
         serenity::FullEvent::InviteDelete { data: invite } => {
             if let Some(guild_id) = invite.guild_id {
                 data.invites.on_delete(guild_id, &invite.code);
+                eventlog::invite_changed(ctx, data, guild_id, &invite.code, invite.channel_id, None, false).await;
             }
         }
         serenity::FullEvent::Message { new_message: msg } => {
@@ -109,6 +111,7 @@ pub async fn handle(
                 };
                 let extras = async {
                     crate::community::on_message(ctx, data, guild_id, msg).await;
+                    eventlog::remember(data, guild_id, msg).await;
                     crate::highlights::on_message(ctx, &data.db, guild_id, msg).await;
                     crate::modmail::on_staff_message(ctx, data, guild_id, msg).await;
                     crate::ai::assist::on_ticket_message(ctx, data, guild_id, msg).await;
@@ -356,7 +359,8 @@ pub async fn handle(
                 crate::antinuke::on_role_permissions(ctx, data, new.guild_id, new, Some(old.permissions)).await;
             }
         }
-        serenity::FullEvent::WebhookUpdate { guild_id, .. } => {
+        serenity::FullEvent::WebhookUpdate { guild_id, belongs_to_channel_id } => {
+            eventlog::webhooks_changed(ctx, data, *guild_id, *belongs_to_channel_id).await;
             crate::antinuke::on_webhook(ctx, data, *guild_id).await;
         }
         serenity::FullEvent::GuildRoleDelete { guild_id, removed_role_id, removed_role_data_if_available } => {
@@ -367,6 +371,9 @@ pub async fn handle(
         serenity::FullEvent::ThreadCreate { thread } => {
             // Bot var olan bir alt başlığa eklendiğinde de bu olay gelir; yalnızca yeni açılanlar sayılır.
             let fresh = thread.id.created_at().unix_timestamp() + 15 > serenity::Timestamp::now().unix_timestamp();
+            if fresh {
+                eventlog::thread_changed(ctx, data, thread.guild_id, None, thread.id, thread.parent_id, true).await;
+            }
             let owner = thread.owner_id.and_then(|id| ctx.cache.user(id).map(|u| u.clone()));
             if let (true, Some(owner)) = (fresh, owner) {
                 crate::achievements::bump(ctx, data, thread.guild_id, &owner, crate::achievements::Kind::Threads, 1, Some(thread.id)).await;
@@ -375,6 +382,16 @@ pub async fn handle(
                 // Mesaj eylemi alt başlığın içine gider; koşuldaki kanal ise ana kanaldır.
                 run_in_thread(ctx, data, event, thread.id).await;
             }
+        }
+        serenity::FullEvent::ThreadUpdate { old, new } => {
+            eventlog::thread_updated(ctx, data, old.as_ref(), new).await;
+        }
+        serenity::FullEvent::ThreadDelete { thread, full_thread_data } => {
+            let name = full_thread_data.as_ref().map(|t| t.name.as_str());
+            eventlog::thread_changed(ctx, data, thread.guild_id, name, thread.id, Some(thread.parent_id), false).await;
+        }
+        serenity::FullEvent::GuildStickersUpdate { guild_id, current_state } => {
+            eventlog::stickers_updated(ctx, data, *guild_id, current_state.len()).await;
         }
         serenity::FullEvent::ChannelCreate { channel } => {
             eventlog::channel_created(ctx, data, channel).await;
