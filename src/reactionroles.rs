@@ -51,6 +51,67 @@ impl Mode {
     }
 }
 
+/// Menünün rolü nasıl verip aldığı (Carl-bot'taki tepki rolü modları).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Behavior {
+    /// Seçince verilir, bırakınca alınır.
+    #[default]
+    Normal,
+    /// Yalnızca verilir; geri bırakılamaz (kural onayı, doğrulama).
+    Verify,
+    /// Tersi: tepki verince rol alınır, tepki geri alınınca verilir (yalnızca emoji tepkileri).
+    Reverse,
+    /// Bağlayıcı: menüden yalnızca bir kez, tek rol seçilir; sonra değiştirilemez ve bırakılamaz.
+    Binding,
+    /// Geçici: verilen rol `temp_minutes` dakika sonra kendiliğinden alınır.
+    Temporary,
+}
+
+impl Behavior {
+    pub const ALL: [(Self, &'static str, &'static str); 5] = [
+        (Self::Normal, "normal", "Normal (seç / bırak)"),
+        (Self::Verify, "verify", "Doğrulama (yalnızca verilir)"),
+        (Self::Reverse, "reverse", "Ters (tepki rolü alır; yalnızca emoji tepkileri)"),
+        (Self::Binding, "binding", "Bağlayıcı (bir kez seçilir, değişmez)"),
+        (Self::Temporary, "temporary", "Geçici (süre sonunda alınır)"),
+    ];
+
+    pub fn from_code(code: &str) -> Option<Self> {
+        Self::ALL.iter().find(|(_, c, _)| *c == code).map(|(b, _, _)| *b)
+    }
+
+    pub fn label(self) -> &'static str {
+        Self::ALL.iter().find(|(b, _, _)| *b == self).map_or("", |(_, _, label)| label)
+    }
+}
+
+/// Bir rol için yapılacak iş.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Act {
+    Give,
+    Take,
+    /// Yapılmaz; üyeye gösterilecek sebep.
+    Refuse(&'static str),
+    Nothing,
+}
+
+/// `wants`: üye rolü istiyor mu (tepki ekledi / seçti / sahip değilken butona bastı). `has`: rol üyede mi.
+/// `has_other`: üye bu menünün başka bir rolünü taşıyor mu.
+pub fn decide(behavior: Behavior, wants: bool, has: bool, has_other: bool) -> Act {
+    match (behavior, wants, has) {
+        (Behavior::Reverse, true, true) => Act::Take,
+        (Behavior::Reverse, false, false) => Act::Give,
+        (Behavior::Reverse, ..) => Act::Nothing,
+        (Behavior::Verify, false, true) => Act::Refuse("Bu rol geri bırakılamaz."),
+        (Behavior::Binding, false, true) => Act::Refuse("Bu menüdeki seçim kalıcıdır; rol bırakılamaz."),
+        (Behavior::Binding, true, false) if has_other => Act::Refuse("Bu menüden zaten bir rol seçtin; seçim değiştirilemez."),
+        (_, true, false) => Act::Give,
+        (_, false, true) => Act::Take,
+        _ => Act::Nothing,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pair {
     /// Unicode emoji ya da `<:ad:kimlik>`; tepki modunda zorunlu.
@@ -69,6 +130,17 @@ pub struct Menu {
     /// Üye bu menüden aynı anda yalnızca bir rol taşıyabilir (renk rolleri gibi).
     pub unique: bool,
     pub pairs: Vec<Pair>,
+    #[serde(default)]
+    pub behavior: Behavior,
+    /// Geçici modda rolün kalacağı süre (dakika).
+    #[serde(default)]
+    pub temp_minutes: u32,
+}
+
+impl Menu {
+    fn holds_other(&self, roles: &[RoleId], role: RoleId) -> bool {
+        self.pairs.iter().map(|p| RoleId::new(p.role.max(1))).any(|r| r != role && roles.contains(&r))
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +280,30 @@ fn safe_role(ctx: &serenity::Context, guild_id: GuildId, role_id: RoleId) -> Res
     }
 }
 
+/// Rolü verir; menü geçiciyse süresi dolunca alınması için görev kurar, tek seçimliyse diğer rolleri alır.
+async fn grant(ctx: &serenity::Context, data: &Data, guild_id: GuildId, user: UserId, menu: &Menu, role: RoleId, current: &[RoleId]) -> bool {
+    if !give(ctx, guild_id, user, role).await {
+        return false;
+    }
+    schedule_expiry(data, guild_id, user, menu, role).await;
+    if menu.unique {
+        clear_others(ctx, guild_id, user, menu, role, current).await;
+    }
+    true
+}
+
+/// Geçici menüde rolün alınacağı zamanı zamanlayıcıya yazar.
+async fn schedule_expiry(data: &Data, guild_id: GuildId, user: UserId, menu: &Menu, role: RoleId) {
+    if menu.behavior != Behavior::Temporary || menu.temp_minutes == 0 {
+        return;
+    }
+    let at = serenity::Timestamp::now().unix_timestamp() + i64::from(menu.temp_minutes) * 60;
+    let task = crate::scheduler::Task::TempRoleEnd { guild_id: guild_id.get(), user_id: user.get(), role_id: role.get() };
+    if let Err(e) = data.scheduler.schedule(at, &task).await {
+        warn!(guild = %guild_id, error = ?e, "Geçici rolün bitişi kaydedilemedi");
+    }
+}
+
 async fn give(ctx: &serenity::Context, guild_id: GuildId, user: UserId, role: RoleId) -> bool {
     if let Err(reason) = safe_role(ctx, guild_id, role) {
         debug!(guild = %guild_id, role = %role, reason, "Rol menüsü: rol verilmedi");
@@ -265,16 +361,27 @@ pub async fn on_reaction(ctx: &serenity::Context, data: &Data, reaction: &Reacti
         return;
     };
     let role = RoleId::new(pair.role.max(1));
-    if !added {
-        take(ctx, guild_id, user, role).await;
-        return;
-    }
     if reaction.member.as_ref().is_some_and(|m| m.user.bot) {
         return;
     }
-    if give(ctx, guild_id, user, role).await && menu.unique {
-        let current: Vec<RoleId> = reaction.member.as_ref().map(|m| m.roles.clone()).unwrap_or_default();
-        clear_others(ctx, guild_id, user, menu, role, &current).await;
+    // Tepki geri alınınca Discord üye bilgisi göndermez; önbellekten bakılır.
+    let current: Vec<RoleId> = match &reaction.member {
+        Some(member) => member.roles.clone(),
+        None => ctx.cache.guild(guild_id).and_then(|g| g.members.get(&user).map(|m| m.roles.clone())).unwrap_or_default(),
+    };
+    let has = current.contains(&role);
+    match decide(menu.behavior, added, has, menu.holds_other(&current, role)) {
+        Act::Give => {
+            grant(ctx, data, guild_id, user, menu, role, &current).await;
+        }
+        Act::Take => {
+            take(ctx, guild_id, user, role).await;
+        }
+        // Reddedilen eklemede tepki geri alınır ki menü yanlış durumu göstermesin.
+        Act::Refuse(_) if added => {
+            let _ = ctx.http.delete_reaction(reaction.channel_id, reaction.message_id, user, &reaction.emoji).await;
+        }
+        Act::Refuse(_) | Act::Nothing => {}
     }
 }
 
@@ -313,24 +420,40 @@ async fn respond(ctx: &serenity::Context, data: &Data, interaction: &ComponentIn
         ComponentInteractionDataKind::StringSelect { values } => {
             // Seçilenler verilir, menüdeki diğer roller alınır.
             let wanted: Vec<RoleId> = values.iter().filter_map(|v| menu_role(v)).collect();
-            let (mut given, mut taken) = (Vec::new(), Vec::new());
+            let (mut given, mut taken, mut refused) = (Vec::new(), Vec::new(), None);
             for pair in &menu.pairs {
                 let role = RoleId::new(pair.role.max(1));
                 let has = member.roles.contains(&role);
-                if wanted.contains(&role) && !has {
-                    if give(ctx, guild_id, user, role).await {
-                        given.push(role.mention().to_string());
+                match decide(menu.behavior, wanted.contains(&role), has, menu.holds_other(&member.roles, role)) {
+                    Act::Give => {
+                        if give(ctx, guild_id, user, role).await {
+                            given.push(role);
+                        }
                     }
-                } else if !wanted.contains(&role) && has && take(ctx, guild_id, user, role).await {
-                    taken.push(role.mention().to_string());
+                    Act::Take => {
+                        if take(ctx, guild_id, user, role).await {
+                            taken.push(role.mention().to_string());
+                        }
+                    }
+                    Act::Refuse(reason) => refused = Some(reason),
+                    Act::Nothing => {}
                 }
             }
-            match (given.is_empty(), taken.is_empty()) {
+            // Açılır menü seçimi zaten tamamını söyler; tek seçim temizliği gerekmez, yalnızca geçici süre kurulur.
+            for role in &given {
+                schedule_expiry(data, guild_id, user, menu, *role).await;
+            }
+            let given: Vec<String> = given.iter().map(|r| r.mention().to_string()).collect();
+            let mut text = match (given.is_empty(), taken.is_empty()) {
                 (true, true) => "Değişiklik yok.".to_owned(),
                 (false, true) => format!("✅ Verildi: {}", given.join(", ")),
                 (true, false) => format!("➖ Alındı: {}", taken.join(", ")),
                 (false, false) => format!("✅ Verildi: {}\n➖ Alındı: {}", given.join(", "), taken.join(", ")),
+            };
+            if let Some(reason) = refused {
+                text.push_str(&format!("\n⚠️ {reason}"));
             }
+            text
         }
         _ => {
             let Some(role) = interaction.data.custom_id.strip_prefix(PREFIX).and_then(menu_role) else {
@@ -339,20 +462,28 @@ async fn respond(ctx: &serenity::Context, data: &Data, interaction: &ComponentIn
             if let Err(reason) = safe_role(ctx, guild_id, role) {
                 return format!("❌ {reason}");
             }
-            if member.roles.contains(&role) {
-                return if take(ctx, guild_id, user, role).await {
-                    format!("➖ {} rolü alındı.", role.mention())
-                } else {
-                    "❌ Rol alınamadı; botun 'Rolleri Yönet' izni ve rol sıralaması kontrol edilmeli.".to_owned()
-                };
+            // Buton bir anahtar: rol yoksa ister, varsa bırakır.
+            let has = member.roles.contains(&role);
+            match decide(menu.behavior, !has, has, menu.holds_other(&member.roles, role)) {
+                Act::Take => {
+                    if take(ctx, guild_id, user, role).await {
+                        format!("➖ {} rolü alındı.", role.mention())
+                    } else {
+                        "❌ Rol alınamadı; botun 'Rolleri Yönet' izni ve rol sıralaması kontrol edilmeli.".to_owned()
+                    }
+                }
+                Act::Give => {
+                    if !grant(ctx, data, guild_id, user, menu, role, &member.roles).await {
+                        return "❌ Rol verilemedi; botun 'Rolleri Yönet' izni ve rol sıralaması kontrol edilmeli.".to_owned();
+                    }
+                    match (menu.behavior, menu.temp_minutes) {
+                        (Behavior::Temporary, mins) if mins > 0 => format!("✅ {} rolü verildi; {mins} dakika sonra alınacak.", role.mention()),
+                        _ => format!("✅ {} rolü verildi.", role.mention()),
+                    }
+                }
+                Act::Refuse(reason) => format!("⚠️ {reason}"),
+                Act::Nothing => "Değişiklik yok.".to_owned(),
             }
-            if !give(ctx, guild_id, user, role).await {
-                return "❌ Rol verilemedi; botun 'Rolleri Yönet' izni ve rol sıralaması kontrol edilmeli.".to_owned();
-            }
-            if menu.unique {
-                clear_others(ctx, guild_id, user, menu, role, &member.roles).await;
-            }
-            format!("✅ {} rolü verildi.", role.mention())
         }
     }
 }
@@ -373,6 +504,26 @@ mod tests {
             assert_eq!(emoji_key(bad), None, "{bad}");
         }
         assert_eq!(reaction_key(&ReactionType::Unicode("❤\u{FE0F}".to_owned())), emoji_key("❤"));
+    }
+
+    #[test]
+    fn behaviors_decide_what_happens() {
+        use Behavior::*;
+        assert_eq!(decide(Normal, true, false, false), Act::Give);
+        assert_eq!(decide(Normal, false, true, false), Act::Take);
+        assert_eq!(decide(Normal, true, true, false), Act::Nothing);
+        assert_eq!(decide(Verify, true, false, false), Act::Give);
+        assert!(matches!(decide(Verify, false, true, false), Act::Refuse(_)));
+        assert_eq!(decide(Reverse, true, true, false), Act::Take);
+        assert_eq!(decide(Reverse, false, false, false), Act::Give);
+        assert_eq!(decide(Reverse, true, false, false), Act::Nothing);
+        assert_eq!(decide(Binding, true, false, false), Act::Give);
+        assert!(matches!(decide(Binding, true, false, true), Act::Refuse(_)));
+        assert!(matches!(decide(Binding, false, true, false), Act::Refuse(_)));
+        assert_eq!(decide(Temporary, true, false, false), Act::Give);
+        for (behavior, code, _) in Behavior::ALL {
+            assert_eq!(Behavior::from_code(code), Some(behavior));
+        }
     }
 
     #[test]

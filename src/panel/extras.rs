@@ -86,16 +86,18 @@ pub async fn role_menu_fields(state: &WebState, guild_id: GuildId, options: &Opt
     } else {
         list.push_str("<table><tr><th>Başlık</th><th>Kanal</th><th>Tür</th><th>Rol</th><th>Sil</th></tr>");
         for menu in &settings.menus {
+            let behavior = if menu.behavior == reactionroles::Behavior::Normal { String::new() } else { format!(" · {}", menu.behavior.label()) };
             let _ = write!(
                 list,
                 "<tr><td><a href=\"https://discord.com/channels/{guild_id}/{}/{}\" target=\"_blank\" rel=\"noopener\">{}</a></td>\
-                 <td>{}</td><td>{}{}</td><td>{}</td><td><input type=\"checkbox\" name=\"menu_del\" value=\"{}\"></td></tr>",
+                 <td>{}</td><td>{}{}{}</td><td>{}</td><td><input type=\"checkbox\" name=\"menu_del\" value=\"{}\"></td></tr>",
                 menu.channel_id,
                 menu.message_id,
                 escape(&menu.title),
                 escape(&channel_name(options, menu.channel_id)),
                 menu.mode.label(),
                 if menu.unique { " · tek seçim" } else { "" },
+                behavior,
                 menu.pairs.len(),
                 menu.message_id
             );
@@ -109,6 +111,11 @@ pub async fn role_menu_fields(state: &WebState, guild_id: GuildId, options: &Opt
         let _ = write!(modes, "<option value=\"{code}\">{label}</option>");
     }
     modes.push_str("</select>");
+    let mut behaviors = String::from("<select name=\"behavior\">");
+    for (_, code, label) in reactionroles::Behavior::ALL {
+        let _ = write!(behaviors, "<option value=\"{code}\">{label}</option>");
+    }
+    behaviors.push_str("</select>");
     let mut rows = String::from("<table><tr><th style=\"width:150px\">Emoji</th><th>Rol</th><th>Etiket (buton / menü yazısı)</th></tr>");
     for i in 0..reactionroles::MAX_PAIRS {
         let _ = write!(
@@ -125,6 +132,8 @@ pub async fn role_menu_fields(state: &WebState, guild_id: GuildId, options: &Opt
             + &field("Başlık", &text_input("title", "", "Rollerini seç", 100), "")
             + &field("Açıklama", &big_textarea("description", "", 500, 3, "İsteğe bağlı"), "")
             + &field("Tür", &modes, "Emoji tepkileri: üyeler mesajın altındaki emojilere tıklar. Butonlar ve açılır menüde emoji isteğe bağlıdır.")
+            + &field("Davranış", &behaviors, "Doğrulama: rol bırakılamaz. Ters: tepki verince rol alınır. Bağlayıcı: menüden bir kez tek rol seçilir. Geçici: rol aşağıdaki süre sonunda alınır.")
+            + &field("Geçici rol süresi (dakika)", "<input type=\"number\" name=\"temp_minutes\" value=\"60\" min=\"1\" max=\"43200\">", "Yalnızca Geçici davranışta kullanılır (en fazla 30 gün).")
             + &checkbox("unique", false, "Tek seçim: üye bu menüden aynı anda yalnızca bir rol taşıyabilir (renk rolleri gibi)")
             + "<div style=\"height:10px\"></div>"
             + &rows
@@ -141,6 +150,15 @@ fn parse_menu(input: &Input<'_>) -> Result<Option<Menu>, &'static str> {
     };
     let title = short(input, "title", 100)?.ok_or("bos")?;
     let mode = Mode::from_code(input.raw("mode")).ok_or("hata")?;
+    // Eski formlar davranış göndermez: normal sayılır.
+    let behavior = match input.raw("behavior") {
+        "" => reactionroles::Behavior::Normal,
+        code => reactionroles::Behavior::from_code(code).ok_or("hata")?,
+    };
+    if behavior == reactionroles::Behavior::Reverse && mode != Mode::Reactions {
+        return Err("ters");
+    }
+    let temp_minutes = if behavior == reactionroles::Behavior::Temporary { input.number("temp_minutes", 1, 43_200)? } else { 0 };
     let mut pairs: Vec<Pair> = Vec::new();
     let mut seen_emojis = Vec::new();
     for i in 0..reactionroles::MAX_PAIRS {
@@ -177,6 +195,8 @@ fn parse_menu(input: &Input<'_>) -> Result<Option<Menu>, &'static str> {
         description: short(input, "description", 500)?,
         unique: input.checked("unique"),
         pairs,
+        behavior,
+        temp_minutes,
     }))
 }
 
