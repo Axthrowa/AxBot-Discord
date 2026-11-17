@@ -76,7 +76,7 @@ fn voice_channels(state: &WebState, guild_id: GuildId) -> Vec<(u64, String)> {
     let mut found: Vec<(u16, u64, String)> = state
         .cache
         .guild(guild_id)
-        .map(|g| g.channels.values().filter(|c| c.kind == ChannelType::Voice).map(|c| (c.position, c.id.get(), c.name.clone())).collect())
+        .map(|g| g.channels.values().filter(|c| c.kind == ChannelType::Voice && !crate::backup::is_hidden(c)).map(|c| (c.position, c.id.get(), c.name.clone())).collect())
         .unwrap_or_default();
     found.sort();
     found.into_iter().map(|(_, id, name)| (id, name)).collect()

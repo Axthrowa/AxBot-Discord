@@ -171,8 +171,14 @@ pub async fn handle_button(ctx: &serenity::Context, music: &Music, interaction: 
         return Ok(());
     };
     let action = interaction.data.custom_id.strip_prefix(PREFIX).unwrap_or_default();
+    // Form açan butonların ilk cevabı form olmalı; diğerleri hemen onaylanır, çünkü ses bağlantısının
+    // kilidi (otomatik çalma şarkı eklerken) Discord'un 3 sn sınırından uzun tutulabilir.
+    let acked = !matches!(action, "volume" | "add");
+    if acked {
+        interaction.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
+    }
     if let Some(problem) = same_channel_problem(ctx, music, guild_id, interaction.user.id).await {
-        return reply(ctx, interaction, &problem).await;
+        return reply(ctx, interaction, acked, &problem).await;
     }
 
     // Form açan butonlar.
@@ -194,11 +200,11 @@ pub async fn handle_button(ctx: &serenity::Context, music: &Music, interaction: 
     }
 
     let Some(call) = music.songbird().get(guild_id) else {
-        return reply(ctx, interaction, "Şu an müzik çalmıyor.").await;
+        return reply(ctx, interaction, acked, "Şu an müzik çalmıyor.").await;
     };
     let queue = call.lock().await.queue().clone();
     let Some(current) = queue.current() else {
-        return reply(ctx, interaction, "Şu an çalan bir şarkı yok.").await;
+        return reply(ctx, interaction, acked, "Şu an çalan bir şarkı yok.").await;
     };
 
     match action {
@@ -225,8 +231,6 @@ pub async fn handle_button(ctx: &serenity::Context, music: &Music, interaction: 
                 let position = current.get_info().await?.position;
                 shifted(position, total, action == "forward")
             };
-            // Sarma birkaç saniye sürebilir (akış yeniden açılır); önce Discord'a cevap verilir.
-            interaction.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
             // Kaynak sarmayı desteklemezse veya takılırsa bekleme sınırlı tutulur.
             let seeked = tokio::time::timeout(Duration::from_secs(20), current.seek_async(target)).await;
             if !matches!(seeked, Ok(Ok(_))) {
@@ -258,23 +262,21 @@ pub async fn handle_button(ctx: &serenity::Context, music: &Music, interaction: 
                 upcoming.len()
             });
             if shuffled == 0 {
-                return reply(ctx, interaction, "Karıştırmak için sırada en az 2 şarkı olmalı.").await;
+                return reply(ctx, interaction, acked, "Karıştırmak için sırada en az 2 şarkı olmalı.").await;
             }
         }
         "clear" => {
             let removed = music.clear_upcoming(guild_id).await;
             if removed == 0 {
-                return reply(ctx, interaction, "Sırada bekleyen şarkı yok.").await;
+                return reply(ctx, interaction, acked, "Sırada bekleyen şarkı yok.").await;
             }
         }
         "skip" => {
             // Yeni şarkının kartı başlayınca gelir; bu kart o zaman silinir.
             queue.skip()?;
-            interaction.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
             return Ok(());
         }
         "stop" => {
-            interaction.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
             let mut message = interaction.message.clone();
             let _ = message
                 .edit(
@@ -292,7 +294,6 @@ pub async fn handle_button(ctx: &serenity::Context, music: &Music, interaction: 
     }
 
     // Değişikliği hemen karta yansıt.
-    interaction.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
     music.refresh_card_now(&ctx.http, guild_id).await;
     Ok(())
 }
@@ -364,7 +365,7 @@ async fn show_queue(ctx: &serenity::Context, music: &Music, interaction: &Compon
     if total > 11 {
         text.push_str(&format!("\n_…ve {} şarkı daha_", total - 11));
     }
-    reply(ctx, interaction, &format!("📜 **Kuyruk — {total} şarkı**\n{text}")).await
+    reply(ctx, interaction, true, &format!("📜 **Kuyruk — {total} şarkı**\n{text}")).await
 }
 
 /// Kullanıcı botla aynı ses kanalında değilse açıklama.
@@ -372,14 +373,25 @@ async fn same_channel_problem(ctx: &serenity::Context, music: &Music, guild_id: 
     let Some(call) = music.songbird().get(guild_id) else {
         return Some("Şu an müzik çalmıyor.".to_owned());
     };
-    let bot = call.lock().await.current_channel().map(|c| ChannelId::new(c.0.get()));
+    let Ok(locked) = tokio::time::timeout(Duration::from_secs(2), call.lock()).await else {
+        return Some("⏳ Bot şu an sıraya şarkı ekliyor; birkaç saniye sonra tekrar dene.".to_owned());
+    };
+    let bot = locked.current_channel().map(|c| ChannelId::new(c.0.get()));
+    drop(locked);
     if bot.is_none() || bot != voice_channel_of(ctx, guild_id, user) {
         return Some("🎧 Müziği kontrol etmek için botla aynı ses kanalında olmalısın.".to_owned());
     }
     None
 }
 
-async fn reply(ctx: &serenity::Context, interaction: &ComponentInteraction, text: &str) -> anyhow::Result<()> {
+/// Yalnızca tıklayana görünen cevap; buton önceden onaylandıysa (`acked`) ek mesaj olarak gider.
+async fn reply(ctx: &serenity::Context, interaction: &ComponentInteraction, acked: bool, text: &str) -> anyhow::Result<()> {
+    if acked {
+        interaction
+            .create_followup(ctx, serenity::CreateInteractionResponseFollowup::new().content(text).ephemeral(true))
+            .await?;
+        return Ok(());
+    }
     interaction
         .create_response(
             ctx,

@@ -77,7 +77,12 @@ fn kind_from(code: &str) -> Option<ChannelType> {
     })
 }
 
-/// Sunucunun şu anki yapısı (önbellekten; ağ isteği yok).
+/// Botun göremediği kanal: Discord 16 Kasım 2026'dan beri böyle kanalları adı gizlenmiş olarak gönderir.
+pub fn is_hidden(channel: &serenity::GuildChannel) -> bool {
+    channel.name == "___hidden___"
+}
+
+/// Sunucunun şu anki yapısı (önbellekten; ağ isteği yok). Botun göremediği kanallar alınmaz.
 pub fn take(cache: &serenity::Cache, guild_id: GuildId) -> Option<Snapshot> {
     let guild = cache.guild(guild_id)?;
     let mut roles: Vec<RoleSnap> = guild
@@ -91,6 +96,7 @@ pub fn take(cache: &serenity::Cache, guild_id: GuildId) -> Option<Snapshot> {
     let mut channels: Vec<ChannelSnap> = guild
         .channels
         .values()
+        .filter(|c| !is_hidden(c))
         .filter_map(|c| {
             Some(ChannelSnap {
                 name: c.name.clone(),

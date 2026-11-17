@@ -128,7 +128,7 @@ pub async fn write_once(data: &Data, guild_name: &str, persona: Option<&str>, re
     );
     let request: String = request.trim().chars().take(MAX_INPUT_CHARS).collect();
     let message = ChatMessage { role: Role::User, content: request };
-    Some(provider::complete(&ai.client, config, &system, &[message], None).await)
+    Some(provider::complete(&ai.client, config, &system, &[message], None, false).await)
 }
 
 /// Arka plan işleri için tek seferlik istek: verilen sistem metniyle (sunucu kişiliği yok).
@@ -141,7 +141,7 @@ pub async fn complete_once(ai: &Ai, system: &str, request: &str) -> Option<anyho
     let system = format!("{system}\n\nCevabı doğrudan yaz; soru sorma, açıklama ekleme. Her zaman doğal, akıcı Türkçe yaz.");
     let request: String = request.trim().chars().take(MAX_INPUT_CHARS).collect();
     let message = ChatMessage { role: Role::User, content: request };
-    Some(provider::complete(&ai.client, config, &system, &[message], None).await)
+    Some(provider::complete(&ai.client, config, &system, &[message], None, false).await)
 }
 
 pub async fn clear_history(redis: &ConnectionManager, channel: ChannelId) -> anyhow::Result<()> {
@@ -227,7 +227,7 @@ pub async fn handle_message(
     let (done, done_rx) = tokio::sync::oneshot::channel::<()>();
     let live = tokio::spawn(live_reply(ctx.clone(), msg.clone(), progress_rx, done_rx));
 
-    let result = provider::complete(&ai.client, config, &system, &history, Some(&progress)).await;
+    let result = provider::complete(&ai.client, config, &system, &history, Some(&progress), true).await;
     drop(done);
     // Yarım kalan gönderim varsa bitmesi beklenir; böylece aynı cevap iki kez gönderilmez.
     let live_message = live.await.unwrap_or_default();
@@ -610,7 +610,7 @@ mod live_tests {
             progress_rx.changed().await.ok();
             (started.elapsed(), progress_rx.borrow().clone())
         });
-        let answer = provider::complete(&client, &ai, &system_prompt(&ai, "Test", None), &[question], Some(&progress)).await?;
+        let answer = provider::complete(&client, &ai, &system_prompt(&ai, "Test", None), &[question], Some(&progress), true).await?;
         drop(progress);
         if let Ok((elapsed, text)) = first.await {
             println!("--- ilk metin {:.1} sn: {text}", elapsed.as_secs_f64());

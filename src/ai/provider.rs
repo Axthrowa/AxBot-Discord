@@ -46,9 +46,11 @@ pub async fn complete(
     system: &str,
     messages: &[ChatMessage],
     progress: Option<&Progress>,
+    // Web araması yalnızca sohbet cevaplarında; özet/çeviri gibi işler verilen metinle yetinir.
+    search: bool,
 ) -> anyhow::Result<String> {
     let messages = merge_consecutive(messages);
-    match ask(client, config, system, &messages, progress).await {
+    match ask(client, config, system, &messages, progress, search).await {
         Ok(text) => Ok(text),
         Err(error) => {
             // Asıl sağlayıcıya ulaşılamadıysa (ağ / servis hatası) yedek sağlayıcı denenir.
@@ -56,15 +58,15 @@ pub async fn complete(
                 return Err(error);
             };
             tracing::warn!(provider = config.provider.name(), fallback = fallback.provider.name(), error = ?error, "AI sağlayıcısı yanıt vermedi; yedeğe geçiliyor");
-            ask(client, fallback, system, &messages, progress).await
+            ask(client, fallback, system, &messages, progress, search).await
         }
     }
 }
 
-async fn ask(client: &reqwest::Client, config: &AiConfig, system: &str, messages: &[ChatMessage], progress: Option<&Progress>) -> anyhow::Result<String> {
+async fn ask(client: &reqwest::Client, config: &AiConfig, system: &str, messages: &[ChatMessage], progress: Option<&Progress>, search: bool) -> anyhow::Result<String> {
     let raw = match config.provider {
-        AiProvider::Nim => nim(client, config, system, messages, progress).await?,
-        AiProvider::Gemini => gemini(client, config, system, messages).await?,
+        AiProvider::Nim => nim(client, config, system, messages, progress, search).await?,
+        AiProvider::Gemini => gemini(client, config, system, messages, search).await?,
     };
     let text = strip_reasoning(&raw).trim().to_owned();
     if text.is_empty() {
@@ -83,6 +85,7 @@ async fn nim(
     system: &str,
     messages: &[ChatMessage],
     progress: Option<&Progress>,
+    search: bool,
 ) -> anyhow::Result<String> {
     // Bazı açık modeller tek bir sistem mesajı kabul eder; o yüzden en başta tek mesaj.
     let mut base = vec![json!({ "role": "system", "content": system })];
@@ -95,7 +98,7 @@ async fn nim(
     }));
 
     let mut findings: Vec<String> = Vec::new();
-    if let Some(backend) = config.search.as_ref() {
+    if let Some(backend) = config.search.as_ref().filter(|_| search) {
         let mut conversation = base.clone();
         for round in 0..MAX_SEARCH_ROUNDS {
             let reply = nim_request(client, config, &conversation, true, progress).await?;
@@ -352,6 +355,7 @@ async fn gemini(
     config: &AiConfig,
     system: &str,
     messages: &[ChatMessage],
+    search: bool,
 ) -> anyhow::Result<String> {
     let contents: Vec<Value> = messages
         .iter()
@@ -373,7 +377,7 @@ async fn gemini(
             "systemInstruction": { "parts": [{ "text": system }] },
             "contents": contents,
             // Gemini'nin yerleşik Google araması: ek anahtar gerekmez, model gerekirse kendisi arar.
-            "tools": [{ "google_search": {} }],
+            "tools": if search { json!([{ "google_search": {} }]) } else { json!([]) },
             "generationConfig": {
                 "maxOutputTokens": MAX_OUTPUT_TOKENS,
                 "temperature": TEMPERATURE,

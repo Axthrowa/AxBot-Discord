@@ -829,7 +829,7 @@ pub async fn title_in(news: &NewsContext, title: &str, lang: &str, target: Optio
     if let Ok(Some(cached)) = redis::cmd("GET").arg(&key).query_async::<Option<String>>(&mut conn).await {
         return cached;
     }
-    match machine_translate(title, target).await {
+    match translate_text(news, title, target).await {
         Some(translated) => {
             let _: redis::RedisResult<()> = redis::cmd("SET").arg(&key).arg(&translated).arg("EX").arg(2 * 86_400).query_async(&mut conn).await;
             translated
@@ -899,14 +899,6 @@ pub async fn render(news: &NewsContext, item: &NewsItem, target: Option<&str>, d
             return rendered;
         }
     }
-    // Yalnızca çeviri gerekiyorsa (özet istenmiyor) doğrudan Google Çeviri: hızlı ve yeterli.
-    if !details {
-        let Some(code) = translate else { return original };
-        // Çeviri başarısızsa önbelleğe yazılmaz; bir sonraki denemede yeniden çevrilir.
-        let Some(rendered) = machine_rendered(item, code).await else { return original };
-        cache_rendered(news, &key, &rendered).await;
-        return rendered;
-    }
     let language = native_name(lang);
     let request = format!(
         "Aşağıdaki haberi {language} dilinde yaz.\n\
@@ -944,7 +936,21 @@ async fn cache_rendered(news: &NewsContext, key: &str, rendered: &Rendered) {
     let _: redis::RedisResult<()> = redis::cmd("SET").arg(key).arg(json).arg("EX").arg(2 * 86_400).query_async(&mut conn).await;
 }
 
-/// Başlık ve kısa özeti Google Çeviri ile çevirir.
+/// Kısa bir metni çevirir: önce yapay zekâ (resmî API), yetişmezse Google'ın resmî olmayan ucu.
+async fn translate_text(news: &NewsContext, text: &str, target: &str) -> Option<String> {
+    let language = native_name(target);
+    let system = format!("Sen çevirmensin. Verilen metni {language} diline çevir; yalnızca çeviriyi yaz.");
+    let text: String = text.chars().take(1500).collect();
+    if let Ok(Some(Ok(answer))) = tokio::time::timeout(Duration::from_secs(15), crate::ai::complete_once(&news.ai, &system, &text)).await {
+        let answer = answer.trim().trim_matches(['"', '“', '”']).trim();
+        if !answer.is_empty() {
+            return Some(answer.to_owned());
+        }
+    }
+    machine_translate(&text, target).await
+}
+
+/// Başlık ve kısa özeti Google Çeviri ile çevirir (yapay zekâ yetişmediğinde yedek).
 async fn machine_rendered(item: &NewsItem, target: &str) -> Option<Rendered> {
     let title = machine_translate(&item.title, target).await?;
     let summary = if item.excerpt.is_empty() { None } else { machine_translate(&item.excerpt, target).await };

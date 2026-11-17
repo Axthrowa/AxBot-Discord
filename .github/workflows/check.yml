@@ -1,0 +1,23 @@
+# Her gönderimde: clippy (unwrap/expect yasak) ve birim testler. Canlı testler (#[ignore]) çalışmaz.
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      # .cargo/config.toml bu bilgisayardaki Windows CMake yolunu verir; Linux'ta sistemdeki kullanılır.
+      CMAKE: cmake
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake
+      - run: cargo clippy --all-targets -- -D warnings -W clippy::unwrap_used -W clippy::expect_used
+      - run: cargo test

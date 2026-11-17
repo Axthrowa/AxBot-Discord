@@ -483,7 +483,7 @@ impl Options {
         let mut channels: Vec<(u16, u64, String)> = guild
             .channels
             .values()
-            .filter(|c| matches!(c.kind, ChannelType::Text | ChannelType::News))
+            .filter(|c| matches!(c.kind, ChannelType::Text | ChannelType::News) && !crate::backup::is_hidden(c))
             .map(|c| (c.position, c.id.get(), c.name.clone()))
             .collect();
         channels.sort();

@@ -187,6 +187,13 @@ async fn yedek_yukle(
         return reply_private(ctx, "✅ Yedekteki bütün roller ve kanallar sunucuda zaten var; yapılacak bir şey yok.").await;
     }
     if onay != Some(true) {
+        // Bot göremediği kanalların adını bilmez; yedekteki bir kanal onlardan biriyse ikinci kez açılabilir.
+        let hidden = cache.guild(guild_id).map_or(0, |g| g.channels.values().filter(|c| backup::is_hidden(c)).count());
+        let warning = if hidden > 0 && !channels.is_empty() {
+            format!("\n\n⚠️ Bot bu sunucuda **{hidden}** kanalı göremiyor. Listedeki bir kanal aslında onlardan biriyse ikinci kez oluşturulur; önce bota o kanalları görme izni ver.")
+        } else {
+            String::new()
+        };
         let preview = |names: Vec<&str>| {
             let shown: Vec<&str> = names.iter().copied().take(15).collect();
             shown.join(", ") + if names.len() > 15 { " …" } else { "" }
@@ -195,7 +202,7 @@ async fn yedek_yukle(
             ctx,
             format!(
                 "Bu yedek yüklenirse **{}** rol ve **{}** kanal oluşturulacak; var olan hiçbir şey silinmez ya da değişmez.\n\
-                 **Roller:** {}\n**Kanallar:** {}\n\nOnaylıyorsan komutu `onay: Evet` ile yeniden çalıştır.",
+                 **Roller:** {}\n**Kanallar:** {}{warning}\n\nOnaylıyorsan komutu `onay: Evet` ile yeniden çalıştır.",
                 roles.len(),
                 channels.len(),
                 preview(roles.iter().map(|r| r.name.as_str()).collect()),
