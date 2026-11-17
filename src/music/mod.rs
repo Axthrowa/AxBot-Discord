@@ -308,15 +308,7 @@ impl Music {
     pub async fn move_track(&self, guild_id: GuildId, from: usize, to: usize) -> Option<String> {
         let call = self.songbird.get(guild_id)?;
         let handler = call.lock().await;
-        let moved = handler.queue().modify_queue(|queue| {
-            if from == 0 || to == 0 || from >= queue.len() || to >= queue.len() {
-                return None;
-            }
-            let track = queue.remove(from)?;
-            let id = track.uuid();
-            queue.insert(to, track);
-            Some(id)
-        })?;
+        let moved = handler.queue().modify_queue(|queue| reorder(queue, from, to).map(|track| track.uuid()))?;
         drop(handler);
         Some(self.track_info(moved).map_or_else(|| "Şarkı".to_owned(), |i| i.title))
     }
@@ -1220,9 +1212,35 @@ pub fn format_duration(d: Duration) -> String {
     }
 }
 
+/// Kuyrukta `from`'daki parçayı `to`'ya taşır (0 = çalan parça; ona dokunulmaz). Taşınan parçayı döner.
+fn reorder<T>(queue: &mut VecDeque<T>, from: usize, to: usize) -> Option<&T> {
+    if from == 0 || to == 0 || from >= queue.len() || to >= queue.len() {
+        return None;
+    }
+    let item = queue.remove(from)?;
+    queue.insert(to, item);
+    queue.get(to)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reorders_queue_without_touching_current() {
+        let mut q: VecDeque<char> = "çabcd".chars().collect();
+        assert_eq!(reorder(&mut q, 4, 1), Some(&'d'));
+        assert_eq!(q.iter().collect::<String>(), "çdabc");
+        assert_eq!(reorder(&mut q, 1, 4), Some(&'d'));
+        assert_eq!(q.iter().collect::<String>(), "çabcd");
+        // Çalan parça (0) taşınamaz, yerine de bir şey konamaz; sınır dışı numaralar reddedilir.
+        assert_eq!(reorder(&mut q, 0, 2), None);
+        assert_eq!(reorder(&mut q, 2, 0), None);
+        assert_eq!(reorder(&mut q, 5, 1), None);
+        assert_eq!(reorder(&mut q, 1, 5), None);
+        assert_eq!(q.iter().collect::<String>(), "çabcd");
+        assert_eq!(reorder(&mut q, 2, 2), Some(&'b'));
+    }
 
     #[test]
     fn detects_playlist_links() {

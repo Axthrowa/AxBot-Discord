@@ -711,3 +711,19 @@ async fn eko_sifirla(
 pub async fn ekonomi(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Blackjack net kazancı (ödeme - bahis): kazanç 1:1, blackjack 3:2, beraberlik 0, kayıp -bahis.
+    #[test]
+    fn blackjack_gain_is_net_of_bet() {
+        assert_eq!(outcome_gain(Outcome::Win, 100), 100);
+        assert_eq!(outcome_gain(Outcome::Blackjack, 100), 150);
+        assert_eq!(outcome_gain(Outcome::Push, 100), 0);
+        assert_eq!(outcome_gain(Outcome::Lose, 100), -100);
+        assert_eq!(outcome_gain(Outcome::Blackjack, 1), 1); // 2.5 aşağı yuvarlanır
+        // (Negatif bahis buraya ulaşmaz: `take_bet` en az MIN_BET ister.)
+    }
+}
