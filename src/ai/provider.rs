@@ -12,6 +12,9 @@ use crate::config::{AiConfig, AiProvider, SearchBackend};
 const NIM_URL: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
 const GEMINI_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// Sırada yedek varken NIM'in cevaba başlaması için beklenen en uzun süre: kuyrukta takılan model
+/// (ücretsiz katmanda sık) yüzünden dakikalarca beklenmez, sıradakine geçilir.
+const FIRST_RESPONSE_WITH_FALLBACK: Duration = Duration::from_secs(20);
 /// Akıl yürüten modellerde düşünme de bu sınıra dahildir; düşük tutulursa cevap boş kalır.
 const MAX_OUTPUT_TOKENS: u32 = 1500;
 /// Düşük sıcaklık: daha tutarlı dil bilgisi, daha az uydurma kelime.
@@ -50,15 +53,18 @@ pub async fn complete(
     search: bool,
 ) -> anyhow::Result<String> {
     let messages = merge_consecutive(messages);
-    match ask(client, config, system, &messages, progress, search).await {
-        Ok(text) => Ok(text),
-        Err(error) => {
-            // Asıl sağlayıcıya ulaşılamadıysa (ağ / servis hatası) yedek sağlayıcı denenir.
-            let Some(fallback) = config.fallback.as_deref() else {
-                return Err(error);
-            };
-            tracing::warn!(provider = config.provider.name(), fallback = fallback.provider.name(), error = ?error, "AI sağlayıcısı yanıt vermedi; yedeğe geçiliyor");
-            ask(client, fallback, system, &messages, progress, search).await
+    let mut current = config;
+    loop {
+        match ask(client, current, system, &messages, progress, search).await {
+            Ok(text) => return Ok(text),
+            Err(error) => {
+                // Bu model / sağlayıcı cevap vermediyse (ağ, aşırı yük, kaldırılmış model) sıradaki denenir.
+                let Some(next) = current.fallback.as_deref() else {
+                    return Err(error);
+                };
+                tracing::warn!(provider = current.provider.name(), model = %current.model, next = %next.model, error = ?error, "AI modeli yanıt vermedi; sıradakine geçiliyor");
+                current = next;
+            }
         }
     }
 }
@@ -173,14 +179,13 @@ async fn nim_request(
         request["tool_choice"] = json!("auto");
     }
 
-    let mut response = client
-        .post(NIM_URL)
-        .bearer_auth(&config.api_key)
-        .timeout(REQUEST_TIMEOUT)
-        .json(&request)
-        .send()
-        .await
-        .context("NVIDIA NIM'e ulaşılamadı")?;
+    let send = client.post(NIM_URL).bearer_auth(&config.api_key).timeout(REQUEST_TIMEOUT).json(&request).send();
+    let mut response = if config.fallback.is_some() {
+        tokio::time::timeout(FIRST_RESPONSE_WITH_FALLBACK, send).await.map_err(|_| anyhow::anyhow!("NVIDIA NIM 20 sn içinde cevaba başlamadı"))?
+    } else {
+        send.await
+    }
+    .context("NVIDIA NIM'e ulaşılamadı")?;
     let status = response.status();
     if !status.is_success() {
         let text = response.text().await.unwrap_or_default();
@@ -188,7 +193,13 @@ async fn nim_request(
     }
 
     let mut stream = NimStream::default();
-    while let Some(chunk) = response.chunk().await.context("NVIDIA NIM yanıtı okunamadı")? {
+    // Yedek varken akış 20 sn sessiz kalırsa (yarıda donan model) beklenmez.
+    let idle = if config.fallback.is_some() { FIRST_RESPONSE_WITH_FALLBACK } else { REQUEST_TIMEOUT };
+    while let Some(chunk) = tokio::time::timeout(idle, response.chunk())
+        .await
+        .map_err(|_| anyhow::anyhow!("NVIDIA NIM yanıtı yarıda kesildi (20 sn sessiz)"))?
+        .context("NVIDIA NIM yanıtı okunamadı")?
+    {
         if stream.feed(&chunk) {
             // Araç çağrısı varken gelen içerik cevap değildir; gösterilmez.
             if let (Some(progress), true) = (progress, stream.calls.is_empty()) {

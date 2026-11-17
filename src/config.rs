@@ -10,7 +10,10 @@ const DEFAULT_DB_MAX_CONNECTIONS: u32 = 10;
 const DEFAULT_STREAM_POLL_SECS: u32 = 60;
 /// 2026-10 karşılaştırmasında Türkçesi en doğal ve hızlı (~6-17 sn) model; araç çağırmayı destekler.
 /// Önceki nemotron-3-super yabancı kelime karıştırıp hatalı cümle kuruyordu.
-const DEFAULT_NIM_MODEL: &str = "nvidia/nemotron-3-ultra-550b-a55b";
+const DEFAULT_NIM_MODEL: &str = "nvidia/nemotron-3.5-super-vl-120b-a12b";
+/// Asıl NIM modeli cevap vermezse denenen ikinci NIM modeli (`AI_FALLBACK_MODEL` ile değiştirilir).
+/// 2026-11-17 ölçümü: super-vl 3-10 sn, lightning 5-8 sn; nemotron-3-ultra 503 (aşırı yük), glm-5.3-flash cevapsız.
+const DEFAULT_NIM_FALLBACK_MODEL: &str = "nvidia/nemotron-3.5-lightning-30b-a3b";
 /// Her zaman en yeni Flash modelini gösteren takma ad; model emekliye ayrılınca kırılmaz.
 const DEFAULT_GEMINI_MODEL: &str = "gemini-flash-lite-latest";
 
@@ -85,7 +88,7 @@ pub struct AiConfig {
     /// NVIDIA modelinin web araması için kullandığı servis.
     /// Gemini kendi Google araması özelliğini kullanır, buna ihtiyaç duymaz.
     pub search: Option<SearchBackend>,
-    /// Asıl sağlayıcıya ulaşılamazsa denenecek ikinci sağlayıcı (iki anahtar da tanımlıysa).
+    /// Bu model cevap vermezse sıradaki (ikinci NIM modeli, sonra diğer sağlayıcı).
     pub fallback: Option<Box<AiConfig>>,
 }
 
@@ -171,23 +174,39 @@ fn ai_from_env() -> Result<Option<AiConfig>, ConfigError> {
         AiProvider::Gemini => ("GEMINI_API_KEY", DEFAULT_GEMINI_MODEL),
     };
 
-    // Diğer sağlayıcının anahtarı da varsa o yedek olur (kendi varsayılan modeliyle).
-    let fallback = match provider {
-        AiProvider::Nim => optional("GEMINI_API_KEY").map(|api_key| (AiProvider::Gemini, api_key, DEFAULT_GEMINI_MODEL)),
-        AiProvider::Gemini => optional("NVIDIA_API_KEY").map(|api_key| (AiProvider::Nim, api_key, DEFAULT_NIM_MODEL)),
+    let model = optional("AI_MODEL").unwrap_or_else(|| default_model.to_owned());
+    // Yedek sırası: asıl model → (NIM ise) ikinci NIM modeli → diğer sağlayıcı (anahtarı varsa).
+    let nim_key = optional("NVIDIA_API_KEY");
+    let second_nim = optional("AI_FALLBACK_MODEL").unwrap_or_else(|| DEFAULT_NIM_FALLBACK_MODEL.to_owned());
+    let mut chain: Vec<(AiProvider, String, String)> = vec![(provider, required(key_var)?, model.clone())];
+    match provider {
+        AiProvider::Nim => {
+            if let Some(key) = nim_key.filter(|_| second_nim != model) {
+                chain.push((AiProvider::Nim, key, second_nim));
+            }
+            if let Some(key) = optional("GEMINI_API_KEY") {
+                chain.push((AiProvider::Gemini, key, DEFAULT_GEMINI_MODEL.to_owned()));
+            }
+        }
+        AiProvider::Gemini => {
+            if let Some(key) = nim_key {
+                chain.push((AiProvider::Nim, key.clone(), DEFAULT_NIM_MODEL.to_owned()));
+                chain.push((AiProvider::Nim, key, second_nim));
+            }
+        }
     }
-    .map(|(provider, api_key, model)| {
-        Box::new(AiConfig { provider, api_key, model: model.to_owned(), system_prompt: optional("AI_SYSTEM_PROMPT"), search: search_from_env(), fallback: None })
-    });
-
-    Ok(Some(AiConfig {
-        provider,
-        api_key: required(key_var)?,
-        model: optional("AI_MODEL").unwrap_or_else(|| default_model.to_owned()),
-        system_prompt: optional("AI_SYSTEM_PROMPT"),
-        search: search_from_env(),
-        fallback,
-    }))
+    let mut config = None;
+    for (provider, api_key, model) in chain.into_iter().rev() {
+        config = Some(AiConfig {
+            provider,
+            api_key,
+            model,
+            system_prompt: optional("AI_SYSTEM_PROMPT"),
+            search: search_from_env(),
+            fallback: config.map(Box::new),
+        });
+    }
+    Ok(config)
 }
 
 /// Tavily anahtarı verildiyse o, yoksa SearXNG adresi varsa o kullanılır.
