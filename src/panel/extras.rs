@@ -635,7 +635,37 @@ pub async fn ticket_fields(state: &WebState, guild_id: GuildId, options: &Option
         None => String::new(),
     };
 
-    let mut out = section(
+    let mut out = match tickets::stats(&state.db, guild_id, 30).await {
+        Ok(stats) if stats.opened > 0 => {
+            let time = |secs: Option<f64>| secs.map_or_else(|| "—".to_owned(), tickets::human_secs);
+            let mut body = format!(
+                "<p>Açılan: <b>{}</b> · Kapanan: <b>{}</b> · Ortalama ilk yetkili cevabı: <b>{}</b> · Ortalama çözüm süresi: <b>{}</b></p>",
+                stats.opened,
+                stats.closed,
+                time(stats.first_response),
+                time(stats.resolution)
+            );
+            if !stats.staff.is_empty() {
+                body.push_str("<table><tr><th>Yetkili</th><th>İlk cevap</th><th>Kapattığı</th><th>Üstlendiği</th></tr>");
+                for (who, first, closed, claimed) in &stats.staff {
+                    let name = state
+                        .cache
+                        .guild(guild_id)
+                        .and_then(|g| g.members.get(&serenity::UserId::new((*who).max(1))).map(|m| m.display_name().to_owned()))
+                        .unwrap_or_else(|| who.to_string());
+                    let _ = write!(body, "<tr><td>{}</td><td>{first}</td><td>{closed}</td><td>{claimed}</td></tr>", escape(&name));
+                }
+                body.push_str("</table>");
+            }
+            section("İstatistikler (son 30 gün)", body)
+        }
+        Ok(_) => String::new(),
+        Err(e) => {
+            warn!(guild = %guild_id, error = ?e, "Bilet istatistikleri okunamadı");
+            String::new()
+        }
+    };
+    out.push_str(&section(
         "Genel",
         field("Biletlerin açılacağı kategori", &Options::select("category", &options.categories, "", category, "— Kategorisiz —"), "")
             + &field(
@@ -648,7 +678,7 @@ pub async fn ticket_fields(state: &WebState, guild_id: GuildId, options: &Option
                 &format!("<input type=\"number\" name=\"max_open\" value=\"{}\" min=\"1\" max=\"5\">", extras.max_open.clamp(1, 5)),
                 "",
             ),
-    );
+    ));
     out.push_str(&section(
         "Bilet içeriği",
         field(

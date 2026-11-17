@@ -345,6 +345,9 @@ async fn run() -> anyhow::Result<()> {
                 });
                 rsvp::spawn(ctx.clone(), db.clone(), plugin_settings.clone());
                 tickets::spawn_auto_close(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone(), Arc::clone(&modlog));
+                if let Err(e) = tickets::load_awaiting(&db).await {
+                    tracing::warn!(error = ?e, "Cevap bekleyen biletler yüklenemedi");
+                }
                 alerts::spawn(Arc::clone(&ctx.http), http_client.clone(), alert_owners);
                 let leveling = Arc::new(leveling::Leveling::new());
                 community::spawn_seasons(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone(), Arc::clone(&leveling));

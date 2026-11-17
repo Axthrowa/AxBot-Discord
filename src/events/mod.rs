@@ -115,6 +115,7 @@ pub async fn handle(
                     crate::highlights::on_message(ctx, &data.db, guild_id, msg).await;
                     crate::modmail::on_staff_message(ctx, data, guild_id, msg).await;
                     crate::ai::assist::on_ticket_message(ctx, data, guild_id, msg).await;
+                    tickets::on_message(ctx, &data.db, msg).await;
                     crate::achievements::bump(ctx, data, guild_id, &msg.author, crate::achievements::Kind::Messages, 1, Some(msg.channel_id)).await;
                     let facts = Facts { trigger: Trigger::Message, channel: Some(msg.channel_id.get()), content: &msg.content, member_roles: roles, ..Facts::default() };
                     automations::run(ctx, data, automations::Event { guild_id, user: &msg.author, facts, message: Some(msg) }).await;

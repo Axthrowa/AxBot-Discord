@@ -354,6 +354,8 @@ async fn open_inner(
         .execute(db)
         .await?;
 
+    AWAITING_STAFF.insert(channel.id, (guild_id, user.id));
+
     let mut ping = user.id.mention().to_string();
     if let Some(role) = settings.support_role_id {
         ping.push_str(&format!(" {}", role.mention()));
@@ -1087,5 +1089,125 @@ mod tests {
         assert_eq!(extras.max_open, 1);
         assert!(!extras.keep_closed);
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------- İstatistikler
+
+/// Yetkilinin ilk cevabını bekleyen bilet kanalları: kanal → (sunucu, açan). Mesaj başına tek bellek bakışı.
+static AWAITING_STAFF: std::sync::LazyLock<dashmap::DashMap<ChannelId, (GuildId, UserId)>> = std::sync::LazyLock::new(dashmap::DashMap::new);
+
+/// Açılışta, henüz yetkili cevabı almamış açık biletleri belleğe alır.
+pub async fn load_awaiting(db: &PgPool) -> anyhow::Result<()> {
+    let rows: Vec<(i64, i64, i64)> =
+        sqlx::query_as("SELECT guild_id, channel_id, opener_id FROM tickets WHERE status = 'open' AND first_response_at IS NULL").fetch_all(db).await?;
+    for (guild, channel, opener) in rows {
+        let ids = (u64::try_from(guild), u64::try_from(channel), u64::try_from(opener));
+        if let (Ok(guild), Ok(channel), Ok(opener)) = ids {
+            if guild != 0 && channel != 0 && opener != 0 {
+                AWAITING_STAFF.insert(ChannelId::new(channel), (GuildId::new(guild), UserId::new(opener)));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Bilet kanalına yazan ilk yetkiliyi ve zamanı kaydeder.
+pub async fn on_message(ctx: &serenity::Context, db: &PgPool, msg: &serenity::Message) {
+    let Some(entry) = AWAITING_STAFF.get(&msg.channel_id).map(|e| *e) else { return };
+    let (guild_id, opener) = entry;
+    if msg.author.id == opener || msg.author.bot {
+        return;
+    }
+    let roles = msg.member.as_ref().map(|m| m.roles.clone()).unwrap_or_default();
+    let manages = ctx.cache.guild(guild_id).is_some_and(|g| {
+        g.members.get(&msg.author.id).is_some_and(|m| {
+            let perms = g.member_permissions(m);
+            perms.contains(Permissions::MANAGE_CHANNELS) || perms.contains(Permissions::ADMINISTRATOR)
+        })
+    });
+    let staff = manages || load_settings(db, guild_id).await.ok().flatten().and_then(|s| s.support_role_id).is_some_and(|r| roles.contains(&r));
+    if !staff {
+        return;
+    }
+    AWAITING_STAFF.remove(&msg.channel_id);
+    let saved = async {
+        sqlx::query("UPDATE tickets SET first_response_at = now(), first_responder = $2 WHERE channel_id = $1 AND first_response_at IS NULL")
+            .bind(snowflake(msg.channel_id.get())?)
+            .bind(snowflake(msg.author.id.get())?)
+            .execute(db)
+            .await?;
+        anyhow::Ok(())
+    };
+    if let Err(e) = saved.await {
+        warn!(guild = %guild_id, error = ?e, "Biletin ilk cevabı kaydedilemedi");
+    }
+}
+
+/// Son `days` günün bilet özeti.
+pub struct TicketStats {
+    pub opened: i64,
+    pub closed: i64,
+    /// Ortalama ilk yetkili cevabı ve kapanış süresi (saniye).
+    pub first_response: Option<f64>,
+    pub resolution: Option<f64>,
+    /// Yetkili başına: (kimlik, ilk cevap, kapatma, üstlenme).
+    pub staff: Vec<(u64, i64, i64, i64)>,
+}
+
+pub async fn stats(db: &PgPool, guild_id: GuildId, days: i32) -> anyhow::Result<TicketStats> {
+    let guild = snowflake(guild_id.get())?;
+    let (opened, closed, first_response, resolution): (i64, i64, Option<f64>, Option<f64>) = sqlx::query_as(
+        "SELECT count(*), count(*) FILTER (WHERE status <> 'open'),
+                (avg(EXTRACT(EPOCH FROM first_response_at - created_at)) FILTER (WHERE first_response_at IS NOT NULL))::float8,
+                (avg(EXTRACT(EPOCH FROM closed_at - created_at)) FILTER (WHERE closed_at IS NOT NULL))::float8
+         FROM tickets WHERE guild_id = $1 AND created_at > now() - make_interval(days => $2)",
+    )
+    .bind(guild)
+    .bind(days)
+    .fetch_one(db)
+    .await?;
+    let rows: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT who, sum(r)::bigint, sum(c)::bigint, sum(k)::bigint FROM (
+             SELECT first_responder AS who, 1 AS r, 0 AS c, 0 AS k FROM tickets
+              WHERE guild_id = $1 AND created_at > now() - make_interval(days => $2) AND first_responder IS NOT NULL
+             UNION ALL
+             SELECT closed_by, 0, 1, 0 FROM tickets
+              WHERE guild_id = $1 AND created_at > now() - make_interval(days => $2) AND closed_by IS NOT NULL AND closed_by <> opener_id
+             UNION ALL
+             SELECT claimed_by, 0, 0, 1 FROM tickets
+              WHERE guild_id = $1 AND created_at > now() - make_interval(days => $2) AND claimed_by IS NOT NULL
+         ) x GROUP BY who ORDER BY sum(r) + sum(c) + sum(k) DESC LIMIT 10",
+    )
+    .bind(guild)
+    .bind(days)
+    .fetch_all(db)
+    .await?;
+    let staff = rows.into_iter().filter_map(|(who, r, c, k)| u64::try_from(who).ok().map(|w| (w, r, c, k))).collect();
+    Ok(TicketStats { opened, closed, first_response, resolution, staff })
+}
+
+/// Saniyeyi okunur süreye çevirir: "45 sn", "12 dk", "3 sa 5 dk", "2 g 4 sa".
+pub fn human_secs(secs: f64) -> String {
+    let secs = if secs.is_finite() && secs > 0.0 { secs.round() as u64 } else { 0 };
+    match secs {
+        0..=59 => format!("{secs} sn"),
+        60..=3599 => format!("{} dk", secs / 60),
+        3600..=86_399 => format!("{} sa {} dk", secs / 3600, secs % 3600 / 60),
+        _ => format!("{} g {} sa", secs / 86_400, secs % 86_400 / 3600),
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::human_secs;
+
+    #[test]
+    fn durations_read_naturally() {
+        assert_eq!(human_secs(42.4), "42 sn");
+        assert_eq!(human_secs(720.0), "12 dk");
+        assert_eq!(human_secs(3600.0 * 3.0 + 300.0), "3 sa 5 dk");
+        assert_eq!(human_secs(86_400.0 * 2.0 + 3600.0 * 4.0), "2 g 4 sa");
+        assert_eq!(human_secs(f64::NAN), "0 sn");
     }
 }
