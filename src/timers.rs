@@ -1,4 +1,4 @@
-//! Tekrarlı mesajlar (zamanlayıcılar) ve panelden gönderilen gömülü mesajların kayıtları.
+//! Tekrarlı mesajlar (zamanlayıcılar; isteğe bağlı otomatik kanal temizleme) ve panelden gönderilen gömülü mesajların kayıtları.
 //!
 //! Zamanlayıcılar `PluginSettings` deposunda durur; arka plan görevi yarım dakikada bir bellekteki
 //! ayarlara bakar (veritabanına yalnızca bir mesaj gönderildiğinde, yeni zamanı yazmak için gider).
@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use poise::serenity_prelude::{self as serenity, ChannelId, CreateAllowedMentions, CreateEmbed, CreateEmbedFooter, CreateMessage};
+use poise::serenity_prelude::{self as serenity, ChannelId, CreateAllowedMentions, CreateEmbed, CreateEmbedFooter, CreateMessage, GetMessages, MessageId};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -27,6 +27,9 @@ pub struct Timer {
     pub interval_mins: u32,
     /// Bir sonraki gönderim zamanı (Unix saniyesi).
     pub next_unix: i64,
+    /// Otomatik temizleme: zamanı gelince önce kanaldaki mesajlar silinir (sabitlenenler kalır), mesaj boş değilse ardından gönderilir.
+    #[serde(default)]
+    pub purge: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,11 +50,11 @@ impl TimerSettings {
 
 /// Zamanı gelen zamanlayıcılar için sıradaki zamanı ilerletir ve gönderilecekleri döner.
 /// Bot kapalıyken kaçan turlar tek tek gönderilmez; sıradaki zaman şimdiden sonraya atlar.
-pub fn take_due(settings: &mut TimerSettings, now: i64) -> Vec<(u64, String)> {
+pub fn take_due(settings: &mut TimerSettings, now: i64) -> Vec<Timer> {
     let mut due = Vec::new();
     for timer in &mut settings.timers {
         if timer.next_unix <= now {
-            due.push((timer.channel, timer.message.clone()));
+            due.push(timer.clone());
             let step = i64::from(timer.interval_mins.max(MIN_INTERVAL_MINS)) * 60;
             let missed = (now - timer.next_unix) / step;
             timer.next_unix += (missed + 1) * step;
@@ -87,7 +90,15 @@ pub fn spawn(ctx: serenity::Context, db: PgPool, settings: PluginSettings) {
                         warn!(guild = %guild_id, error = ?e, "Zamanlayıcı zamanı kaydedilemedi");
                         continue;
                     }
-                    for (channel, text) in due {
+                    for timer in due {
+                        let (channel, text) = (timer.channel, timer.message);
+                        if timer.purge {
+                            let count = purge(&ctx.http, ChannelId::new(channel.max(1))).await;
+                            info!(guild = %guild_id, channel, count, "Kanal otomatik temizlendi");
+                            if text.trim().is_empty() {
+                                continue;
+                            }
+                        }
                         // Tekrarlı mesajlar kimseyi etiketlemez (@everyone dahil).
                         let message = CreateMessage::new().content(text).allowed_mentions(CreateAllowedMentions::new());
                         match ChannelId::new(channel.max(1)).send_message(&ctx.http, message).await {
@@ -100,6 +111,42 @@ pub fn spawn(ctx: serenity::Context, db: PgPool, settings: PluginSettings) {
             .await;
         }
     });
+}
+
+/// Kanaldaki son 14 gün içindeki mesajları siler (Discord daha eskileri toplu silmez); sabitlenenler kalır.
+/// Tur başına en fazla 500 mesaj. Silinen mesaj sayısını döner.
+async fn purge(http: &serenity::Http, channel: ChannelId) -> usize {
+    // 14 günün sınırına bir dakika pay bırakılır.
+    let cutoff = serenity::Timestamp::now().unix_timestamp() - 14 * 86_400 + 60;
+    let mut deleted = 0;
+    let mut before: Option<MessageId> = None;
+    for _ in 0..5 {
+        let request = before.map_or_else(|| GetMessages::new().limit(100), |b| GetMessages::new().limit(100).before(b));
+        let batch = match channel.messages(http, request).await {
+            Ok(batch) => batch,
+            Err(e) => {
+                warn!(channel = %channel, error = %e, "Otomatik temizleme mesajları okuyamadı");
+                break;
+            }
+        };
+        before = batch.last().map(|m| m.id);
+        let ids: Vec<MessageId> = batch.iter().filter(|m| !m.pinned && m.timestamp.unix_timestamp() > cutoff).map(|m| m.id).collect();
+        let result = match ids.as_slice() {
+            [] => Ok(()),
+            [id] => channel.delete_message(http, *id).await,
+            _ => channel.delete_messages(http, &ids).await,
+        };
+        if let Err(e) = result {
+            warn!(channel = %channel, error = %e, "Otomatik temizleme mesajları silemedi");
+            break;
+        }
+        deleted += ids.len();
+        // Son sayfaya ya da 14 günden eski mesajlara gelindiyse devam etmenin anlamı yok.
+        if batch.len() < 100 || batch.last().is_some_and(|m| m.timestamp.unix_timestamp() <= cutoff) {
+            break;
+        }
+    }
+    deleted
 }
 
 // ---------------------------------------------------------------- Gömülü mesajlar
@@ -159,7 +206,7 @@ mod tests {
     use super::*;
 
     fn timer(id: u32, interval_mins: u32, next_unix: i64) -> Timer {
-        Timer { id, channel: 1, message: format!("m{id}"), interval_mins, next_unix }
+        Timer { id, channel: 1, message: format!("m{id}"), interval_mins, next_unix, purge: false }
     }
 
     #[test]
@@ -167,7 +214,7 @@ mod tests {
         let mut settings = TimerSettings { timers: vec![timer(1, 10, 1_000), timer(2, 60, 5_000)] };
         // 1 numaralı zamanlayıcı 3 tur kaçırmış (bot kapalıydı): tek mesaj gider, sıradaki zaman ileride.
         let due = take_due(&mut settings, 2_900);
-        assert_eq!(due, vec![(1, "m1".to_owned())]);
+        assert_eq!(due.iter().map(|t| (t.id, t.message.as_str())).collect::<Vec<_>>(), vec![(1, "m1")]);
         assert_eq!(settings.timers[0].next_unix, 3_400);
         assert_eq!(settings.timers[1].next_unix, 5_000);
         assert!(take_due(&mut settings, 2_900).is_empty());

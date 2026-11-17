@@ -335,7 +335,7 @@ pub async fn timer_fields(state: &WebState, guild_id: GuildId, options: &Options
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td><input type=\"checkbox\" name=\"timer_del\" value=\"{}\"></td></tr>",
                 escape(&channel_name(options, timer.channel)),
                 interval_label(timer.interval_mins),
-                escape(&preview(&timer.message, 90)),
+                if timer.purge { format!("🧹 Temizle{}", if timer.message.is_empty() { String::new() } else { format!(" + {}", escape(&preview(&timer.message, 80))) }) } else { escape(&preview(&timer.message, 90)) },
                 timer.id
             );
         }
@@ -354,6 +354,11 @@ pub async fn timer_fields(state: &WebState, guild_id: GuildId, options: &Options
                     timers::MAX_INTERVAL_MINS
                 ),
                 "En az 5 dakika, en fazla 7 gün. İlk mesaj bu süre dolunca gönderilir.",
+            )
+            + &checkbox(
+                "timer_purge",
+                false,
+                "Otomatik temizleme: zamanı gelince kanaldaki mesajları sil (sabitlenenler kalır, 14 günden eskileri Discord silmez); mesaj yazdıysan ardından gönderilir",
             ),
     ));
     Ok((out, !settings.timers.is_empty()))
@@ -363,7 +368,13 @@ fn parse_timer(input: &Input<'_>, id: u32, now: i64) -> Result<Option<Timer>, &'
     let Some(channel) = input.channel("timer_channel")? else {
         return Ok(None);
     };
-    let message = input.text("timer_message")?.ok_or("bos")?;
+    let purge = input.checked("timer_purge");
+    // Temizleme zamanlayıcısında mesaj isteğe bağlıdır (temizlikten sonra gönderilir).
+    let message = match input.text("timer_message")? {
+        Some(message) => message,
+        None if purge => String::new(),
+        None => return Err("bos"),
+    };
     let every = input.number("timer_every", 1, timers::MAX_INTERVAL_MINS)?;
     let interval_mins = match input.raw("timer_unit") {
         "minutes" => every,
@@ -373,7 +384,7 @@ fn parse_timer(input: &Input<'_>, id: u32, now: i64) -> Result<Option<Timer>, &'
     if !(timers::MIN_INTERVAL_MINS..=timers::MAX_INTERVAL_MINS).contains(&interval_mins) {
         return Err("sayi");
     }
-    Ok(Some(Timer { id, channel: channel.get(), message, interval_mins, next_unix: now + i64::from(interval_mins) * 60 }))
+    Ok(Some(Timer { id, channel: channel.get(), message, interval_mins, next_unix: now + i64::from(interval_mins) * 60, purge }))
 }
 
 pub async fn timer_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Result<(), &'static str> {
