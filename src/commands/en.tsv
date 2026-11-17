@@ -1,0 +1,689 @@
+# İngilizce komut arayüzü — biçim için en.rs başındaki açıklamaya bak. İngilizce metinde dikey çizgi kullanma.
+C | ping | ping | Shows the bot's gateway, REST API, database and cache latency.
+C | kurulum | setup | Setup status of the bot in this server: missing permissions and feature settings.
+C | panel | dashboard | Gives you a one-time dashboard login link (only you see it, valid for 10 minutes).
+C | automod | automod | Auto-moderation settings (profanity, ads, spam).
+C | automod durum | status | Shows the current auto-mod settings.
+C | automod ayarla | set | Turns an auto-mod feature on or off.
+P | automod ayarla | özellik | feature | Feature to change
+K | automod ayarla | özellik | Auto-mod (tümü) | Auto-mod (all)
+K | automod ayarla | özellik | Davet linki engeli | Block invite links
+K | automod ayarla | özellik | Tüm linkleri engelle | Block all links
+K | automod ayarla | özellik | Küfür filtresi | Profanity filter
+K | automod ayarla | özellik | Spam koruması | Spam protection
+K | automod ayarla | özellik | Yetkililer muaf | Staff are exempt
+P | automod ayarla | aktif | enabled | Should it be on?
+C | automod kelime-ekle | add-word | Adds a banned word: `word` whole word, `word*` prefix, `*word*` anywhere.
+P | automod kelime-ekle | kelime | word | Word to ban (2-32 characters: letters, digits, spaces, *)
+C | automod kelime-sil | remove-word | Removes a server-specific banned word.
+P | automod kelime-sil | kelime | word | Word to remove from the list
+C | automod istisna-ekle | add-exception | Allows a wrongly blocked word: `word` whole word, `word*` prefix.
+P | automod istisna-ekle | kelime | word | Word to allow (e.g. word or word*)
+C | automod istisna-sil | remove-exception | Removes an exception; the word is filtered again.
+P | automod istisna-sil | kelime | word | Word to remove from the exceptions
+C | automod spam-limiti | spam-limit | Sets how sensitive spam protection is.
+P | automod spam-limiti | mesaj | messages | Most messages allowed within the window
+P | automod spam-limiti | saniye | seconds | Window length (seconds)
+C | bilet | ticket | Support ticket system.
+C | bilet kur | setup | Sends the ticket panel to a channel and saves the settings (run again to update).
+P | bilet kur | kanal | channel | Channel for the panel
+P | bilet kur | kategori | category | Category where tickets are opened (optional)
+P | bilet kur | destek_rolü | support_role | Support team role that can see tickets (optional)
+C | bilet üstlen | claim | Claims this ticket (support team).
+C | bilet ekle | add | Adds a member to the ticket (support team).
+P | bilet ekle | üye | member | Member to add to the ticket
+C | bilet çıkar | remove | Removes a member from the ticket (support team).
+P | bilet çıkar | üye | member | Member to remove from the ticket
+C | bilet kapat | close | Closes the support ticket you are in.
+C | bilet yeniden-aç | reopen | Reopens a closed and kept ticket (support team).
+C | bilet sil | delete | Permanently deletes a closed and kept ticket (support team).
+C | ai | ai | AI chat settings.
+C | ai kanal-ekle | add-channel | Adds a channel where the bot answers every message with AI.
+P | ai kanal-ekle | kanal | channel | AI channel
+C | ai kanal-sil | remove-channel | Turns off AI replies in a channel.
+P | ai kanal-sil | kanal | channel | Channel to turn AI off in
+C | ai karakter | character | Picks the character the bot plays in this channel.
+P | ai karakter | ad | name | Character name; leave empty to return to the default
+C | ai durum | status | Shows the AI provider and enabled channels.
+C | ai sıfırla | reset | Deletes this channel's AI chat history (the bot forgets the conversation).
+C | yaz | write | Has the AI write a short text (announcement, poem, description...).
+P | yaz | istek | prompt | What should it write? (e.g. a short announcement for the server rules)
+C | hayal-et | imagine | Has the AI draw a picture of what you describe.
+P | hayal-et | istek | prompt | What should it draw?
+C | kartım | card | Customize your rank card, view profiles, give reputation.
+C | kartım ayarla | set | Changes your rank card's color, background image or font.
+P | kartım ayarla | renk | color | Accent color (#RRGGBB, e.g. #FF8800)
+P | kartım ayarla | arka-plan | background | Background image (https link; PNG, JPEG or WebP)
+P | kartım ayarla | yazı-tipi | font | Font
+K | kartım ayarla | yazı-tipi | Noto Sans (varsayılan) | Noto Sans (default)
+K | kartım ayarla | yazı-tipi | Poppins | Poppins
+K | kartım ayarla | yazı-tipi | PT Serif | PT Serif
+K | kartım ayarla | yazı-tipi | Pacifico (el yazısı) | Pacifico (handwriting)
+C | kartım sıfırla | reset | Resets your rank card (admins can reset others' cards too).
+P | kartım sıfırla | kullanıcı | user | Member whose card to reset (admins only; empty = you)
+C | kartım profil | profile | Shows a member's profile: level card, balance, reputation and achievements.
+P | kartım profil | kullanıcı | user | Member to show (empty = you)
+C | kartım rep | rep | Gives a member a reputation point (once a day).
+P | kartım rep | kullanıcı | user | Member to give reputation to
+C | üye-notu | member-note | Staff notes about members (members don't see them; not a punishment).
+C | üye-notu ekle | add | Adds a note to a member.
+P | üye-notu ekle | kullanıcı | user | Member to add a note to
+P | üye-notu ekle | not | note | Note
+C | üye-notu liste | list | Shows a member's notes.
+P | üye-notu liste | kullanıcı | user | Member whose notes to show
+C | üye-notu sil | delete | Deletes a note.
+P | üye-notu sil | numara | number | Note number (from the note list)
+C | etkinlik | event | Plan an event: members tell with buttons whether they will join.
+C | etkinlik oluştur | create | Posts an event announcement in this channel.
+P | etkinlik oluştur | başlık | title | Event name
+P | etkinlik oluştur | zaman | time | Turkey time: 25.12.2026 21:30 (without a year, the nearest date)
+P | etkinlik oluştur | açıklama | description | Details (optional)
+P | etkinlik oluştur | discord_etkinliği | discord_event | Also add it to Discord's Events list? (default: yes)
+C | etkinlik liste | list | Lists upcoming events.
+C | etkinlik iptal | cancel | Cancels an event.
+P | etkinlik iptal | numara | number | Event number (from the event list)
+C | yedek | backup | Back up or restore the server's role and channel structure.
+C | yedek al | create | Saves the current structure of roles and channels.
+P | yedek al | ad | name | Backup name (optional)
+C | yedek liste | list | Lists saved backups.
+C | yedek yükle | restore | Recreates roles and channels from the backup that are missing (deletes nothing).
+P | yedek yükle | numara | number | Backup number (from the backup list)
+P | yedek yükle | onay | confirm | Choose True to really create them; empty only shows what would happen
+C | yedek sil | delete | Deletes a backup.
+P | yedek sil | numara | number | Backup number (from the backup list)
+C | cevir_mesaj | Translate message
+C | bildir | Report message
+C | ozetle | Summarize up to here
+C | cevap_taslagi | AI reply draft
+C | starboard_ekle | Add to starboard
+C | not_ekle_menu | Add staff note
+C | hizli_ceza | Quick punishment
+C | afk | afk | Marks you as AFK; the bot tells people who mention you. Your next message clears it.
+P | afk | sebep | reason | Why are you AFK? (optional)
+C | itiraf | confess | Sends an anonymous confession to the confession channel.
+P | itiraf | metin | text | Your confession
+C | çevir | translate | Translates a text into another language with AI.
+P | çevir | dil | language | Into which language? (e.g. English, Turkish, German)
+P | çevir | metin | text | Text to translate
+C | yardım | help | Usage guide: separate topics for members and admins (pick from the menu).
+C | yayın | stream | Twitch / Kick stream announcements.
+C | yayın ekle | add | Announces when a streamer goes live.
+P | yayın ekle | platform | platform | Platform
+K | yayın ekle | platform | Twitch | Twitch
+K | yayın ekle | platform | Kick | Kick
+P | yayın ekle | yayıncı | streamer | Channel name or link (e.g. shroud or https://kick.com/xqc)
+P | yayın ekle | kanal | channel | Channel for the announcement
+P | yayın ekle | rol | role | Role to mention in the announcement (optional)
+C | yayın sil | remove | Stops a streamer's announcements.
+P | yayın sil | platform | platform | Platform
+K | yayın sil | platform | Twitch | Twitch
+K | yayın sil | platform | Kick | Kick
+P | yayın sil | yayıncı | streamer | Channel name
+C | yayın liste | list | Lists followed streamers.
+C | çal | play | Plays a song or adds it to the queue (song name or YouTube/Spotify/SoundCloud link).
+P | çal | şarkı | song | Song name or link (YouTube, Spotify, SoundCloud, playlist)
+C | müzik | music | Music settings and extras (24/7, autoplay, radio, lyrics, queue editing).
+C | müzik geç | skip | Skips the current song.
+C | müzik durdur | stop | Stops the music, clears the queue and leaves the voice channel.
+C | müzik ayrıl | leave | Leaves the voice channel (the queue is cleared).
+C | müzik duraklat | pause | Pauses the current song.
+C | müzik devam | resume | Resumes the paused song.
+C | müzik şimdi | now-playing | Shows the current song and its progress.
+C | müzik sıra | queue | Shows the song queue.
+C | müzik ses | volume | Sets the volume (0-150%).
+P | müzik ses | seviye | level | Volume percent (0-150, default 60)
+C | müzik döngü | loop | Turns repeat of the current song on or off.
+C | müzik karıştır | shuffle | Shuffles the upcoming songs.
+C | müzik 7-24 | 24-7 | 24/7 mode: the bot stays even if the channel or queue is empty (needs Manage Server).
+P | müzik 7-24 | açık | enabled | On?
+C | müzik otomatik | autoplay | Autoplay: when the queue ends, continues with songs similar to the last one.
+P | müzik otomatik | açık | enabled | On?
+C | müzik radyo | radio | Listen to live radio (the queue is cleared).
+P | müzik radyo | istasyon | station | Radio station
+K | müzik radyo | istasyon | Süper FM | Süper FM
+K | müzik radyo | istasyon | Metro FM | Metro FM
+K | müzik radyo | istasyon | Joy FM | Joy FM
+K | müzik radyo | istasyon | Joy Türk | Joy Türk
+K | müzik radyo | istasyon | Joy Jazz | Joy Jazz
+K | müzik radyo | istasyon | Virgin Radio | Virgin Radio
+K | müzik radyo | istasyon | Lofi / Chillhop | Lofi / Chillhop
+C | müzik sözler | lyrics | Shows song lyrics (empty = the current song).
+P | müzik sözler | şarkı | song | Song name (empty = now playing)
+C | müzik sar | seek | Jumps to a point in the current song (e.g. 1:30).
+P | müzik sar | konum | position | Where to jump (e.g. 90, 1:30, 1:02:03)
+C | müzik sil | remove | Removes a song from the queue.
+P | müzik sil | sıra | position | Its position in the queue (number from the queue list)
+C | müzik taşı | move | Changes a song's position in the queue.
+P | müzik taşı | nereden | from | The song's current position
+P | müzik taşı | nereye | to | New position (1 = next)
+C | müzik dj-rol | dj-role | Sets the DJ role: if set, only that role can use skip, stop, volume and similar.
+P | müzik dj-rol | rol | role | DJ role (leave empty to remove the restriction)
+C | müzik liste-kaydet | save-playlist | Saves the current queue as your own playlist.
+P | müzik liste-kaydet | ad | name | Playlist name
+C | müzik liste-çal | play-playlist | Adds your saved playlist to the queue.
+P | müzik liste-çal | ad | name | Playlist name
+C | müzik listelerim | my-playlists | Shows your saved playlists.
+C | müzik liste-sil | delete-playlist | Deletes one of your saved playlists.
+P | müzik liste-sil | ad | name | Playlist name
+C | müzik söyle | say | Reads your text aloud in the voice channel (for people without a mic).
+P | müzik söyle | metin | text | Text to read (up to 200 characters)
+C | doğrulama | verification | Button verification system.
+C | doğrulama kur | setup | Sends the verification panel: members who press the button get a role.
+P | doğrulama kur | kanal | channel | Channel for the panel (one new members can see)
+P | doğrulama kur | rol | role | Role given after verification (other channels should require it)
+P | doğrulama kur | işlem_sorusu | math_question | Ask a simple sum after the button? (against bot accounts)
+C | doğrulama kapat | disable | Turns verification off (the panel buttons stop working).
+C | başvuru | application | Application forms and ban appeals.
+C | başvuru form-ekle | add-form | Creates or updates an application form (up to 5 questions).
+P | başvuru form-ekle | ad | name | Form name (e.g. Staff Application)
+P | başvuru form-ekle | yetkili_kanalı | staff_channel | Channel (seen by staff) where applications arrive
+P | başvuru form-ekle | soru1 | question1 | Question 1 (up to 45 characters)
+P | başvuru form-ekle | soru2 | question2 | Question 2
+P | başvuru form-ekle | soru3 | question3 | Question 3
+P | başvuru form-ekle | soru4 | question4 | Question 4
+P | başvuru form-ekle | soru5 | question5 | Question 5
+P | başvuru form-ekle | rol | role | Role given to accepted applicants (optional)
+C | başvuru panel | panel | Sends the apply button to a channel.
+P | başvuru panel | form | form | Form
+P | başvuru panel | kanal | channel | Channel for the button
+P | başvuru panel | açıklama | description | Text shown on the panel
+C | başvuru form-sil | delete-form | Deletes a form (and its applications).
+P | başvuru form-sil | form | form | Form
+C | başvuru form-liste | list-forms | Lists the forms.
+C | başvuru itiraz-kanalı | appeal-channel | Channel where ban appeals arrive (empty = appeals off).
+P | başvuru itiraz-kanalı | kanal | channel | Channel seen by staff
+P | başvuru itiraz-kanalı | itiraz_sunucusu_daveti | appeal_server_invite | Permanent invite to a separate appeal server the bot is in (needed for banned users)
+C | oyun | game | Games: tic-tac-toe, connect four, hangman, trivia.
+C | oyun xox | tic-tac-toe | Tic-tac-toe. Without an opponent you play against the bot.
+P | oyun xox | rakip | opponent | Opponent (empty = play against me)
+C | oyun dört-bağla | connect-four | Connect four. Without an opponent you play against the bot.
+P | oyun dört-bağla | rakip | opponent | Opponent (empty = play against me)
+C | oyun adam-asmaca | hangman | Hangman: everyone in the channel guesses by typing letters or words.
+C | oyun bilgi-yarışması | trivia | Trivia: pick the right answer in 20 seconds (anyone can join).
+C | oyun müzik-yarışması | music-quiz | Music quiz: plays songs in voice; first to type the title or artist scores.
+P | oyun müzik-yarışması | tur | rounds | How many songs (default 5)
+C | eğlence | fun | Small fun things: 8ball, dice, choose, truth or dare, poll.
+C | eğlence 8top | 8ball | Ask the magic 8 ball a yes/no question.
+P | eğlence 8top | soru | question | Yes/no question
+C | eğlence zar | dice | Roll dice.
+P | eğlence zar | adet | count | How many dice (1-10, default 1)
+P | eğlence zar | yüz | sides | Sides per die (2-100, default 6)
+C | eğlence seç | choose | Picks randomly from the options (separate with commas).
+P | eğlence seç | seçenekler | options | Separate with commas (e.g. pizza, burger, tacos)
+C | eğlence doğruluk-cesaret | truth-or-dare | Truth or dare?
+C | eğlence anket | poll | Creates a Discord poll.
+P | eğlence anket | soru | question | Poll question
+P | eğlence anket | seçenekler | options | Separate with commas (2-10 options)
+P | eğlence anket | süre | duration | E.g. 5dk, 30dk, 1sa30dk, 2sa, 1g (number only = minutes; default 1g)
+C | eğlence klipler | clips | Top clip sharers in the clip channel (AxT Capture or uploaded videos).
+C | hayvan | animal | Animal catching game.
+C | hayvan koleksiyon | collection | Animals you have caught.
+P | hayvan koleksiyon | kullanıcı | user | Member to look at (empty = you)
+C | hayvan sıralama | leaderboard | Members with the most species.
+C | hayvan liste | list | All animals and their rarity.
+C | hayvan kanal | channel | Sets the channel where animals appear (empty = game off).
+P | hayvan kanal | kanal | channel | Chat channel where animals appear
+C | duyuru | announce | Fancy (embed) announcements.
+C | duyuru gönder | send | Creates and sends an embed announcement (you type the text in a pop-up).
+P | duyuru gönder | kanal | channel | Channel for the announcement
+P | duyuru gönder | renk | color | Color: kırmızı, mavi, yeşil, sarı, turuncu, mor, pembe, altın... or #ff8800
+P | duyuru gönder | etiket | mention | Role to mention in the announcement (optional)
+C | duyuru düzenle | edit | Edits an announcement sent by the bot.
+P | duyuru düzenle | mesaj_bağlantısı | message_link | Announcement link (right-click the message, Copy Message Link)
+P | duyuru düzenle | renk | color | New color (empty = unchanged)
+C | otocevap | autoresponder | Auto replies: the bot answers when a word or phrase is typed.
+C | otocevap ekle | add | Adds or updates an auto reply.
+P | otocevap ekle | tetikleyici | trigger | Which word or phrase triggers it (e.g. hi, good night)
+P | otocevap ekle | cevap | reply | Bot's reply. {kullanıcı} mentions the author; \n for a new line
+P | otocevap ekle | eşleşme | match | How to match (default: as a word)
+K | otocevap ekle | eşleşme | Kelime olarak geçerse (önerilen) | Appears as a word (recommended)
+K | otocevap ekle | eşleşme | Mesajın tamamı buysa | Whole message equals it
+K | otocevap ekle | eşleşme | Mesaj bununla başlıyorsa | Message starts with it
+C | otocevap sil | remove | Deletes an auto reply.
+P | otocevap sil | tetikleyici | trigger | Trigger to delete
+C | otocevap liste | list | Lists auto replies.
+C | ara | search | Search YouTube, Twitch, anime, manga, Pokémon and the dictionary.
+C | ara youtube | youtube | Searches for a YouTube video.
+P | ara youtube | sorgu | query | Video to search for
+C | ara twitch | twitch | Searches for a Twitch streamer.
+P | ara twitch | kanal | channel | Channel name
+C | ara anime | anime | Searches for an anime.
+P | ara anime | ad | name | Anime title
+C | ara manga | manga | Searches for a manga.
+P | ara manga | ad | name | Manga title
+C | ara pokemon | pokemon | Searches for a Pokémon.
+P | ara pokemon | ad | name | Pokémon name or number
+C | ara sözlük | urban | Looks up a term on Urban Dictionary.
+P | ara sözlük | terim | term | Term to look up
+C | ara imgur | imgur | Searches Imgur for images.
+P | ara imgur | sorgu | query | Image to search for
+C | ara kripto | crypto | A cryptocurrency's price and 24-hour change (CoinGecko).
+P | ara kripto | para | coin | Coin name or symbol (e.g. bitcoin, eth)
+C | ara gaz | gas | Current Ethereum network transaction fee (gas price).
+C | emoji | emoji | Server emojis: add, enlarge, delete.
+C | emoji ekle | add | Adds another server's emoji or an image link as an emoji here.
+P | emoji ekle | kaynak | source | The emoji itself (from another server) or an https image link
+P | emoji ekle | ad | name | Emoji name (required for a link; empty keeps the emoji's own name)
+C | emoji büyüt | enlarge | Shows a server emoji large.
+P | emoji büyüt | emoji | emoji | Server emoji to enlarge
+C | emoji sil | delete | Deletes one of this server's emojis.
+P | emoji sil | emoji | emoji | Server emoji to delete
+C | sicil | history | Shows a user's full moderation history.
+P | sicil | kullanıcı | user | User whose history to show
+C | karşılama | welcome | Welcome messages for new members and goodbyes for those who leave.
+C | karşılama hoşgeldin | greeting | Sets the welcome message channel and text.
+P | karşılama hoşgeldin | kanal | channel | Channel for the message
+P | karşılama hoşgeldin | mesaj | message | Empty = a different text each time. {kullanıcı} {isim} {sunucu} {üye}
+C | karşılama veda | goodbye | Sets the goodbye message for members who leave.
+P | karşılama veda | kanal | channel | Channel for the message
+P | karşılama veda | mesaj | message | Empty = a different text each time. {isim} {sunucu} {üye}
+C | karşılama tema | theme | Picks the theme of the built-in welcome and goodbye messages.
+P | karşılama tema | tema | theme | Which theme to use
+K | karşılama tema | tema | Hepsi (karışık) | All (mixed)
+K | karşılama tema | tema | Star Wars | Star Wars
+K | karşılama tema | tema | Yüzüklerin Efendisi | The Lord of the Rings
+K | karşılama tema | tema | Harry Potter | Harry Potter
+K | karşılama tema | tema | Game of Thrones | Game of Thrones
+K | karşılama tema | tema | Breaking Bad | Breaking Bad
+K | karşılama tema | tema | Marvel | Marvel
+K | karşılama tema | tema | Stranger Things | Stranger Things
+K | karşılama tema | tema | The Witcher | The Witcher
+K | karşılama tema | tema | Super Mario | Super Mario
+C | karşılama kapat | disable | Turns welcome and/or goodbye messages off.
+P | karşılama kapat | tür | type | Which one
+K | karşılama kapat | tür | Hoş geldin | Welcome
+K | karşılama kapat | tür | Veda | Goodbye
+K | karşılama kapat | tür | İkisi de | Both
+C | karşılama test | test | Tries the welcome (or goodbye) message on you.
+P | karşılama test | tür | type | Which one to try (empty = welcome)
+K | karşılama test | tür | Hoş geldin | Welcome
+K | karşılama test | tür | Veda | Goodbye
+K | karşılama test | tür | İkisi de | Both
+C | rol | role | Role tools.
+C | rol otomatik | autorole | Role given automatically to new members.
+P | rol otomatik | rol | role | Role to give (empty = autorole off)
+C | rol panel | panel | Sends a panel where members can pick roles with buttons.
+P | rol panel | kanal | channel | Channel for the panel
+P | rol panel | başlık | title | Panel title (e.g. Game roles)
+P | rol panel | rol1 | role1 | Role 1
+P | rol panel | rol2 | role2 | Role 2
+P | rol panel | rol3 | role3 | Role 3
+P | rol panel | rol4 | role4 | Role 4
+P | rol panel | rol5 | role5 | Role 5
+P | rol panel | rol6 | role6 | Role 6
+P | rol panel | rol7 | role7 | Role 7
+P | rol panel | rol8 | role8 | Role 8
+P | rol panel | rol9 | role9 | Role 9
+P | rol panel | rol10 | role10 | Role 10
+P | rol panel | açıklama | description | Panel description
+C | rol bilgi | info | Shows information about a role.
+P | rol bilgi | rol | role | Role to look at
+C | rol süreli-ver | give-temp | Gives a member a role for a while; it is removed when the time is up.
+P | rol süreli-ver | üye | member | Member who gets the role
+P | rol süreli-ver | rol | role | Role to give
+P | rol süreli-ver | süre | duration | How long (e.g. 2sa, 3g, 1h)
+C | rol süreli-al | remove-temp | Takes a temporary role back right away.
+P | rol süreli-al | üye | member | Member
+P | rol süreli-al | rol | role | Role to take back
+C | rol süreliler | temp-list | Lists pending temporary roles.
+C | rol toplu | bulk | Gives or removes a role for many members at once (e.g. autorole for old members).
+P | rol toplu | işlem | action | Give or remove the role?
+K | rol toplu | işlem | Ver | Give
+K | rol toplu | işlem | Al | Remove
+P | rol toplu | rol | role | Role
+P | rol toplu | hedef | target | Who?
+K | rol toplu | hedef | Herkes | Everyone
+K | rol toplu | hedef | Yalnızca insanlar | Humans only
+K | rol toplu | hedef | Yalnızca botlar | Bots only
+K | rol toplu | hedef | Filtre rolüne sahip olanlar | Members with the filter role
+P | rol toplu | filtre-rol | filter-role | If the target is the filter role: members with this role
+C | vurgu | highlight | Highlights: you get a DM when your chosen word appears in a channel.
+C | vurgu ekle | add | Adds a word to be notified about (up to 10).
+P | vurgu ekle | kelime | word | Word or short phrase (at least 3 letters; e.g. your name)
+C | vurgu sil | remove | Removes a word (or all of them).
+P | vurgu sil | kelime | word | Word to remove (empty = all)
+C | vurgu liste | list | Shows your highlight words.
+C | tavsiye | recommend | Movie, series or game recommendations.
+C | tavsiye film | movie | Recommends a movie (feelm.org / TMDB).
+P | tavsiye film | tür | genre | Genre (e.g. Horror, Sci-fi)
+P | tavsiye film | yıldan | since | Newer than this year (e.g. 2015)
+P | tavsiye film | en_az_puan | min_score | Minimum score out of 10 (1-9)
+C | tavsiye dizi | series | Recommends a series (feelm.org / TMDB).
+P | tavsiye dizi | tür | genre | Genre (e.g. Crime, Comedy)
+P | tavsiye dizi | yıldan | since | Newer than this year (e.g. 2015)
+P | tavsiye dizi | en_az_puan | min_score | Minimum score out of 10 (1-9)
+C | tavsiye oyun | game | Recommends a game (feelm.org / RAWG).
+P | tavsiye oyun | tür | genre | Genre (e.g. RPG, Strategy)
+P | tavsiye oyun | yıldan | since | Newer than this year (e.g. 2015)
+P | tavsiye oyun | en_az_puan | min_score | Minimum Metacritic score out of 10 (e.g. 8 = 80/100)
+C | tavsiye ara | search | Searches for a movie, series or game.
+P | tavsiye ara | sorgu | query | Title (e.g. Batman, The Witcher)
+C | koruma | protection | Raid and fake account protection.
+C | koruma hesap-yaşı | account-age | Keeps accounts newer than N days out of the server (0 = off).
+P | koruma hesap-yaşı | gun | days | Minimum account age in days (0 = off)
+C | koruma baskın | raid | Turns on raid mode when many members join quickly (0 = off).
+P | koruma baskın | kişi | joins | Joins in 10 seconds that count as a raid (suggested 8-15; 0 = off)
+C | koruma baskın-bitir | end-raid | Ends the active raid mode early.
+C | koruma kilit | lockdown | Locks or unlocks every text channel at once during a raid.
+P | koruma kilit | durum | state | Lock or unlock
+K | koruma kilit | durum | Kilitle (kimse yazamaz) | Lock (nobody can write)
+K | koruma kilit | durum | Kilidi aç (eski hâline dön) | Unlock (restore)
+P | koruma kilit | sebep | reason | Reason (shown in the logs)
+C | koruma durum | status | Shows protection and community settings.
+C | çekiliş | giveaway | Start and manage giveaways.
+C | çekiliş başlat | start | Starts a new giveaway.
+P | çekiliş başlat | süre | duration | How long (e.g. 1sa, 2g, 1hf; up to 30g)
+P | çekiliş başlat | ödül | prize | Prize
+P | çekiliş başlat | kazanan | winners | Number of winners (default 1)
+P | çekiliş başlat | kanal | channel | Channel (empty = this channel)
+P | çekiliş başlat | gereken_rol | required_role | Only members with this role can join
+P | çekiliş başlat | en_az_seviye | min_level | Lowest level needed to join
+P | çekiliş başlat | hesap_yaşı | account_age | Minimum account age in days (against fake accounts)
+P | çekiliş başlat | ek_şans_rolü | bonus_role | Members with this role get double chance (e.g. boosters)
+C | çekiliş bitir | end | Ends the giveaway now and picks the winners.
+P | çekiliş bitir | numara | number | Giveaway number (shown under the message)
+C | çekiliş yeniden-çek | reroll | Picks new winners for a finished giveaway.
+P | çekiliş yeniden-çek | numara | number | Giveaway number
+P | çekiliş yeniden-çek | kazanan | winners | How many new winners (default 1)
+C | hatırlat | remind | Reminds you after a while.
+P | hatırlat | süre | in | When (e.g. 10dk, 2sa, 1g)
+P | hatırlat | mesaj | message | What should I remind you of?
+C | starboard | starboard | Sets up the starboard: messages over the ⭐ threshold are copied to a channel.
+P | starboard | kanal | channel | Starboard channel (empty = starboard off)
+P | starboard | eşik | threshold | How many ⭐ are needed (default 3)
+C | etiket | tag | Tags: typing `!name` in chat sends the saved text.
+C | etiket göster | show | Sends a tag.
+P | etiket göster | ad | name | Tag name
+C | etiket ekle | add | Adds or updates a tag (needs Manage Messages).
+P | etiket ekle | ad | name | Tag name (no spaces, e.g. rules). Called with !name in chat.
+P | etiket ekle | içerik | content | Text to send. Write \n for a new line.
+C | etiket sil | delete | Deletes a tag (needs Manage Messages).
+P | etiket sil | ad | name | Tag to delete
+C | etiket liste | list | Lists the server's tags.
+C | davetler | invites | Shows how many people a member has invited.
+P | davetler | kullanıcı | user | Member to look at (empty = you)
+C | davet-sıralama | invite-leaderboard | Top 10 inviters.
+C | sayaç | counter | Counter channels whose names update automatically (members, goal...).
+C | sayaç ekle | add | Creates a counter channel (locked voice channel; renamed every 10 minutes).
+P | sayaç ekle | tür | type | What to count
+K | sayaç ekle | tür | Tüm üyeler | All members
+K | sayaç ekle | tür | İnsanlar (bot hariç) | Humans (no bots)
+K | sayaç ekle | tür | Botlar | Bots
+K | sayaç ekle | tür | Sunucu takviyeleri (boost) | Server boosts
+K | sayaç ekle | tür | Üye hedefi | Member goal
+K | sayaç ekle | tür | Metin kanalları | Text channels
+K | sayaç ekle | tür | Ses kanalları | Voice channels
+K | sayaç ekle | tür | Tüm kanallar | All channels
+K | sayaç ekle | tür | Rol sayısı | Role count
+K | sayaç ekle | tür | Roldeki üyeler | Members in a role
+K | sayaç ekle | tür | Çevrimiçi üyeler | Online members
+K | sayaç ekle | tür | Çevrimiçi rekoru | Online record
+K | sayaç ekle | tür | Kripto para fiyatı | Crypto price
+P | sayaç ekle | hedef | goal | Member goal (only for the member goal type)
+P | sayaç ekle | rol | role | Role to count (only for the members in a role type)
+P | sayaç ekle | para | coin | Coin (only for crypto price; e.g. bitcoin, ethereum, dogecoin)
+P | sayaç ekle | kategori | category | Category for the channel
+C | sayaç sil | delete | Deletes a counter channel.
+P | sayaç sil | kanal | channel | Counter channel to delete
+C | sayaç liste | list | Lists counter channels.
+C | doğum-günü | birthday | Birthdays: save, list, celebration channel.
+C | doğum-günü ayarla | set | Saves your birthday (the year is optional).
+P | doğum-günü ayarla | gün | day | Day (1-31)
+P | doğum-günü ayarla | ay | month | Month (1-12)
+P | doğum-günü ayarla | yıl | year | Birth year (optional; if the server allows, you are celebrated with your age)
+C | doğum-günü sil | delete | Deletes your saved birthday.
+C | doğum-günü liste | list | Lists upcoming birthdays.
+C | doğum-günü kanal | channel | Sets the celebration channel and birthday role (both empty = off).
+P | doğum-günü kanal | kanal | channel | Channel for celebration messages
+P | doğum-günü kanal | rol | role | Role given for the birthday (removed the next day)
+C | geçici-oda | temp-voice | Sets up a Create Room channel: members who join get their own voice room.
+P | geçici-oda | kanal | channel | Voice channel to use as the create channel (empty = create a new one)
+P | geçici-oda | kategori | category | Category for a newly created channel
+P | geçici-oda | kapat | disable | Turn the system off
+C | oda | room | Manage your temporary voice room.
+C | oda isim | rename | Renames the room.
+P | oda isim | isim | name | New room name
+C | oda limit | limit | Sets how many people can join the room (0 = unlimited).
+P | oda limit | kişi | users | Max people (0 = unlimited)
+C | oda kilitle | lock | Locks the room: nobody new can join (those inside stay).
+C | oda aç | unlock | Unlocks the room.
+C | oda sahiplen | claim | Claims the room if its owner left.
+C | oda yasakla | ban | Bans a member from your room: they are moved out and can't rejoin.
+P | oda yasakla | üye | member | Member who can't join the room
+C | oda yasağı-kaldır | unban | Lifts a member's ban from your room.
+P | oda yasağı-kaldır | üye | member | Member to unban
+C | oda at | kick | Moves a member out of your room (they can rejoin).
+P | oda at | üye | member | Member to move out
+C | oda gizle | hide | Hides the room: only people inside and those you allow can see it.
+C | oda göster | reveal | Shows your hidden room to everyone again.
+C | oda devret | transfer | Gives room ownership to another member in the room.
+P | oda devret | üye | member | New room owner
+C | oda sahip | owner | Shows the owner of the temporary room you are in.
+C | oda temizle | clean | Deletes every empty temporary room (for admins).
+C | youtube | youtube | YouTube new video announcements.
+C | youtube ekle | add | Announces new videos from a YouTube channel.
+P | youtube ekle | youtube_kanalı | youtube_channel | Channel link or @handle (e.g. @mkbhd)
+P | youtube ekle | duyuru_kanalı | announce_channel | Channel for the announcement
+P | youtube ekle | rol | role | Role to mention in the announcement
+C | youtube sil | remove | Stops following a YouTube channel.
+P | youtube sil | ad | name | Channel name (as listed) or UC... ID
+C | youtube liste | list | Followed YouTube channels.
+C | akış | feed | Reddit, Bluesky, RSS and podcast announcements.
+C | akış ekle | add | Follows a source; new posts are announced in the chosen channel.
+P | akış ekle | tür | type | Source type
+K | akış ekle | tür | Reddit (subreddit adı) | Reddit (subreddit name)
+K | akış ekle | tür | Bluesky (kullanıcı adı) | Bluesky (handle)
+K | akış ekle | tür | RSS / Atom (https adresi) | RSS / Atom (https URL)
+K | akış ekle | tür | Podcast (RSS adresi) | Podcast (RSS URL)
+K | akış ekle | tür | X / Twitter (kullanıcı adı; RSS köprüsü gerekir) | X / Twitter (username; needs an RSS bridge)
+K | akış ekle | tür | Instagram (kullanıcı adı; RSS köprüsü gerekir) | Instagram (username; needs an RSS bridge)
+K | akış ekle | tür | TikTok (kullanıcı adı; RSS köprüsü gerekir) | TikTok (username; needs an RSS bridge)
+P | akış ekle | kaynak | source | Subreddit name, Bluesky handle or https feed URL
+P | akış ekle | kanal | channel | Channel for the announcements
+P | akış ekle | rol | role | Role to mention in the announcement
+P | akış ekle | mesaj | message | Custom text: {başlık} {bağlantı} {kaynak}
+C | akış sil | remove | Stops following a feed.
+P | akış sil | numara | number | Feed number (from the feed list)
+C | akış liste | list | Lists followed feeds.
+C | akış haberler | news | Posts news to a channel automatically (empty channel = off). Languages and filters: dashboard.
+P | akış haberler | kanal | channel | Channel for the news (leave empty to turn this category off)
+P | akış haberler | kategori | category | Which news (default: all)
+K | akış haberler | kategori | Hepsi | All
+K | akış haberler | kategori | Teknoloji | Technology
+K | akış haberler | kategori | Oyun | Gaming
+K | akış haberler | kategori | Sinema | Movies
+K | akış haberler | kategori | Dizi | TV series
+K | akış haberler | kategori | Ücretsiz oyunlar | Free games
+P | akış haberler | dil | language | Language for the news (other languages are translated with AI)
+K | akış haberler | dil | Orijinal (haberin kendi dili) | Original (the article's language)
+K | akış haberler | dil | Türkçe | Turkish
+K | akış haberler | dil | İngilizce | English
+K | akış haberler | dil | Almanca | German
+K | akış haberler | dil | İspanyolca | Spanish
+K | akış haberler | dil | Fransızca | French
+C | akış haber-özeti | news-digest | Shows this week's digest and the latest story of a category now.
+P | akış haber-özeti | kategori | category | Which category
+K | akış haber-özeti | kategori | Hepsi | All
+K | akış haber-özeti | kategori | Teknoloji | Technology
+K | akış haber-özeti | kategori | Oyun | Gaming
+K | akış haber-özeti | kategori | Sinema | Movies
+K | akış haber-özeti | kategori | Dizi | TV series
+K | akış haber-özeti | kategori | Ücretsiz oyunlar | Free games
+C | ekonomi | economy | Economy commands (balance, daily reward, work, games, shop, stock market).
+C | ekonomi bakiye | balance | Wallet and bank balance.
+P | ekonomi bakiye | kullanıcı | user | Member to look at (empty = you)
+C | ekonomi günlük | daily | Claim your daily reward (claiming every day grows your streak bonus).
+C | ekonomi çalış | work | Earn money: a shift (hourly), fishing or mining (every 20 minutes).
+P | ekonomi çalış | tür | type | What will you do? (empty = shift)
+K | ekonomi çalış | tür | Mesai (saatte bir) | Shift (hourly)
+K | ekonomi çalış | tür | Balık tut (20 dakikada bir) | Fishing (every 20 minutes)
+K | ekonomi çalış | tür | Madencilik (20 dakikada bir) | Mining (every 20 minutes)
+C | ekonomi yatır | deposit | Deposit money in the bank (bank money can't be robbed).
+P | ekonomi yatır | miktar | amount | Amount (e.g. 500, 1.5k, hepsi = all, yarısı = half)
+C | ekonomi çek | withdraw | Withdraw money from the bank.
+P | ekonomi çek | miktar | amount | Amount (e.g. 500, 1.5k, hepsi = all, yarısı = half)
+C | ekonomi gönder | give | Send money to a member.
+P | ekonomi gönder | üye | member | Member who gets the money
+P | ekonomi gönder | miktar | amount | Amount (e.g. 500, 1.5k, hepsi = all)
+C | ekonomi soy | rob | Rob a member (risky!) or, without a member, start a server-wide bank heist.
+P | ekonomi soy | üye | member | Member to rob (empty = start a bank heist anyone can join)
+C | ekonomi zenginler | leaderboard | Top 10 richest members.
+C | ekonomi yazı-tura | coinflip | Coin flip: guess right and double your bet.
+P | ekonomi yazı-tura | seçim | side | Heads or tails?
+K | ekonomi yazı-tura | seçim | Yazı | Tails
+K | ekonomi yazı-tura | seçim | Tura | Heads
+P | ekonomi yazı-tura | bahis | bet | Bet (e.g. 100, 1k, hepsi = all)
+C | ekonomi slot | slots | Slot machine: three of a kind is the jackpot, two pays 1.5x.
+P | ekonomi slot | bahis | bet | Bet (e.g. 100, 1k, hepsi = all)
+C | ekonomi blackjack | blackjack | Blackjack: get closer to 21 than the dealer without going over.
+P | ekonomi blackjack | bahis | bet | Bet (e.g. 100, 1k, hepsi = all)
+C | ekonomi mağaza | shop | Server shop.
+C | ekonomi satın-al | buy | Buy an item from the shop.
+P | ekonomi satın-al | ürün | item | Item name
+C | ekonomi envanter | inventory | Items you bought.
+P | ekonomi envanter | kullanıcı | user | Member to look at (empty = you)
+C | ekonomi borsa | stocks | Fake stock market: buy and sell shares of made-up companies.
+C | ekonomi borsa fiyatlar | prices | Shows current share prices (prices change every hour).
+C | ekonomi borsa al | buy | Buys shares at the current price with wallet money.
+P | ekonomi borsa al | hisse | stock | Stock symbol (e.g. AXT)
+P | ekonomi borsa al | adet | amount | How many
+C | ekonomi borsa sat | sell | Sells your shares at the current price.
+P | ekonomi borsa sat | hisse | stock | Stock symbol (e.g. AXT)
+P | ekonomi borsa sat | adet | amount | How many
+C | ekonomi borsa portföy | portfolio | Shows your shares and their current value.
+C | mod | mod | Moderation: ban, kick, timeout, warnings. Each subcommand checks its own permission.
+C | mod yasakla | ban | Bans a user from the server (even if they are not in it).
+P | mod yasakla | kullanıcı | user | User to ban (you can paste an ID)
+P | mod yasakla | sebep | reason | Ban reason
+P | mod yasakla | mesaj_sil | delete_messages | Delete messages from the last N days (0-7, default 0)
+P | mod yasakla | süre | duration | Temporary ban (e.g. 1g, 1hf); empty = permanent
+C | mod yasağı-kaldır | unban | Unbans a user.
+P | mod yasağı-kaldır | kullanıcı | user | User to unban (you can paste an ID)
+P | mod yasağı-kaldır | sebep | reason | Unban reason
+C | mod at | kick | Kicks a member from the server.
+P | mod at | üye | member | Member to kick
+P | mod at | sebep | reason | Kick reason
+C | mod sustur | timeout | Times a member out for a while (Discord timeout, up to 28 days).
+P | mod sustur | üye | member | Member to time out
+P | mod sustur | süre | duration | E.g. 10dk, 1sa30dk, 2g, 1hf (up to 28g)
+P | mod sustur | sebep | reason | Timeout reason
+C | mod susturmayı-kaldır | untimeout | Removes a member's timeout.
+P | mod susturmayı-kaldır | üye | member | Member whose timeout to remove
+P | mod susturmayı-kaldır | sebep | reason | Reason
+C | mod uyar | warn | Warns a member; the warning is saved and the member gets a DM.
+P | mod uyar | üye | member | Member to warn
+P | mod uyar | sebep | reason | Warning reason
+P | mod uyar | puan | points | Warning weight (default 1); automatic punishments use the point total
+C | mod uyarılar | warnings | Lists a user's active warnings.
+P | mod uyarılar | kullanıcı | user | User whose warnings to show
+C | mod uyarı-sil | delete-warning | Removes a warning by case number (it stays in the history).
+P | mod uyarı-sil | vaka | case | Case number of the warning (see the warnings list)
+C | mod karantina | quarantine | Quarantines a member: their roles are saved and removed, only the quarantine role stays.
+P | mod karantina | üye | member | Member to quarantine
+P | mod karantina | sebep | reason | Quarantine reason
+C | mod karantina-kaldır | unquarantine | Ends the quarantine and gives the member's old roles back.
+P | mod karantina-kaldır | üye | member | Member to release
+P | mod karantina-kaldır | sebep | reason | Reason
+C | mod uyarıları-sıfırla | clear-warnings | Clears a member's or everyone's active warnings.
+P | mod uyarıları-sıfırla | kullanıcı | user | Member whose warnings to clear (empty = everyone)
+P | mod uyarıları-sıfırla | herkes | everyone | If no member is chosen: confirm clearing ALL warnings in the server
+C | mod uyarı-cezası | warn-punishment | Automatic punishments by warning count.
+C | mod uyarı-cezası ekle | add | Sets the punishment applied when a warning count is reached.
+P | mod uyarı-cezası ekle | uyarı_sayısı | warnings | At which warning count
+P | mod uyarı-cezası ekle | ceza | punishment | Punishment
+K | mod uyarı-cezası ekle | ceza | Susturma (timeout) | Timeout
+K | mod uyarı-cezası ekle | ceza | Atma (kick) | Kick
+K | mod uyarı-cezası ekle | ceza | Yasaklama (ban) | Ban
+P | mod uyarı-cezası ekle | süre | duration | Timeout length or temporary ban (e.g. 1sa, 1g); empty ban = permanent
+P | mod uyarı-cezası ekle | pencere | window | Count only warnings within this time (e.g. 1sa, 7g); empty = all active
+C | mod uyarı-cezası sil | remove | Removes a warning threshold punishment.
+P | mod uyarı-cezası sil | uyarı_sayısı | warnings | Warning count whose punishment to remove
+C | mod uyarı-cezası liste | list | Lists the warning punishments.
+C | mod log-kanalı | log-channel | Sets a log channel: moderation records or server events (empty = off).
+P | mod log-kanalı | kanal | channel | Log channel (empty = this log type off)
+P | mod log-kanalı | tür | type | Which logs (default: Moderation)
+K | mod log-kanalı | tür | Moderasyon (ceza, auto-mod, bilet) | Moderation (punishments, auto-mod, tickets)
+K | mod log-kanalı | tür | Sunucu olayları (mesaj, üye, ses) | Server events (messages, members, voice)
+C | kanal | channel | Channel tools: bulk delete, slowmode, lock.
+C | kanal temizle | purge | Deletes recent messages (filterable; messages older than 14 days can't be deleted).
+P | kanal temizle | miktar | amount | Number of messages to delete (1-100)
+P | kanal temizle | kullanıcı | user | Only this user's messages
+P | kanal temizle | içeren | contains | Only messages containing this text
+P | kanal temizle | botlar | bots | Only bot messages
+C | kanal yavaşmod | slowmode | Sets slowmode on a channel (0 = off).
+P | kanal yavaşmod | saniye | seconds | Delay between messages (seconds, 0-21600; 0 = off)
+P | kanal yavaşmod | kanal | channel | Channel (empty = this channel)
+C | kanal kilitle | lock | Locks the channel: @everyone can't send messages (other permissions kept).
+P | kanal kilitle | kanal | channel | Channel (empty = this channel)
+P | kanal kilitle | sebep | reason | Reason
+C | kanal kilidi-aç | unlock | Unlocks a locked channel.
+P | kanal kilidi-aç | kanal | channel | Channel (empty = this channel)
+C | öneri | suggestion | Send and manage suggestions.
+C | öneri gönder | send | Sends a suggestion for the server; other members vote.
+P | öneri gönder | öneri | suggestion | Your suggestion
+C | öneri kanal | channel | Sets the suggestion channel (empty = suggestions off).
+P | öneri kanal | kanal | channel | Channel for suggestions
+C | öneri yanıtla | respond | Resolves a suggestion; the author gets a DM.
+P | öneri yanıtla | numara | number | Suggestion number
+P | öneri yanıtla | durum | status | Result
+K | öneri yanıtla | durum | Kabul edildi | Accepted
+K | öneri yanıtla | durum | Reddedildi | Rejected
+K | öneri yanıtla | durum | Değerlendiriliyor | Under review
+K | öneri yanıtla | durum | Uygulandı | Implemented
+P | öneri yanıtla | not | note | Explanation (also sent to the author)
+C | seviye | level | Level card, leaderboard, rewards and XP settings.
+C | seviye göster | rank | Shows a member's level and rank.
+P | seviye göster | kullanıcı | user | User to look at (empty = you)
+C | seviye sıralama | leaderboard | Shows the 10 highest-level members in the server.
+P | seviye sıralama | dönem | period | Which period? (empty = all time)
+K | seviye sıralama | dönem | Bu hafta | This week
+K | seviye sıralama | dönem | Bu ay | This month
+C | seviye başarımlar | achievements | Shows a member's achievements and progress.
+P | seviye başarımlar | kullanıcı | user | User to look at (empty = you)
+C | seviye prestij | prestige | At the prestige level, reset your XP to earn a prestige star.
+P | seviye prestij | onay | confirm | True: reset my XP (can't be undone). Empty only shows your status.
+C | seviye ödül | reward | Level reward roles.
+C | seviye ödül ekle | add | Sets the role given when a level is reached.
+P | seviye ödül ekle | seviye | level | Required level
+P | seviye ödül ekle | rol | role | Role to give
+C | seviye ödül sil | remove | Removes a level's reward role.
+P | seviye ödül sil | seviye | level | Level whose reward to remove
+C | seviye ödül liste | list | Lists all level rewards.
+C | seviye muaf | no-xp | Adds a channel, category or role that earns no XP; again removes it. Empty lists them.
+P | seviye muaf | kanal | channel | Channel or category that earns no XP
+P | seviye muaf | rol | role | Role that earns no XP
+C | seviye xp | xp | Give members XP or take it away.
+C | seviye xp ver | give | Gives a member XP.
+P | seviye xp ver | kullanıcı | user | Member to give XP to
+P | seviye xp ver | miktar | amount | XP to give
+C | seviye xp al | take | Takes XP from a member.
+P | seviye xp al | kullanıcı | user | Member to take XP from
+P | seviye xp al | miktar | amount | XP to take
+C | bilgi | info | User, server and avatar info; privacy and data deletion.
+C | bilgi kullanıcı | user | Shows a user's account and server details.
+P | bilgi kullanıcı | kullanıcı | user | User (empty = you)
+C | bilgi sunucu | server | Shows information about the server.
+C | bilgi avatar | avatar | Shows a user's profile picture large.
+P | bilgi avatar | kullanıcı | user | User (empty = you)
+C | bilgi gizlilik | privacy | Shows what data the bot keeps and how to delete it.
+C | bilgi verilerimi-sil | delete-my-data | Permanently deletes your own data in every server (XP, economy, profile, birthday...).
+P | bilgi verilerimi-sil | onay | confirm | Can't be undone; choose True to delete
+C | bilgi sunucu-verisini-sil | delete-server-data | (Server owner) Deletes all of this server's data in the bot; the bot leaves.
+P | bilgi sunucu-verisini-sil | onay | confirm | Can't be undone; choose True to delete
+C | mağaza-yönet | shop-admin | Manage the shop (admins).
+C | mağaza-yönet ekle | add | Adds an item or a role for sale (same name updates it).
+P | mağaza-yönet ekle | ad | name | Item name
+P | mağaza-yönet ekle | fiyat | price | Price
+P | mağaza-yönet ekle | rol | role | Role given to the buyer (optional)
+P | mağaza-yönet ekle | açıklama | description | Short description
+C | mağaza-yönet sil | remove | Removes an item from the shop.
+P | mağaza-yönet sil | ürün | item | Item name
+C | ekonomi-yönet | economy-admin | Manage members' money (admins).
+C | ekonomi-yönet ver | give | Gives a member money.
+P | ekonomi-yönet ver | üye | member | Member
+P | ekonomi-yönet ver | miktar | amount | Amount
+C | ekonomi-yönet al | take | Takes money from a member's wallet.
+P | ekonomi-yönet al | üye | member | Member
+P | ekonomi-yönet al | miktar | amount | Amount
+C | ekonomi-yönet sıfırla | reset | Resets all of a member's money and inventory.
+P | ekonomi-yönet sıfırla | üye | member | Member

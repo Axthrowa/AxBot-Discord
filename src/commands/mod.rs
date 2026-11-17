@@ -5,6 +5,7 @@ mod automod;
 mod community;
 mod context;
 mod economy;
+mod en;
 mod feeds;
 mod engagement;
 mod extra;
@@ -54,8 +55,15 @@ pub fn all() -> Vec<poise::Command<Data, Error>> {
     commands
 }
 
-/// Bütün komutlar, makrolarda tanımlandığı hâliyle.
+/// Bütün komutlar, İngilizce yerelleştirmeleriyle.
 fn every() -> Vec<poise::Command<Data, Error>> {
+    let mut commands = defined();
+    en::apply(&mut commands);
+    commands
+}
+
+/// Bütün komutlar, makrolarda tanımlandığı hâliyle.
+fn defined() -> Vec<poise::Command<Data, Error>> {
     vec![
         ping::ping(),
         setup::kurulum(),
