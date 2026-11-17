@@ -15,14 +15,14 @@ WORKDIR /app
 # cmake + make + g++: songbird'ün Opus kodlayıcısı (libopus) için. curl/unzip: müzik araçları için.
 RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends cmake make g++ curl unzip \
+    && apt-get install -y --no-install-recommends cmake make g++ curl unzip xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Müzik: yt-dlp ve deno (YouTube korumasını çözmek için) — mimariye göre tek dosyalık resmi sürümler.
 RUN set -eux; \
     case "${TARGETARCH:-amd64}" in \
-        amd64) YTDLP=yt-dlp_linux;         DENO=deno-x86_64-unknown-linux-gnu.zip ;; \
-        arm64) YTDLP=yt-dlp_linux_aarch64; DENO=deno-aarch64-unknown-linux-gnu.zip ;; \
+        amd64) YTDLP=yt-dlp_linux;         DENO=deno-x86_64-unknown-linux-gnu.zip;  FF=linux64 ;; \
+        arm64) YTDLP=yt-dlp_linux_aarch64; DENO=deno-aarch64-unknown-linux-gnu.zip; FF=linuxarm64 ;; \
         *) echo "desteklenmeyen mimari: ${TARGETARCH}"; exit 1 ;; \
     esac; \
     mkdir -p /tools; \
@@ -30,7 +30,12 @@ RUN set -eux; \
     curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /tmp/deno.zip "https://github.com/denoland/deno/releases/latest/download/${DENO}"; \
     unzip -q /tmp/deno.zip -d /tools; \
     rm /tmp/deno.zip; \
-    chmod 0755 /tools/yt-dlp /tools/deno; \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /tmp/ffmpeg.tar.xz \
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-${FF}-gpl.tar.xz"; \
+    tar -xJf /tmp/ffmpeg.tar.xz -C /tmp --wildcards '*/bin/ffmpeg'; \
+    mv /tmp/ffmpeg-*/bin/ffmpeg /tools/ffmpeg; \
+    rm -rf /tmp/ffmpeg*; \
+    chmod 0755 /tools/yt-dlp /tools/deno /tools/ffmpeg; \
     mkdir -p /tools/yt-dlp-plugins; \
     curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /tools/yt-dlp-plugins/bgutil-ytdlp-pot-provider.zip \
         "https://github.com/Brainicism/bgutil-ytdlp-pot-provider/releases/download/2.0.2/bgutil-ytdlp-pot-provider.zip"; \
@@ -54,6 +59,8 @@ FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 COPY --from=builder /usr/local/bin/discord-bot /usr/local/bin/discord-bot
 COPY --from=builder /tools/yt-dlp /usr/local/bin/yt-dlp
 COPY --from=builder /tools/deno /usr/local/bin/deno
+# Ses filtreleri (/müzik filtre) için; statik derleme.
+COPY --from=builder /tools/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=builder /tools/lib /usr/local/lib/tools
 # yt-dlp eklentisi: PO token'ı docker-compose'daki `pot` servisinden alır (YouTube'un veri merkezi engeline karşı).
 COPY --from=builder /tools/yt-dlp-plugins /usr/local/lib/yt-dlp-plugins

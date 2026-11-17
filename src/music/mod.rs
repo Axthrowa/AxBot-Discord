@@ -2,7 +2,7 @@
 //!
 //! - Ses bağlantısı: songbird (Discord'un zorunlu uçtan uca ses şifrelemesi DAVE dahil).
 //! - Kaynak çözme: `yt-dlp` (proje içindeki `tools/` klasöründen ya da PATH'ten).
-//! - Ses çözme: symphonia (saf Rust; ffmpeg gerekmez).
+//! - Ses çözme: symphonia (saf Rust). Yalnızca ses filtresi seçiliyse ffmpeg kullanılır (`filters`).
 //!
 //! Şarkı bilgileri songbird'ün tip-güvensiz `TrackHandle::data` alanı yerine burada,
 //! parça UUID'si ile anahtarlanan bir tabloda tutulur.
@@ -14,6 +14,7 @@ pub mod card;
 pub mod render;
 mod events;
 pub mod extra;
+pub mod filters;
 pub mod icons;
 pub mod playlists;
 mod prefetch;
@@ -105,6 +106,9 @@ pub struct Shared {
     names: DashMap<UserId, String>,
     /// Kartın altındaki sunucu adı (her çizimde Discord'a sorulmasın).
     guild_names: DashMap<GuildId, String>,
+    /// Sunucu başına ses filtresi (`/müzik filtre`).
+    filters: filters::Filters,
+    ffmpeg: &'static str,
 }
 
 /// Müzik sistemi; ucuzca klonlanır, alanlarına `Deref` ile erişilir.
@@ -220,6 +224,7 @@ impl Music {
     pub fn new(songbird: Arc<Songbird>, http: reqwest::Client) -> Self {
         let tools = Path::new("tools");
         let ytdlp = find_tool(tools, "yt-dlp").unwrap_or_else(|| "yt-dlp".to_owned());
+        let ffmpeg = find_tool(tools, "ffmpeg").unwrap_or_else(|| "ffmpeg".to_owned());
 
         // YouTube'un bot korumasını çözmek için yt-dlp bir JavaScript motoru (deno) kullanır.
         let mut ytdlp_args = Vec::new();
@@ -244,7 +249,18 @@ impl Music {
             covers: DashMap::new(),
             names: DashMap::new(),
             guild_names: DashMap::new(),
+            filters: Arc::new(DashMap::new()),
+            ffmpeg: Box::leak(ffmpeg.into_boxed_str()),
         }))
+    }
+
+    /// Sunucunun ses filtresi; sıradaki şarkıdan itibaren geçerli olur.
+    pub fn set_filter(&self, guild_id: GuildId, filter: filters::Filter) {
+        if filter == filters::Filter::Off {
+            self.filters.remove(&guild_id);
+        } else {
+            self.filters.insert(guild_id, filter);
+        }
     }
 
     /// Kalıcı 7/24 ve otomatik çalma ayarlarını yükler.
@@ -1000,6 +1016,7 @@ impl Shared {
         };
         let volume = this.volumes.get(&guild_id).map_or(DEFAULT_VOLUME, |v| *v);
         for (input, mut info) in items {
+            let input = filters::wrap(input, guild_id, &this.filters, this.ffmpeg);
             // Sıraya eklenenler (veya otomatik çalınanlar) başlayınca duyurulur.
             info.announce = info.announce || !handler.queue().is_empty();
             // `Call::enqueue` her parça için süreyi öğrenmek üzere yt-dlp çalıştırır (parça başına

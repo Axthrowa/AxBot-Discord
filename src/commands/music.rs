@@ -491,7 +491,7 @@ pub async fn karistir(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     guild_only,
     rename = "müzik",
-    subcommands("gec", "durdur", "ayril", "duraklat", "devam", "simdi", "sira", "ses", "dongu", "karistir", "m_247", "m_otomatik", "m_radyo", "m_sozler", "m_sar", "m_sil", "m_tasi", "m_dj", "m_liste_kaydet", "m_liste_cal", "m_listelerim", "m_liste_sil", "m_soyle"),
+    subcommands("gec", "durdur", "ayril", "duraklat", "devam", "simdi", "sira", "ses", "dongu", "karistir", "m_247", "m_otomatik", "m_radyo", "m_sozler", "m_sar", "m_sil", "m_tasi", "m_dj", "m_liste_kaydet", "m_liste_cal", "m_listelerim", "m_liste_sil", "m_soyle", "m_filtre"),
     subcommand_required,
     category = "Müzik"
 )]
@@ -632,6 +632,27 @@ async fn m_sozler(
         .footer(serenity::CreateEmbedFooter::new("Sözler: lrclib.net"))
         .colour(serenity::Colour::BLURPLE);
     ctx.send(CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
+/// Ses filtresi (bass boost, nightcore…); sıradaki şarkıdan itibaren geçerli.
+#[poise::command(slash_command, guild_only, rename = "filtre")]
+async fn m_filtre(
+    ctx: Context<'_>,
+    #[rename = "tür"]
+    #[description = "Filtre"]
+    filter: crate::music::filters::Filter,
+) -> Result<(), Error> {
+    let Some((guild_id, _call)) = same_channel_call(ctx).await? else {
+        return Ok(());
+    };
+    ctx.data().music.set_filter(guild_id, filter);
+    let text = if filter == crate::music::filters::Filter::Off {
+        "🎚️ Filtre kapatıldı; sıradaki şarkı normal çalacak.".to_owned()
+    } else {
+        format!("🎚️ **{}** filtresi seçildi; sıradaki şarkıdan itibaren uygulanır. (Filtreli şarkı sarılamaz.)", poise::ChoiceParameter::name(&filter))
+    };
+    ctx.say(text).await?;
     Ok(())
 }
 
