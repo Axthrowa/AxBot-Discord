@@ -367,7 +367,7 @@ impl Extra {
             economy: crate::economy::shop(db, guild_id).await.is_ok_and(|items| !items.is_empty()),
             stats: crate::statchannels::count(db, guild_id).await.is_ok_and(|n| n > 0),
             forms: crate::applications::forms(db, guild_id).await.is_ok_and(|f| !f.is_empty()),
-            boards: settings.get::<crate::starboards::StarboardSettings>(db, guild_id).await.is_ok_and(|s| !s.boards.is_empty()),
+            boards: settings.get::<crate::starboard::StarboardSettings>(db, guild_id).await.is_ok_and(|s| !s.boards.is_empty()),
             music: {
                 let music = state.music.settings(guild_id);
                 music.always_on || music.autoplay || settings.get::<crate::music::playlists::MusicExtras>(db, guild_id).await.is_ok_and(|m| m.dj_role.is_some())

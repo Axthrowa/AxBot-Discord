@@ -111,15 +111,29 @@ pub struct Category {
 /// 2026-10-12'de hepsi denendi (HTTP 200, haber içeriyor). Türkçe kaynaklar her kategoride başta.
 pub const CATEGORIES: &[Category] = &[
     Category {
+        key: "gundem",
+        name: "Gündem",
+        emoji: "📰",
+        colour: (220, 38, 38),
+        sources: &[
+            rss("NTV", "tr", "https://www.ntv.com.tr/son-dakika.rss"),
+            rss("Habertürk", "tr", "https://www.haberturk.com/rss/manset.xml"),
+            rss("TRT Haber", "tr", "https://www.trthaber.com/gundem_articles.rss"),
+            rss("BBC Türkçe", "tr", "https://feeds.bbci.co.uk/turkce/rss.xml"),
+            rss("BBC News", "en", "https://feeds.bbci.co.uk/news/world/rss.xml"),
+        ],
+    },
+    Category {
         key: "teknoloji",
         name: "Teknoloji",
         emoji: "💻",
         colour: (59, 130, 246),
         sources: &[
             rss("Webtekno", "tr", "https://www.webtekno.com/rss.xml"),
+            rss("ShiftDelete.Net", "tr", "https://shiftdelete.net/feed"),
+            rss("DonanımHaber", "tr", "https://www.donanimhaber.com/rss/tum/"),
             rss("Chip Online", "tr", "https://www.chip.com.tr/rss"),
             rss("LOG", "tr", "https://www.log.com.tr/feed/"),
-            rss("ShiftDelete.Net", "tr", "https://shiftdelete.net/feed"),
             rss("The Verge", "en", "https://www.theverge.com/rss/index.xml"),
             rss("Ars Technica", "en", "https://feeds.arstechnica.com/arstechnica/index"),
             rss("Engadget", "en", "https://www.engadget.com/rss.xml"),
@@ -957,39 +971,88 @@ async fn machine_rendered(item: &NewsItem, target: &str) -> Option<Rendered> {
     Some(Rendered { title, summary, translated_to: target.to_owned(), engine: "google".to_owned() })
 }
 
+const TRANSLATE_BACKOFF: Duration = Duration::from_secs(20 * 60);
+static TRANSLATE_BLOCKED_UNTIL: std::sync::LazyLock<std::sync::Mutex<std::time::Instant>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::time::Instant::now()));
+
+static TRANSLATE_CACHE: std::sync::LazyLock<dashmap::DashMap<String, (String, std::time::Instant)>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+const TRANSLATE_CACHE_TTL: Duration = Duration::from_secs(24 * 3600);
+const TRANSLATE_CACHE_MAX: usize = 2000;
+
+static GOOGLE_TRANSLATE_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(1));
+static LAST_GOOGLE_TRANSLATE: std::sync::LazyLock<tokio::sync::Mutex<std::time::Instant>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::time::Instant::now()));
+const MIN_TRANSLATE_INTERVAL: Duration = Duration::from_millis(1500);
+
 /// Google Çeviri'nin ücretsiz ucu (anahtar gerekmez; resmî değil, ileride değişebilir).
 /// Botun genel istemcisi (HTTP/2) Google'a "otomatik trafik" görünüp 429 alıyor; tarayıcı gibi istemci kullanılır.
 pub async fn machine_translate(text: &str, target: &str) -> Option<String> {
-    // Google 429 verdiyse bir süre hiç denenmez (her haberde üç deneme + bekleme boşa gitmesin).
-    if std::time::Instant::now() < *TRANSLATE_BLOCKED_UNTIL.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
-        return None;
+    let cache_key = format!("{target}:{text}");
+    if let Some(entry) = TRANSLATE_CACHE.get(&cache_key) {
+        let (ref translated, at) = *entry;
+        if at.elapsed() < TRANSLATE_CACHE_TTL {
+            return Some(translated.clone());
+        }
     }
+
+    if let Ok(blocked) = TRANSLATE_BLOCKED_UNTIL.lock() {
+        if std::time::Instant::now() < *blocked {
+            return None;
+        }
+    }
+
     let text: String = text.chars().take(1500).collect();
-    // Ücretsiz uç ara sıra 429 / zaman aşımı veriyor: kısa aralıklarla üç deneme.
     let mut last_error = String::new();
     for (attempt, wait) in [0u64, 2, 5].into_iter().enumerate() {
         if wait > 0 {
             tokio::time::sleep(Duration::from_secs(wait)).await;
         }
+        let _permit = GOOGLE_TRANSLATE_SEMAPHORE.acquire().await.ok();
+        {
+            let mut last = LAST_GOOGLE_TRANSLATE.lock().await;
+            let elapsed = last.elapsed();
+            if elapsed < MIN_TRANSLATE_INTERVAL {
+                tokio::time::sleep(MIN_TRANSLATE_INTERVAL - elapsed).await;
+            }
+            *last = std::time::Instant::now();
+        }
         match google_translate(&text, target).await {
-            Ok(Some(translated)) => return Some(translated),
+            Ok(Some(translated)) => {
+                if TRANSLATE_CACHE.len() >= TRANSLATE_CACHE_MAX {
+                    let now = std::time::Instant::now();
+                    TRANSLATE_CACHE.retain(|_, (_, at)| now.duration_since(*at) < TRANSLATE_CACHE_TTL);
+                }
+                if TRANSLATE_CACHE.len() >= TRANSLATE_CACHE_MAX {
+                    TRANSLATE_CACHE.clear();
+                }
+                TRANSLATE_CACHE.insert(cache_key, (translated.clone(), std::time::Instant::now()));
+                return Some(translated);
+            }
             Ok(None) => return None,
             Err(e) => {
-                debug!(attempt, error = %e, "Google Çeviri yanıt vermedi, yeniden denenecek");
-                last_error = e.to_string();
+                let err_str = e.to_string();
+                if err_str.contains("429") {
+                    debug!("Google Çeviri 429 Too Many Requests verdi; 20 dakika boyunca devre dışı bırakılıyor");
+                    if let Ok(mut blocked) = TRANSLATE_BLOCKED_UNTIL.lock() {
+                        *blocked = std::time::Instant::now() + TRANSLATE_BACKOFF;
+                    }
+                    return None;
+                }
+                debug!(attempt, error = %err_str, "Google Çeviri yanıt vermedi, yeniden denenecek");
+                last_error = err_str;
             }
         }
     }
-    warn!(error = %last_error, "Google Çeviri üç denemede de yanıt vermedi");
+    debug!(error = %last_error, "Google Çeviri üç denemede de yanıt vermedi");
     if last_error.contains("429") {
-        *TRANSLATE_BLOCKED_UNTIL.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = std::time::Instant::now() + TRANSLATE_BACKOFF;
+        if let Ok(mut blocked) = TRANSLATE_BLOCKED_UNTIL.lock() {
+            *blocked = std::time::Instant::now() + TRANSLATE_BACKOFF;
+        }
     }
     None
 }
-
-const TRANSLATE_BACKOFF: Duration = Duration::from_secs(10 * 60);
-static TRANSLATE_BLOCKED_UNTIL: std::sync::LazyLock<std::sync::Mutex<std::time::Instant>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::time::Instant::now()));
 
 /// Tek çeviri isteği. `Ok(None)`: yanıt geldi ama çeviri boş.
 async fn google_translate(text: &str, target: &str) -> anyhow::Result<Option<String>> {

@@ -12,8 +12,8 @@ use crate::config::DatabaseConfig;
 pub async fn connect(config: &DatabaseConfig) -> anyhow::Result<PgPool> {
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
-        .min_connections(1)
-        .acquire_timeout(Duration::from_secs(5))
+        .min_connections(2)
+        .acquire_timeout(Duration::from_secs(10))
         .idle_timeout(Duration::from_secs(10 * 60))
         .connect_with(connect_options(&config.url)?)
         .await
@@ -32,10 +32,13 @@ pub async fn connect(config: &DatabaseConfig) -> anyhow::Result<PgPool> {
 }
 
 /// Her bağlantıya sorgu süre sınırları: takılan bir sorgu (kilit beklemesi vb.) komutu ve havuzu
-/// sonsuza kadar meşgul etmez.
+/// sonsuza kadar meşgul etmez. 500 ms üzeri yavaş sorgular Warn seviyesinde loglanır.
 fn connect_options(url: &str) -> anyhow::Result<PgConnectOptions> {
-    let options: PgConnectOptions = url.parse().context("DATABASE_URL geçersiz")?;
-    Ok(options.options([("statement_timeout", "15000"), ("lock_timeout", "5000"), ("idle_in_transaction_session_timeout", "60000")]))
+    use sqlx::ConnectOptions;
+    let mut options: PgConnectOptions = url.parse().context("DATABASE_URL geçersiz")?;
+    options = options.options([("statement_timeout", "15000"), ("lock_timeout", "5000"), ("idle_in_transaction_session_timeout", "60000")]);
+    options = options.log_slow_statements(tracing::log::LevelFilter::Warn, Duration::from_millis(500));
+    Ok(options)
 }
 
 /// Havuzdan bir bağlantı alıp basit bir sorgunun gidiş-dönüş süresini ölçer.

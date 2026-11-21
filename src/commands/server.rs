@@ -344,6 +344,8 @@ pub async fn gecici_oda(
     #[description = "Yeni kanal oluşturulacaksa kategorisi"]
     #[channel_types("Category")]
     kategori: Option<serenity::GuildChannel>,
+    #[description = "Bu metin kanalına 'Kendi odanı oluştur' paneli kurulsun mu?"]
+    panel: Option<bool>,
     #[description = "Sistemi kapat"] kapat: Option<bool>,
 ) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
@@ -363,6 +365,11 @@ pub async fn gecici_oda(
         }
     };
     data.guild_configs.set(&data.db, guild_id, Setting::TempVoiceHub(Some(hub))).await?;
+    if panel == Some(true) {
+        let (embed, components) = crate::tempvoice::build_main_hub_message();
+        let msg = serenity::CreateMessage::new().embed(embed).components(components);
+        let _ = ctx.channel_id().send_message(ctx.http(), msg).await;
+    }
     reply_private(
         ctx,
         format!(
@@ -379,6 +386,7 @@ pub async fn gecici_oda(
     slash_command,
     guild_only,
     subcommands(
+        "oda_panel",
         "oda_isim",
         "oda_limit",
         "oda_kilitle",
@@ -419,6 +427,30 @@ async fn my_room(ctx: Context<'_>, require_owner: bool) -> Result<Option<serenit
         return Ok(None);
     }
     Ok(Some(channel))
+}
+
+/// Oda kontrol panelini açar (yalnızca sana özel kart).
+#[poise::command(slash_command, guild_only, rename = "panel")]
+async fn oda_panel(ctx: Context<'_>) -> Result<(), Error> {
+    let guild_id = guild_id(ctx)?;
+    let Some(channel) = my_room(ctx, true).await? else {
+        return Ok(());
+    };
+    let (embed, components) = crate::tempvoice::build_settings_card(
+        ctx.serenity_context(),
+        guild_id,
+        channel,
+        ctx.author().id,
+    )
+    .await;
+    ctx.send(
+        CreateReply::default()
+            .embed(embed)
+            .components(components)
+            .ephemeral(true),
+    )
+    .await?;
+    Ok(())
 }
 
 /// Odanın adını değiştirir.

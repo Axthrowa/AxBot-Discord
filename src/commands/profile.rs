@@ -74,6 +74,7 @@ pub async fn profil(
         }
     };
     let (avatar, backdrop) = tokio::join!(crate::members::avatar_image(&user), backdrop);
+    let _permit = crate::cards::RENDER_SEMAPHORE.acquire().await.ok();
     let drawn = tokio::task::spawn_blocking(move || crate::cards::render_rank(&card, avatar.as_ref(), backdrop.as_ref())).await;
     let mut reply = CreateReply::default().allowed_mentions(CreateAllowedMentions::new());
     if let Ok(Ok(bytes)) = drawn {

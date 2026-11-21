@@ -145,7 +145,7 @@ async fn collect_links(state: &WebState, guild_id: GuildId) -> Vec<Link> {
     if let Ok(s) = settings.get::<crate::modmail::ModmailSettings>(db, guild_id).await {
         links.extend(s.channel.map(|c| link("modmail", "ModMail yetkili kanalı", Channel(c))));
     }
-    if let Ok(s) = settings.get::<crate::starboards::StarboardSettings>(db, guild_id).await {
+    if let Ok(s) = settings.get::<crate::starboard::StarboardSettings>(db, guild_id).await {
         links.extend(s.boards.iter().map(|b| link("ek-starboard", format!("{} panosunun kanalı", b.emoji), Channel(b.channel))));
     }
     if let Ok(s) = settings.get::<crate::antinuke::AntiNukeSettings>(db, guild_id).await {

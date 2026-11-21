@@ -59,7 +59,7 @@ async fn apply(state: &WebState, guild_id: GuildId, key: &str, value: &Value, wr
         music::playlists::MusicExtras,
         nativeautomod::NativeAutomodSettings,
         news::NewsSettings,
-        starboards::StarboardSettings,
+        crate::starboard::StarboardSettings,
         tickets::TicketExtras,
         timers::TimerSettings,
         backup::BackupSettings,

@@ -6,7 +6,7 @@ use poise::serenity_prelude::GuildId;
 
 use crate::error::ConfigError;
 
-const DEFAULT_DB_MAX_CONNECTIONS: u32 = 10;
+const DEFAULT_DB_MAX_CONNECTIONS: u32 = 25;
 const DEFAULT_STREAM_POLL_SECS: u32 = 60;
 /// 2026-10 karşılaştırmasında Türkçesi en doğal ve hızlı (~6-17 sn) model; araç çağırmayı destekler.
 /// Önceki nemotron-3-super yabancı kelime karıştırıp hatalı cümle kuruyordu.
@@ -128,8 +128,8 @@ impl Config {
             None => None,
         };
 
-        let max_connections = match optional("DB_MAX_CONNECTIONS") {
-            Some(raw) => parse_positive_u32("DB_MAX_CONNECTIONS", &raw)?,
+        let max_connections = match optional("DATABASE_MAX_CONNECTIONS").or_else(|| optional("DB_MAX_CONNECTIONS")) {
+            Some(raw) => parse_positive_u32("DATABASE_MAX_CONNECTIONS", &raw)?,
             None => DEFAULT_DB_MAX_CONNECTIONS,
         };
 

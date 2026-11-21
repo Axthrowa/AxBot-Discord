@@ -232,9 +232,9 @@ pub async fn handle_button(ctx: &serenity::Context, music: &Music, interaction: 
                 shifted(position, total, action == "forward")
             };
             // Kaynak sarmayı desteklemezse veya takılırsa bekleme sınırlı tutulur.
-            let seeked = tokio::time::timeout(Duration::from_secs(20), current.seek_async(target)).await;
-            if !matches!(seeked, Ok(Ok(_))) {
-                tracing::debug!(result = ?seeked, "Şarkı sarılamadı");
+            let seeked = music.seek_to(&ctx.http, guild_id, target).await;
+            if let Err(e) = seeked {
+                tracing::debug!(error = %e, "Şarkı sarılamadı");
                 let _ = interaction
                     .create_followup(
                         ctx,

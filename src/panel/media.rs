@@ -7,7 +7,7 @@ use tracing::warn;
 
 use super::plugins::{checkbox, field, section, Input, Options};
 use crate::music::MusicSettings;
-use crate::starboards::{self, Board, StarboardSettings};
+use crate::starboard::{self, Board, StarboardSettings};
 use crate::web::{escape, WebState};
 
 fn failed(guild_id: GuildId, what: &'static str) -> impl Fn(anyhow::Error) -> &'static str {
@@ -59,11 +59,11 @@ pub async fn starboard_save(state: &WebState, guild_id: GuildId, input: &Input<'
     let addition = if input.raw("board_emoji").is_empty() {
         None
     } else {
-        if !starboards::valid_emoji(input.raw("board_emoji")) {
+        if !starboard::valid_emoji(input.raw("board_emoji")) {
             return Err("emoji");
         }
         let channel = input.channel("board_channel")?.ok_or("kanal")?;
-        Some(Board { channel: channel.get(), emoji: starboards::normalize_emoji(input.raw("board_emoji")), threshold: input.number("board_threshold", 1, 50)? })
+        Some(Board { channel: channel.get(), emoji: starboard::normalize_emoji(input.raw("board_emoji")), threshold: input.number("board_threshold", 1, 50)? })
     };
     let current = state.settings.get::<StarboardSettings>(&state.db, guild_id).await.map_err(&failed)?;
     if removed.iter().any(|i| *i >= current.boards.len()) {
@@ -74,7 +74,7 @@ pub async fn starboard_save(state: &WebState, guild_id: GuildId, input: &Input<'
         if boards.iter().any(|b| b.emoji == board.emoji && b.channel == board.channel) {
             return Err("tekrar");
         }
-        if boards.len() >= starboards::MAX_EXTRA {
+        if boards.len() >= starboard::MAX_EXTRA {
             return Err("limit");
         }
         boards.push(board);

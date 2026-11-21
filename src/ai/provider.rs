@@ -14,7 +14,46 @@ const GEMINI_URL: &str = "https://generativelanguage.googleapis.com/v1beta/model
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Sırada yedek varken NIM'in cevaba başlaması için beklenen en uzun süre: kuyrukta takılan model
 /// (ücretsiz katmanda sık) yüzünden dakikalarca beklenmez, sıradakine geçilir.
-const FIRST_RESPONSE_WITH_FALLBACK: Duration = Duration::from_secs(20);
+const FIRST_RESPONSE_WITH_FALLBACK: Duration = Duration::from_secs(12);
+
+#[derive(Debug, Clone, Copy, Default)]
+struct CircuitState {
+    consecutive_failures: u32,
+    open_until: Option<std::time::Instant>,
+}
+
+static CIRCUIT_BREAKERS: std::sync::LazyLock<dashmap::DashMap<String, CircuitState>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+const CIRCUIT_FAILURE_THRESHOLD: u32 = 3;
+const CIRCUIT_COOLDOWN: Duration = Duration::from_secs(4 * 60);
+
+fn is_circuit_open(model: &str) -> bool {
+    let Some(cb) = CIRCUIT_BREAKERS.get(model) else { return false; };
+    if let Some(until) = cb.open_until {
+        if std::time::Instant::now() < until {
+            return true;
+        }
+    }
+    false
+}
+
+fn record_circuit_failure(model: &str) {
+    let mut entry = CIRCUIT_BREAKERS.entry(model.to_owned()).or_default();
+    entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
+    if entry.consecutive_failures >= CIRCUIT_FAILURE_THRESHOLD {
+        entry.open_until = Some(std::time::Instant::now() + CIRCUIT_COOLDOWN);
+        tracing::warn!(model, cooldown_secs = CIRCUIT_COOLDOWN.as_secs(), "Model Circuit Breaker açıldı (4 dk devre dışı)");
+    }
+}
+
+fn record_circuit_success(model: &str) {
+    if let Some(mut entry) = CIRCUIT_BREAKERS.get_mut(model) {
+        entry.consecutive_failures = 0;
+        entry.open_until = None;
+    }
+}
+
 /// Akıl yürüten modellerde düşünme de bu sınıra dahildir; düşük tutulursa cevap boş kalır.
 const MAX_OUTPUT_TOKENS: u32 = 1500;
 /// Düşük sıcaklık: daha tutarlı dil bilgisi, daha az uydurma kelime.
@@ -55,9 +94,21 @@ pub async fn complete(
     let messages = merge_consecutive(messages);
     let mut current = config;
     loop {
+        // Model devre dışıysa ve yedek varsa doğrudan yedeğe geç
+        if is_circuit_open(&current.model) {
+            if let Some(next) = current.fallback.as_deref() {
+                tracing::info!(model = %current.model, next = %next.model, "Model Circuit Breaker devrede; doğrudan yedeğe geçiliyor");
+                current = next;
+                continue;
+            }
+        }
         match ask(client, current, system, &messages, progress, search).await {
-            Ok(text) => return Ok(text),
+            Ok(text) => {
+                record_circuit_success(&current.model);
+                return Ok(text);
+            }
             Err(error) => {
+                record_circuit_failure(&current.model);
                 // Bu model / sağlayıcı cevap vermediyse (ağ, aşırı yük, kaldırılmış model) sıradaki denenir.
                 let Some(next) = current.fallback.as_deref() else {
                     return Err(error);
@@ -379,11 +430,12 @@ async fn gemini(
         })
         .collect();
 
+    let timeout_duration = if config.fallback.is_some() { FIRST_RESPONSE_WITH_FALLBACK } else { Duration::from_secs(15) };
     let response = client
         .post(format!("{GEMINI_URL}/{}:generateContent", config.model))
         // Anahtar URL yerine başlıkta: loglara/proxy kayıtlarına düşmesin.
         .header("x-goog-api-key", &config.api_key)
-        .timeout(REQUEST_TIMEOUT)
+        .timeout(timeout_duration)
         .json(&json!({
             "systemInstruction": { "parts": [{ "text": system }] },
             "contents": contents,

@@ -17,6 +17,12 @@ use crate::music::render::{blend, crop_square, fill_circle, fill_round_rect, fit
 use crate::rand_util;
 use crate::settings::PluginConfig;
 
+/// Eş zamanlı çoklu kart render isteklerinin threadpool'u boğmasını engelleyen semafor (2–4 paralel işlem).
+pub static RENDER_SEMAPHORE: std::sync::LazyLock<tokio::sync::Semaphore> = std::sync::LazyLock::new(|| {
+    let permits = std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 4));
+    tokio::sync::Semaphore::new(permits)
+});
+
 const WELCOME_W: u32 = 1000;
 const WELCOME_H: u32 = 400;
 const RANK_W: u32 = 1000;
@@ -147,7 +153,7 @@ pub fn card_text(template: &str, name: &str, guild: &str, members: u64) -> Strin
 fn encode_jpeg(img: RgbaImage) -> anyhow::Result<Vec<u8>> {
     let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
     let mut out = Cursor::new(Vec::new());
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 82)
         .encode_image(&rgb)
         .context("kart kodlanamadı")?;
     Ok(out.into_inner())

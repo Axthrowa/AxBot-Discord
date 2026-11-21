@@ -130,7 +130,7 @@ pub fn render(card: &CardData, cover: Option<&RgbaImage>) -> anyhow::Result<Vec<
     match cover {
         Some(c) => {
             let square = crop_square(c);
-            let resized = imageops::resize(&square, COVER, COVER, FilterType::Lanczos3);
+            let resized = imageops::resize(&square, COVER, COVER, FilterType::Triangle);
             paste_rounded(&mut img, &resized, cx, cover_y, 24);
         }
         None => {
@@ -231,7 +231,7 @@ pub fn render(card: &CardData, cover: Option<&RgbaImage>) -> anyhow::Result<Vec<
 
     let rgb: RgbImage = image::DynamicImage::ImageRgba8(img).to_rgb8();
     let mut out = Cursor::new(Vec::new());
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 80)
         .encode_image(&rgb)
         .context("kart kodlanamadı")?;
     Ok(out.into_inner())
@@ -276,7 +276,7 @@ fn small_icon(name: &str) -> Option<&'static RgbaImage> {
             .filter_map(|name| {
                 let png = super::icons::png(name)?;
                 let decoded = image::load_from_memory(png).ok()?.to_rgba8();
-                Some((name, imageops::resize(&decoded, 18, 18, FilterType::Lanczos3)))
+                Some((name, imageops::resize(&decoded, 18, 18, FilterType::Triangle)))
             })
             .collect()
     });

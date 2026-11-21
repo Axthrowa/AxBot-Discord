@@ -723,14 +723,14 @@ async fn m_sar(
         Some(_) => {}
     }
     ctx.defer().await?;
-    match tokio::time::timeout(std::time::Duration::from_secs(20), current.seek_async(target)).await {
-        Ok(Ok(_)) => {
+    match ctx.data().music.seek_to(&ctx.serenity_context().http, guild_id, target).await {
+        Ok(()) => {
             ctx.say(format!("⏩ **{}** konumuna sarıldı.", format_duration(target))).await?;
             ctx.data().music.refresh_card_now(&ctx.serenity_context().http, guild_id).await;
         }
-        other => {
-            tracing::warn!(guild = %guild_id, result = ?other, "Sarılamadı");
-            ctx.say("❌ Bu şarkı sarılamadı (kaynak desteklemiyor olabilir).").await?;
+        Err(e) => {
+            tracing::warn!(guild = %guild_id, error = %e, "Sarılamadı");
+            ctx.say(format!("❌ Bu şarkı sarılamadı: {e}")).await?;
         }
     }
     Ok(())

@@ -48,6 +48,7 @@ pub async fn seviye(
     };
     let (avatar, backdrop) = tokio::join!(crate::members::avatar_image(&user), backdrop);
     let prestige = prestige_of(&data.db, guild_id, user.id).await.unwrap_or(0);
+    let _permit = crate::cards::RENDER_SEMAPHORE.acquire().await.ok();
     let drawn = tokio::task::spawn_blocking(move || crate::cards::render_rank(&card, avatar.as_ref(), backdrop.as_ref())).await;
     if let Ok(Ok(bytes)) = drawn {
         let file = serenity::CreateAttachment::bytes(bytes, "seviye.jpg");

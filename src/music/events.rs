@@ -56,9 +56,13 @@ impl EventHandler for TrackNotifier {
                         t.announce = false;
                         announce.then(|| t.clone())
                     });
+                    let guild_id = music.tracks.get(&id).map(|t| t.guild_id);
                     if let Some(info) = info {
                         // Kart çizimi kuyruk kilidi ister; olay görevinde değil, ayrı görevde yapılır.
                         tokio::spawn(Shared::post_card(Arc::clone(&music), Arc::clone(&self.http), info.guild_id));
+                    }
+                    if let Some(guild_id) = guild_id {
+                        tokio::spawn(Shared::prefetch_next(Arc::clone(&music), guild_id));
                     }
                 }
                 TrackNotice::Ended => {
@@ -71,7 +75,8 @@ impl EventHandler for TrackNotifier {
                 }
                 TrackNotice::Failed => {
                     if let Some((_, info)) = music.tracks.remove(&id) {
-                        warn!(title = %info.title, "Parça çalınamadı");
+                        let err_detail = handle.get_info().await.map(|st| format!("{:?}", st.playing)).unwrap_or_default();
+                        warn!(title = %info.title, error = %err_detail, "Parça çalınamadı");
                         let text = format!("⚠️ **{}** çalınamadı, sıradakine geçiliyor.", info.title);
                         self.send(&music, info.guild_id, CreateMessage::new().content(text)).await;
                     }

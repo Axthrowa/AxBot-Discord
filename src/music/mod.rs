@@ -53,12 +53,18 @@ const PLAYLIST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Seslendirilecek metnin en fazla uzunluğu.
 pub const TTS_MAX_CHARS: usize = 200;
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(25);
-/// Şarkı kartının (ilerleme çubuğu) yenilenme aralığı. Discord mesaj düzenlemeyi sınırlar.
-const CARD_REFRESH: Duration = Duration::from_secs(5);
+/// Şarkı kartının (ilerleme çubuğu) yenilenme aralığı. Discord REST ve CPU yükünü dengeler.
+const CARD_REFRESH: Duration = Duration::from_secs(12);
 /// Kart görselinin dosya adı (her düzenlemede değiştirilir).
 const CARD_FILE: &str = "kart.jpg";
 /// Otomatik çalmada tekrar etmesin diye hatırlanan son şarkı sayısı.
 const HISTORY_LEN: usize = 30;
+
+/// Çözümlenen şarkı metadata ve akış URL önbelleği (15 dk TTL, maks 500 kayıt).
+static RESOLVE_CACHE: std::sync::LazyLock<dashmap::DashMap<String, (songbird::input::AuxMetadata, String, std::time::Instant)>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+const RESOLVE_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+const RESOLVE_CACHE_MAX: usize = 500;
 
 /// Sunucu başına müzik ayarları (veritabanında kalıcı).
 #[derive(Debug, Clone, Copy, Default)]
@@ -224,10 +230,12 @@ impl Music {
     pub fn new(songbird: Arc<Songbird>, http: reqwest::Client) -> Self {
         let tools = Path::new("tools");
         let ytdlp = find_tool(tools, "yt-dlp").unwrap_or_else(|| "yt-dlp".to_owned());
+        filters::set_ytdlp(ytdlp.clone());
         filters::set_ffmpeg(find_tool(tools, "ffmpeg").unwrap_or_else(|| "ffmpeg".to_owned()));
 
         // YouTube'un bot korumasını çözmek için yt-dlp bir JavaScript motoru (deno) kullanır.
         let mut ytdlp_args = Vec::new();
+        ytdlp_args.push("--no-warnings".to_owned());
         if let Some(deno) = find_tool(tools, "deno") {
             ytdlp_args.push("--js-runtimes".to_owned());
             ytdlp_args.push(format!("deno:{deno}"));
@@ -296,6 +304,54 @@ impl Music {
         Ok(())
     }
 
+    /// Çalan şarkıyı belirli bir zamana sarar (milisaniyeler içinde doğrudan yeni akış başlatma).
+    pub async fn seek_to(&self, http: &Arc<Http>, guild_id: GuildId, target: Duration) -> Result<(), String> {
+        let Some(call) = self.songbird.get(guild_id) else {
+            return Err("Şu an çalan bir şarkı yok.".to_owned());
+        };
+        let mut handler = call.lock().await;
+        let queue = handler.queue().clone();
+        let Some(current) = queue.current() else {
+            return Err("Şu an çalan bir şarkı yok.".to_owned());
+        };
+        let uuid = current.uuid();
+        let Some(info) = self.tracks.get(&uuid).map(|t| t.value().clone()) else {
+            return Err("Şarkı bilgisi bulunamadı.".to_owned());
+        };
+        let Some(url) = info.url.clone() else {
+            return Err("Bu yayın/şarkı sarılamıyor.".to_owned());
+        };
+        let source = YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), url.clone()).user_args(self.args());
+        let input = prefetch::Prefetched::seek_from(url, source, self.args(), target);
+        let input = filters::wrap(input, guild_id, &self.filters);
+        let volume = self.volume_of(guild_id);
+        let _ = current.stop();
+        self.tracks.remove(&uuid);
+
+        let handle = queue.add_with_preload(Track::new(input).volume(volume), &mut handler, None);
+        queue.modify_queue(|q| {
+            if q.len() > 1 {
+                if let Some(track) = q.pop_back() {
+                    q.push_front(track);
+                }
+            }
+        });
+        self.tracks.insert(handle.uuid(), info);
+        for (event, notice) in [
+            (TrackEvent::Play, TrackNotice::Started),
+            (TrackEvent::End, TrackNotice::Ended),
+            (TrackEvent::Error, TrackNotice::Failed),
+        ] {
+            let notifier = TrackNotifier {
+                http: Arc::clone(http),
+                music: Arc::downgrade(&self.0),
+                notice,
+            };
+            let _ = handle.add_event(Event::Track(event), notifier);
+        }
+        Ok(())
+    }
+
     /// Kuyruktan bir şarkıyı çıkarır (1 = sıradaki). Çıkarılanın bilgisini döner.
     pub async fn remove_at(&self, guild_id: GuildId, index: usize) -> Option<TrackInfo> {
         let call = self.songbird.get(guild_id)?;
@@ -348,9 +404,9 @@ impl Music {
             .into_iter()
             .map(|t| {
                 let query = format!("{} - {}", t.artists, t.title);
-                let input = prefetch::Prefetched::lazy(
-                    YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), query.clone()).user_args(self.args()),
-                );
+                let target = format!("ytsearch1:{query}");
+                let source = YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), query.clone()).user_args(self.args());
+                let input = prefetch::Prefetched::lazy(target, source, self.args());
                 let info = TrackInfo {
                     guild_id,
                     title: query,
@@ -385,11 +441,11 @@ impl Music {
             .map(|t| {
                 // Yalnızca http(s) bağlantıları yt-dlp'ye bağlantı olarak verilir; gerisi arama metnidir.
                 let url = t.url.filter(|u| u.starts_with("https://") || u.starts_with("http://"));
-                let source = match &url {
-                    Some(url) => YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), url.clone()),
-                    None => YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), t.title.clone()),
+                let (target, source) = match &url {
+                    Some(url) => (url.clone(), YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), url.clone())),
+                    None => (format!("ytsearch1:{}", t.title), YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), t.title.clone())),
                 };
-                let input = prefetch::Prefetched::lazy(source.user_args(self.args()));
+                let input = prefetch::Prefetched::lazy(target, source.user_args(self.args()), self.args());
                 let info = TrackInfo { guild_id, title: t.title, url, duration: None, thumbnail: None, requester, announce: false, spotify_url: None };
                 (input, info)
             })
@@ -500,11 +556,55 @@ impl Music {
         Ok((input, info))
     }
 
+    fn check_cached_resolve(&self, target: &str, search: bool) -> Option<(Input, songbird::input::AuxMetadata)> {
+        let key = format!("{search}:{target}");
+        let entry = RESOLVE_CACHE.get(&key)?;
+        let (ref meta, ref resolved_target, cached_at) = *entry;
+        if cached_at.elapsed() < RESOLVE_CACHE_TTL {
+            let source = if search {
+                YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), resolved_target.clone())
+            } else {
+                YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), resolved_target.clone())
+            }
+            .user_args(self.args());
+            return Some(prefetch::Prefetched::from_cached(
+                resolved_target.clone(),
+                source,
+                self.args(),
+                meta.clone(),
+            ));
+        }
+        None
+    }
+
+    fn cache_resolved(target: &str, search: bool, meta: &songbird::input::AuxMetadata) {
+        let resolved_target = meta.source_url.clone().unwrap_or_else(|| target.to_owned());
+        if RESOLVE_CACHE.len() >= RESOLVE_CACHE_MAX {
+            let now = std::time::Instant::now();
+            RESOLVE_CACHE.retain(|_, (_, _, at)| now.duration_since(*at) < RESOLVE_CACHE_TTL);
+        }
+        if RESOLVE_CACHE.len() >= RESOLVE_CACHE_MAX {
+            RESOLVE_CACHE.clear();
+        }
+        RESOLVE_CACHE.insert(
+            format!("{search}:{target}"),
+            (meta.clone(), resolved_target, std::time::Instant::now()),
+        );
+    }
+
     /// yt-dlp'yi bir kez çalıştırır (sonuç çalarken de kullanılır, bkz. `prefetch`). Hata metni yt-dlp'ninkidir.
     /// YouTube "bot musun" engeli verirse diğer istemciler sırayla denenir; işe yarayan hatırlanır.
     async fn fetch(&self, target: &str, search: bool) -> Result<(Input, songbird::input::AuxMetadata), String> {
+        if let Some(cached) = self.check_cached_resolve(target, search) {
+            return Ok(cached);
+        }
         let first = self.fetch_with(target, search, self.args()).await;
-        let Err(first_error) = first else { return first };
+        let Err(first_error) = first else {
+            if let Ok((_, ref meta)) = first {
+                Self::cache_resolved(target, search, meta);
+            }
+            return first;
+        };
         let blocked = is_bot_block(&first_error);
         let current = preferred_client();
         // Varsayılan istemcide engel dışı hata (bulunamadı vb.) gerçek sonuçtur. Tercih edilen istemci ise
@@ -524,6 +624,7 @@ impl Music {
                 Ok(found) => {
                     info!(client, "YouTube bu istemciyle açıldı; bundan sonra o kullanılacak");
                     set_preferred_client(client);
+                    Self::cache_resolved(target, search, &found.1);
                     return Ok(found);
                 }
                 Err(e) if is_bot_block(&e) => warn!(client, "YouTube istemcisi de engellendi"),
@@ -542,14 +643,18 @@ impl Music {
         }
     }
 
-    async fn fetch_with(&self, target: &str, search: bool, args: Vec<String>) -> Result<(Input, songbird::input::AuxMetadata), String> {
+    async fn fetch_with(&self, target: &str, search: bool, mut args: Vec<String>) -> Result<(Input, songbird::input::AuxMetadata), String> {
+        // Tekil şarkı ve aramalarda YouTube çalma listesi ayrıştırmasını atlayarak hızı artırır.
+        if !args.iter().any(|a| a == "--no-playlist") {
+            args.push("--no-playlist".to_owned());
+        }
         let source = if search {
             YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), target.to_owned())
         } else {
             YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), target.to_owned())
         }
-        .user_args(args);
-        prefetch::Prefetched::resolve(source).await.map_err(|e| e.to_string())
+        .user_args(args.clone());
+        prefetch::Prefetched::resolve(source, args).await.map_err(|e| e.to_string())
     }
 
     /// Şarkı adıysa ve Spotify anahtarı varsa önce Spotify'da arar: kart, kapak ve bağlantı Spotify'ın
@@ -618,7 +723,9 @@ impl Music {
             .into_iter()
             .map(|entry| {
                 let input = prefetch::Prefetched::lazy(
+                    entry.url.clone(),
                     YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), entry.url.clone()).user_args(self.args()),
+                    self.args(),
                 );
                 let info = TrackInfo {
                     guild_id,
@@ -887,6 +994,7 @@ impl Shared {
             next: state.next.clone(),
             brand: self.guild_name(http, guild_id).await,
         };
+        let _permit = crate::cards::RENDER_SEMAPHORE.acquire().await.ok();
         let jpeg = tokio::task::spawn_blocking(move || render::render(&data, cover.as_deref()))
             .await
             .ok()?
@@ -925,6 +1033,23 @@ impl Shared {
             Err(e) => {
                 warn!(channel = %channel, error = %e, "Şarkı kartı gönderilemedi");
                 false
+            }
+        }
+    }
+
+    /// Sıradaki parçayı arka planda önceden çözümler (şarkı geçişinde yt-dlp beklemesini sıfırlar).
+    pub(crate) async fn prefetch_next(this: Arc<Self>, guild_id: GuildId) {
+        let Some(call) = this.songbird.get(guild_id) else { return; };
+        let next_uuid = {
+            let handler = call.lock().await;
+            let queue = handler.queue().current_queue();
+            queue.get(1).map(|h| h.uuid())
+        };
+        let Some(uuid) = next_uuid else { return; };
+        let target = this.tracks.get(&uuid).and_then(|t| t.url.clone());
+        if let Some(target) = target {
+            if !target.is_empty() {
+                let _ = Music(Arc::clone(&this)).fetch(&target, false).await;
             }
         }
     }
@@ -971,6 +1096,17 @@ impl Shared {
                 }
                 continue;
             };
+            let Some(call) = this.songbird.get(guild_id) else {
+                delete_card(&http, channel, message).await;
+                this.cards.remove(&guild_id);
+                break;
+            };
+            let in_vc = call.lock().await.current_channel().is_some();
+            if !in_vc {
+                delete_card(&http, channel, message).await;
+                this.cards.remove(&guild_id);
+                break;
+            }
             let Some((info, state)) = this.card_state(guild_id).await else {
                 // Müzik bitti: son kart da sohbette kalmasın.
                 delete_card(&http, channel, message).await;
@@ -978,7 +1114,7 @@ impl Shared {
                 break;
             };
             // Duraklatılmışsa / değişen bir şey yoksa Discord'a istek atılmaz.
-            let key = (message, info.title.clone(), state.position.as_secs() / 3, state.paused, state.looping, state.upcoming);
+            let key = (message, info.title.clone(), state.position.as_secs() / 12, state.paused, state.looping, state.upcoming);
             if last_key.as_ref() == Some(&key) {
                 continue;
             }
@@ -1068,7 +1204,9 @@ impl Shared {
             }
         };
         let input = prefetch::Prefetched::lazy(
+            next.url.clone(),
             YoutubeDl::new_ytdl_like(this.ytdlp, this.http.clone(), next.url.clone()).user_args(this.args()),
+            this.args(),
         );
         let info = TrackInfo {
             guild_id,

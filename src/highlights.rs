@@ -4,6 +4,7 @@
 //! Mesaj başına veritabanına gidilmez: sunucunun kelime listesi bellekte (değişince yeniden okunur). Üye o kanalda
 //! son 5 dakikada yazdıysa (sohbetin içindeyse) ya da 5 dakika içinde zaten bildirim aldıysa haber verilmez.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
@@ -113,11 +114,14 @@ async fn words(db: &PgPool, guild_id: GuildId) -> anyhow::Result<WordList> {
     Ok(words)
 }
 
+/// Mesaj sayacı (temizliğin periyodik ve seyrek yapılması için).
+static MSG_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 /// Her sunucu mesajında çağrılır.
 pub async fn on_message(ctx: &serenity::Context, db: &PgPool, guild_id: GuildId, msg: &Message) {
     let now = Instant::now();
-    // Bellek büyümesin: eski kayıtlar ara sıra atılır.
-    if LAST_SEEN.len() > 50_000 {
+    // Bellek büyümesin: her 1000 mesajda bir ve yalnızca harita büyüdüğünde eski kayıtlar temizlenir.
+    if MSG_COUNTER.fetch_add(1, Ordering::Relaxed).is_multiple_of(1000) && LAST_SEEN.len() > 10_000 {
         LAST_SEEN.retain(|_, at| now.duration_since(*at) < ACTIVE_WINDOW);
     }
     LAST_SEEN.insert((msg.channel_id, msg.author.id), now);
@@ -177,9 +181,12 @@ pub async fn on_message(ctx: &serenity::Context, db: &PgPool, guild_id: GuildId,
             .footer(serenity::CreateEmbedFooter::new(format!("{guild_name} · #{}", channel_name.unwrap_or_default())))
             .timestamp(msg.timestamp);
         let dm = CreateMessage::new().content(format!("🔔 **{word}** kelimesi geçti: <#{}>", msg.channel_id)).embed(embed);
-        if let Err(e) = user.direct_message(&ctx.http, dm).await {
-            debug!(user = %user, error = %e, "Vurgu bildirimi gönderilemedi (özel mesajlar kapalı olabilir)");
-        }
+        let http = Arc::clone(&ctx.http);
+        tokio::spawn(async move {
+            if let Err(e) = user.direct_message(&http, dm).await {
+                debug!(user = %user, error = %e, "Vurgu bildirimi gönderilemedi (özel mesajlar kapalı olabilir)");
+            }
+        });
     }
 }
 

@@ -116,7 +116,10 @@ impl Ai {
 /// Tek seferlik metin üretimi (`/ai yaz`): sohbet geçmişi kullanılmaz ve kaydedilmez.
 /// AI kapalıysa `None`.
 pub async fn write_once(data: &Data, guild_name: &str, persona: Option<&str>, request: &str) -> Option<anyhow::Result<String>> {
-    let ai = &data.ai;
+    write_once_ai(&data.ai, guild_name, persona, request).await
+}
+
+pub async fn write_once_ai(ai: &Ai, guild_name: &str, persona: Option<&str>, request: &str) -> Option<anyhow::Result<String>> {
     let config = ai.config.as_ref()?;
     let Ok(_permit) = ai.limiter.acquire().await else {
         return None;

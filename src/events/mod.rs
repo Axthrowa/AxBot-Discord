@@ -12,7 +12,24 @@ use crate::leveling::settings::{render_message, roles_on_level_up, Announce, Lev
 use crate::leveling::LevelUp;
 use crate::{appeals, applications, eventlog, giveaway, members, rolepanel, starboard, suggestions, tickets, verification};
 
+const SLOW_EVENT_MS: u128 = 200;
+
 pub async fn handle(
+    ctx: &serenity::Context,
+    event: &serenity::FullEvent,
+    framework: poise::FrameworkContext<'_, Data, Error>,
+    data: &Data,
+) -> Result<(), Error> {
+    let started = std::time::Instant::now();
+    let result = handle_inner(ctx, event, framework, data).await;
+    let ms = started.elapsed().as_millis();
+    if ms >= SLOW_EVENT_MS {
+        warn!(event = event.snake_case_name(), ms, "Yavaş gateway olayı");
+    }
+    result
+}
+
+async fn handle_inner(
     ctx: &serenity::Context,
     event: &serenity::FullEvent,
     framework: poise::FrameworkContext<'_, Data, Error>,
@@ -92,7 +109,9 @@ pub async fn handle(
             // Auto-mod'un sildiği mesajlar XP kazandırmaz ve yapay zekâya gitmez.
             if !deleted {
                 // Kelime listesinin kaçırdığı gizlenmiş küfürler (ayar açıksa, yalnızca şüpheli mesajlarda).
-                if crate::ai::assist::moderate(ctx, data, guild_id, msg, roles).await {
+                if crate::ai::assist::has_suspicious_tokens(&msg.content)
+                    && crate::ai::assist::moderate(ctx, data, guild_id, msg, roles).await
+                {
                     return Ok(());
                 }
                 if data.automod.has_invite(&msg.content) {
@@ -115,15 +134,19 @@ pub async fn handle(
                     ai::handle_message(ctx, data, guild_id, msg).await
                 };
                 let extras = async {
-                    crate::community::on_message(ctx, data, guild_id, msg).await;
-                    eventlog::remember(data, guild_id, msg).await;
-                    crate::highlights::on_message(ctx, &data.db, guild_id, msg).await;
-                    crate::modmail::on_staff_message(ctx, data, guild_id, msg).await;
-                    crate::ai::assist::on_ticket_message(ctx, data, guild_id, msg).await;
-                    tickets::on_message(ctx, &data.db, msg).await;
-                    crate::achievements::bump(ctx, data, guild_id, &msg.author, crate::achievements::Kind::Messages, 1, Some(msg.channel_id)).await;
-                    let facts = Facts { trigger: Trigger::Message, channel: Some(msg.channel_id.get()), content: &msg.content, member_roles: roles, ..Facts::default() };
-                    automations::run(ctx, data, automations::Event { guild_id, user: &msg.author, facts, message: Some(msg) }).await;
+                    tokio::join!(
+                        crate::community::on_message(ctx, data, guild_id, msg),
+                        crate::modmail::on_staff_message(ctx, data, guild_id, msg),
+                        tickets::on_message(ctx, &data.db, msg),
+                        eventlog::remember(data, guild_id, msg),
+                        crate::highlights::on_message(ctx, &data.db, guild_id, msg),
+                        crate::ai::assist::on_ticket_message(ctx, data, guild_id, msg),
+                        crate::achievements::bump(ctx, data, guild_id, &msg.author, crate::achievements::Kind::Messages, 1, Some(msg.channel_id)),
+                        async {
+                            let facts = Facts { trigger: Trigger::Message, channel: Some(msg.channel_id.get()), content: &msg.content, member_roles: roles, ..Facts::default() };
+                            automations::run(ctx, data, automations::Event { guild_id, user: &msg.author, facts, message: Some(msg) }).await;
+                        }
+                    );
                 };
                 let ((), responded, ()) = tokio::join!(award_xp(ctx, data, guild_id, msg, roles), respond, extras);
                 responded?;
@@ -208,6 +231,8 @@ pub async fn handle(
                 crate::music::card::handle_button(ctx, &data.music, component).await?;
             } else if id.starts_with(crate::rsvp::PREFIX) {
                 crate::rsvp::handle_component(ctx, data, component).await?;
+            } else if id.starts_with(crate::tempvoice::PREFIX) {
+                crate::tempvoice::handle_component(ctx, data, component).await?;
             } else if id.starts_with(crate::commands::RECOMMEND_PREFIX) {
                 crate::commands::handle_recommend(ctx, data, component).await?;
             } else if id.starts_with(crate::commands::TOD_PREFIX) {
@@ -225,17 +250,16 @@ pub async fn handle(
                 verification::handle_modal(ctx, data, modal).await?;
             } else if id.starts_with(appeals::PREFIX) {
                 appeals::handle_modal(ctx, data, modal).await?;
+            } else if id.starts_with(crate::tempvoice::PREFIX) {
+                crate::tempvoice::handle_modal(ctx, data, modal).await?;
             } else if id.starts_with(applications::PREFIX) {
                 applications::handle_modal(ctx, data, modal).await?;
             }
         }
-        // Starboard: sadece ⭐ tepkileri işlenir.
+        // Starboard: ⭐ ve ek panolar senkronize edilir.
         serenity::FullEvent::ReactionAdd { add_reaction: reaction } => {
-            if let (Some(guild_id), true) = (reaction.guild_id, starboard::is_star(&reaction.emoji)) {
-                starboard::on_star(ctx, data, guild_id, reaction.channel_id, reaction.message_id).await;
-            }
             if let Some(guild_id) = reaction.guild_id {
-                crate::starboards::on_reaction(ctx, data, guild_id, reaction.channel_id, reaction.message_id, &reaction.emoji).await;
+                starboard::on_reaction_event(ctx, data, guild_id, reaction.channel_id, reaction.message_id, &reaction.emoji).await;
             }
             crate::reactionroles::on_reaction(ctx, data, reaction, true).await;
             if let (Some(guild_id), Some(member)) = (reaction.guild_id, reaction.member.as_ref()) {
@@ -256,17 +280,14 @@ pub async fn handle(
             }
         }
         serenity::FullEvent::ReactionRemove { removed_reaction: reaction } => {
-            if let (Some(guild_id), true) = (reaction.guild_id, starboard::is_star(&reaction.emoji)) {
-                starboard::on_star(ctx, data, guild_id, reaction.channel_id, reaction.message_id).await;
-            }
             if let Some(guild_id) = reaction.guild_id {
-                crate::starboards::on_reaction(ctx, data, guild_id, reaction.channel_id, reaction.message_id, &reaction.emoji).await;
+                starboard::on_reaction_event(ctx, data, guild_id, reaction.channel_id, reaction.message_id, &reaction.emoji).await;
             }
             crate::reactionroles::on_reaction(ctx, data, reaction, false).await;
         }
         serenity::FullEvent::ReactionRemoveEmoji { removed_reactions: reaction } => {
-            if let (Some(guild_id), true) = (reaction.guild_id, starboard::is_star(&reaction.emoji)) {
-                starboard::on_star(ctx, data, guild_id, reaction.channel_id, reaction.message_id).await;
+            if let Some(guild_id) = reaction.guild_id {
+                starboard::on_reaction_emoji_removed(ctx, data, guild_id, reaction.channel_id, reaction.message_id, &reaction.emoji).await;
             }
         }
         serenity::FullEvent::ReactionRemoveAll { channel_id, removed_from_message_id } => {
@@ -276,7 +297,7 @@ pub async fn handle(
                 .into_iter()
                 .find(|g| ctx.cache.guild(*g).is_some_and(|g| g.channels.contains_key(channel_id)));
             if let Some(guild_id) = guild_id {
-                starboard::on_star(ctx, data, guild_id, *channel_id, *removed_from_message_id).await;
+                starboard::on_reactions_cleared(ctx, data, guild_id, *channel_id, *removed_from_message_id).await;
             }
         }
         serenity::FullEvent::VoiceStateUpdate { old, new } => {

@@ -185,11 +185,32 @@ async fn give_roles(http: &serenity::Http, guild_id: GuildId, user: serenity::Us
     }
 }
 
+static AVATAR_CACHE: std::sync::LazyLock<dashmap::DashMap<String, (std::time::Instant, image::RgbaImage)>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+const AVATAR_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const AVATAR_CACHE_MAX: usize = 500;
+
 /// Üyenin avatarını kart için indirir (hareketli avatarın sabit hâli; yoksa varsayılan avatar).
+/// Boyut ve süre sınırlı bellek içi önbellekle Discord CDN yükü önlenir.
 pub async fn avatar_image(user: &User) -> Option<image::RgbaImage> {
     let url = user.static_avatar_url().unwrap_or_else(|| user.default_avatar_url());
     let url = url.split('?').next().unwrap_or_default().to_owned() + "?size=256";
-    cards::fetch_image(&url).await
+    if let Some(entry) = AVATAR_CACHE.get(&url) {
+        let (cached_at, ref img) = *entry;
+        if cached_at.elapsed() < AVATAR_CACHE_TTL {
+            return Some(img.clone());
+        }
+    }
+    let img = cards::fetch_image(&url).await?;
+    if AVATAR_CACHE.len() >= AVATAR_CACHE_MAX {
+        let now = std::time::Instant::now();
+        AVATAR_CACHE.retain(|_, (at, _)| now.duration_since(*at) < AVATAR_CACHE_TTL);
+    }
+    if AVATAR_CACHE.len() >= AVATAR_CACHE_MAX {
+        AVATAR_CACHE.clear();
+    }
+    AVATAR_CACHE.insert(url, (std::time::Instant::now(), img.clone()));
+    Some(img)
 }
 
 /// Karşılama kartını çizer; çizilemezse `None` (mesaj kartsız gönderilir).
@@ -210,6 +231,7 @@ pub async fn welcome_card(settings: &WelcomeSettings, user: &User, guild: &str, 
         }
     };
     let (avatar, backdrop) = tokio::join!(avatar_image(user), backdrop);
+    let _permit = cards::RENDER_SEMAPHORE.acquire().await.ok();
     let drawn = tokio::task::spawn_blocking(move || cards::render_welcome(&card, avatar.as_ref(), backdrop.as_ref())).await;
     match drawn {
         Ok(Ok(bytes)) => Some(bytes),

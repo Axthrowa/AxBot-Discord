@@ -151,7 +151,7 @@ pub const WELCOME_THEMES: &[Theme] = &[
                 gifs: &["OiNW0PypI1RaE", "nU1c9k6n5p6UM", "I2TqO0oJBaNoc"],
             },
             Entry {
-                text: "Bu, dostum, bir bardak bira! {kullanıcı} geldi, Yeşil Ejder'de ilk içkiler bizden.",
+                text: "Hoş geldin dostum! {kullanıcı} geldi, Yeşil Ejder'de bu akşam ziyafet var.",
                 gifs: &["1BLN4cSZGvhOo"],
             },
             Entry {
@@ -230,11 +230,11 @@ pub const WELCOME_THEMES: &[Theme] = &[
                 gifs: &["kDHtottlroaAPDOe9o", "gIRM9VKBpprv9poTvd"],
             },
             Entry {
-                text: "Büyük Salon'da bir sandalye daha doldu: hoş geldin {kullanıcı}! Kaymakbirası bizden.",
+                text: "Büyük Salon'da bir sandalye daha doldu: hoş geldin {kullanıcı}! Ziyafet sofrası seni bekliyor.",
                 gifs: &["5SRPnFvRG918k", "gbErpwcLlizvi"],
             },
             Entry {
-                text: "Dumbledore kadehini {kullanıcı} için kaldırıyor! Seninle birlikte **{üye}** büyücü olduk.",
+                text: "Dumbledore asasını {kullanıcı} için kaldırıyor! Seninle birlikte **{üye}** büyücü olduk.",
                 gifs: &["9H279yb0blggo"],
             },
             Entry {
@@ -289,7 +289,7 @@ pub const WELCOME_THEMES: &[Theme] = &[
                 gifs: &["5mdjd9dXsZA9a"],
             },
             Entry {
-                text: "Kadehler havaya! {kullanıcı} **{sunucu}** sofrasına katıldı; artık **{üye}** kişiyiz.",
+                text: "Kutlamalar başlasın! {kullanıcı} **{sunucu}** sofrasına katıldı; artık **{üye}** kişiyiz.",
                 gifs: &["gHWaAs1YM1jmnp6bLB"],
             },
             Entry {
@@ -413,7 +413,7 @@ pub const WELCOME_THEMES: &[Theme] = &[
                 gifs: &["dW6ZHwCuHC2JKIaP7h", "d88tKlampLOqdCOnad"],
             },
             Entry {
-                text: "Şerefe! {kullanıcı} **{sunucu}** meyhanesine katıldı; artık **{üye}** kişiyiz.",
+                text: "Selamlar! {kullanıcı} **{sunucu}** meclisine katıldı; artık **{üye}** kişiyiz.",
                 gifs: &["KzWAhzWD3HrJyAcLEM", "RlxcyVZj971I8emABn"],
             },
             Entry {

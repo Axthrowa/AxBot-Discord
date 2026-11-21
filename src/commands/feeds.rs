@@ -155,6 +155,13 @@ async fn akis_haberler(
     reply_private(ctx, text).await
 }
 
+type HaberOzetCacheEntry = (Vec<serenity::CreateEmbed>, Option<String>, std::time::Instant);
+
+static HABER_OZET_CACHE: std::sync::LazyLock<
+    dashmap::DashMap<String, HaberOzetCacheEntry>,
+> = std::sync::LazyLock::new(dashmap::DashMap::new);
+const HABER_OZET_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 /// Bir kategorinin bu haftaki özetini ve en yeni haberini şimdi gösterir.
 #[poise::command(slash_command, guild_only, rename = "haber-özeti")]
 async fn akis_haber_ozeti(ctx: Context<'_>, #[description = "Hangi kategori"] kategori: NewsChoice) -> Result<(), Error> {
@@ -166,6 +173,23 @@ async fn akis_haber_ozeti(ctx: Context<'_>, #[description = "Hangi kategori"] ka
     let data = ctx.data();
     let settings = data.settings.get::<NewsSettings>(&data.db, guild_id).await?;
     let category = news::category(kategori.key().unwrap_or("teknoloji")).ok_or_else(|| anyhow::anyhow!("kategori yok"))?;
+
+    let cache_key = format!("{guild_id}:{}:{}", category.key, settings.target_language().unwrap_or(""));
+    if let Some(entry) = HABER_OZET_CACHE.get(&cache_key) {
+        let (ref embeds, ref note, at) = *entry;
+        if at.elapsed() < HABER_OZET_CACHE_TTL {
+            let mut reply = poise::CreateReply::default().allowed_mentions(serenity::CreateAllowedMentions::new());
+            if let Some(note) = note {
+                reply = reply.content(note);
+            }
+            for embed in embeds {
+                reply = reply.embed(embed.clone());
+            }
+            ctx.send(reply).await?;
+            return Ok(());
+        }
+    }
+
     let context = NewsContext::from_data(ctx.serenity_context(), data);
     let mut embeds = Vec::new();
     if let Some(weekly) = news::weekly_embed(&context, category, &settings).await {
@@ -182,9 +206,21 @@ async fn akis_haber_ozeti(ctx: Context<'_>, #[description = "Hangi kategori"] ka
         ctx.say("📰 Seçili dil ve süzgeçlerle şu an gösterilecek haber bulunamadı.").await?;
         return Ok(());
     }
+    let note = if embeds.len() == 1 {
+        Some("ℹ️ Haftalık özet için henüz yeterli haber toplanmadı (haberler açıldıktan sonra birikir). En yeni haber:".to_owned())
+    } else {
+        None
+    };
+
+    if HABER_OZET_CACHE.len() >= 500 {
+        let now = std::time::Instant::now();
+        HABER_OZET_CACHE.retain(|_, (_, _, at)| now.duration_since(*at) < HABER_OZET_CACHE_TTL);
+    }
+    HABER_OZET_CACHE.insert(cache_key, (embeds.clone(), note.clone(), std::time::Instant::now()));
+
     let mut reply = poise::CreateReply::default().allowed_mentions(serenity::CreateAllowedMentions::new());
-    if embeds.len() == 1 {
-        reply = reply.content("ℹ️ Haftalık özet için henüz yeterli haber toplanmadı (haberler açıldıktan sonra birikir). En yeni haber:");
+    if let Some(note) = note {
+        reply = reply.content(note);
     }
     for embed in embeds {
         reply = reply.embed(embed);

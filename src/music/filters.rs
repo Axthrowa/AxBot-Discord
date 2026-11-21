@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -48,6 +49,7 @@ impl Filter {
 pub type Filters = Arc<DashMap<GuildId, Filter>>;
 
 static FFMPEG: OnceLock<String> = OnceLock::new();
+static YTDLP: OnceLock<String> = OnceLock::new();
 
 /// ffmpeg programının yolu (açılışta `Music::new` belirler; belirlenmediyse PATH'teki `ffmpeg`).
 pub fn set_ffmpeg(path: String) {
@@ -56,6 +58,71 @@ pub fn set_ffmpeg(path: String) {
 
 fn ffmpeg() -> &'static str {
     FFMPEG.get().map_or("ffmpeg", String::as_str)
+}
+
+/// yt-dlp programının yolu (açılışta `Music::new` belirler; belirlenmediyse PATH'teki `yt-dlp`).
+pub fn set_ytdlp(path: String) {
+    let _ = YTDLP.set(path);
+}
+
+fn ytdlp() -> &'static str {
+    YTDLP.get().map_or("yt-dlp", String::as_str)
+}
+
+/// yt-dlp ile ses akışını stdout'a indirip ffmpeg'e pipe eder; 48 kHz stereo f32le PCM verir.
+pub fn open_ytdlp_pipeline(
+    target: &str,
+    user_args: &[String],
+    seek: Option<Duration>,
+) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+    let mut ytdl_cmd = Command::new(ytdlp());
+    ytdl_cmd
+        .args(["-q", "--no-warnings", "--no-playlist", "--buffer-size", "16k"])
+        .args(user_args)
+        .args(["-f", "ba/b", "-o", "-", target])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    let mut ytdl_child = ytdl_cmd
+        .spawn()
+        .map_err(|e| AudioStreamError::Fail(format!("yt-dlp çalıştırılamadı: {e}").into()))?;
+
+    let Some(ytdl_stdout) = ytdl_child.stdout.take() else {
+        let _ = ytdl_child.kill();
+        return Err(AudioStreamError::Fail("yt-dlp çıktısı alınamadı".into()));
+    };
+
+    let mut ff_cmd = Command::new(ffmpeg());
+    ff_cmd.args(["-hide_banner", "-loglevel", "error"]);
+    // Gecikmeyi milisaniyelere indirmek için probe ve analyze sürelerini minimize ediyoruz
+    ff_cmd.args(["-probesize", "32768", "-analyzeduration", "100000"]);
+    let seek_str;
+    if let Some(seek) = seek {
+        if seek.as_secs() > 0 {
+            seek_str = seek.as_secs_f64().to_string();
+            ff_cmd.args(["-ss", &seek_str]);
+        }
+    }
+    ff_cmd.args(["-i", "pipe:0", "-vn"]);
+    ff_cmd.args(PCM_OUT);
+    ff_cmd.stdin(Stdio::from(ytdl_stdout));
+    ff_cmd.stdout(Stdio::piped());
+    ff_cmd.stderr(Stdio::null());
+
+    let ff_child = match ff_cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            let _ = ytdl_child.kill();
+            return Err(AudioStreamError::Fail(format!("ffmpeg çalıştırılamadı: {e}").into()));
+        }
+    };
+
+    let container = ChildContainer::from(vec![ytdl_child, ff_child]);
+    let pcm = ReadOnlySource::new(container);
+    Ok(AudioStream {
+        input: Box::new(RawAdapter::new(pcm, 48_000, 2)) as Box<dyn MediaSource>,
+    })
 }
 
 /// songbird'ün ham PCM başlığı (`RawAdapter`): imza + örnek hızı + kanal sayısı.
@@ -81,10 +148,20 @@ fn pcm_stream(child: std::process::Child) -> AudioStream<Box<dyn MediaSource>> {
 
 /// HLS (m3u8) adresini ffmpeg ile açar. Engelleyici; `spawn_blocking` içinde çağrılmalı.
 pub fn open_url(url: &str, headers: &HashMap<String, String>) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+    open_url_with_seek(url, headers, Duration::ZERO)
+}
+
+/// URL'yi belirli bir saniyeden itibaren ffmpeg ile açar. Engelleyici; `spawn_blocking` içinde çağrılmalı.
+pub fn open_url_with_seek(url: &str, headers: &HashMap<String, String>, seek: Duration) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
     let headers: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
     let mut args = Vec::new();
     if !headers.is_empty() {
         args.extend(["-headers", headers.as_str()]);
+    }
+    let seek_str;
+    if seek.as_secs() > 0 {
+        seek_str = seek.as_secs_f64().to_string();
+        args.extend(["-ss", &seek_str]);
     }
     args.extend(["-i", url, "-vn"]);
     args.extend(PCM_OUT);

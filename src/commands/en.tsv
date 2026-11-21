@@ -448,8 +448,10 @@ P | doğum-günü kanal | rol | role | Role given for the birthday (removed the 
 C | geçici-oda | temp-voice | Sets up a Create Room channel: members who join get their own voice room.
 P | geçici-oda | kanal | channel | Voice channel to use as the create channel (empty = create a new one)
 P | geçici-oda | kategori | category | Category for a newly created channel
+P | geçici-oda | panel | panel | Post a Create Room button panel in this text channel
 P | geçici-oda | kapat | disable | Turn the system off
 C | oda | room | Manage your temporary voice room.
+C | oda panel | panel | Shows the room settings card (only visible to you).
 C | oda isim | rename | Renames the room.
 P | oda isim | isim | name | New room name
 C | oda limit | limit | Sets how many people can join the room (0 = unlimited).

@@ -119,9 +119,19 @@ const OPEN_LOCK_SECS: u64 = 15;
 /// Kapatma mesajı görüldükten sonra kanalın silinmesine kadar beklenen süre.
 const CLOSE_DELAY: Duration = Duration::from_secs(5);
 
+#[derive(Debug, Clone)]
 pub struct TicketSettings {
     pub category_id: Option<ChannelId>,
     pub support_role_id: Option<RoleId>,
+}
+
+static SETTINGS_CACHE: std::sync::LazyLock<dashmap::DashMap<GuildId, Option<TicketSettings>>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+/// Bilet ayar önbelleğini temizler (ayar doğrudan SQL ile güncellendiğinde çağrılabilir).
+#[allow(dead_code)]
+pub fn invalidate_settings_cache(guild_id: GuildId) {
+    SETTINGS_CACHE.remove(&guild_id);
 }
 
 pub async fn save_settings(db: &PgPool, guild_id: GuildId, settings: &TicketSettings) -> anyhow::Result<()> {
@@ -136,10 +146,14 @@ pub async fn save_settings(db: &PgPool, guild_id: GuildId, settings: &TicketSett
     .bind(settings.support_role_id.map(|r| snowflake(r.get())).transpose()?)
     .execute(db)
     .await?;
+    SETTINGS_CACHE.insert(guild_id, Some(settings.clone()));
     Ok(())
 }
 
 pub async fn load_settings(db: &PgPool, guild_id: GuildId) -> anyhow::Result<Option<TicketSettings>> {
+    if let Some(cached) = SETTINGS_CACHE.get(&guild_id) {
+        return Ok(cached.value().clone());
+    }
     let row: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
         "SELECT category_id, support_role_id FROM ticket_settings WHERE guild_id = $1",
     )
@@ -147,10 +161,12 @@ pub async fn load_settings(db: &PgPool, guild_id: GuildId) -> anyhow::Result<Opt
     .fetch_optional(db)
     .await?;
 
-    Ok(row.map(|(category, role)| TicketSettings {
+    let settings = row.map(|(category, role)| TicketSettings {
         category_id: to_id(category).map(ChannelId::new),
         support_role_id: to_id(role).map(RoleId::new),
-    }))
+    });
+    SETTINGS_CACHE.insert(guild_id, settings.clone());
+    Ok(settings)
 }
 
 /// Panel kanalına gönderilecek mesaj: konu tanımlıysa açılır menü, değilse tek buton.

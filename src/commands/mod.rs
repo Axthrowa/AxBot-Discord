@@ -212,8 +212,9 @@ pub async fn register(
             Err(e) => tracing::warn!(error = %e, "Genel komutlar kaydedilemedi (Developer Portal → Installation → User Install açık mı?)"),
         }
     }
-    for &guild_id in guilds {
-        register_guild(ctx, commands, guild_id).await;
+    for chunk in guilds.chunks(3) {
+        let tasks = chunk.iter().map(|&guild_id| register_guild(ctx, commands, guild_id));
+        futures_util::future::join_all(tasks).await;
     }
     info!(count = commands.len(), guilds = guilds.len(), "Komutlar sunucuya kaydedildi (tüm sunucular)");
     Ok(())

@@ -65,7 +65,6 @@ mod settings;
 mod setup_report;
 mod supervise;
 mod starboard;
-mod starboards;
 mod statchannels;
 mod streams;
 mod suggestions;
@@ -80,6 +79,7 @@ mod youtube;
 
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use poise::serenity_prelude as serenity;
@@ -100,7 +100,7 @@ use crate::streams::Streams;
 const MESSAGE_CACHE_PER_CHANNEL: usize = 200;
 /// Bu süreden uzun süren komutlar uyarı olarak loglanır (yapay zekâ / müzik gibi doğası yavaş
 /// olanlar da dahil; hangi komutların yavaşladığını görmek için).
-const SLOW_COMMAND_MS: u128 = 5000;
+const SLOW_COMMAND_MS: u128 = 400;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -214,9 +214,14 @@ async fn run() -> anyhow::Result<()> {
     let mut presence_intent = false;
     let members_intent = match http.get_current_application_info().await {
         Ok(app) => {
-            presence_intent = app.flags.is_some_and(|f| {
+            let app_presence = app.flags.is_some_and(|f| {
                 f.intersects(serenity::ApplicationFlags::GATEWAY_PRESENCE | serenity::ApplicationFlags::GATEWAY_PRESENCE_LIMITED)
             });
+            presence_intent = match std::env::var("ENABLE_PRESENCE_INTENT").ok().as_deref() {
+                Some("0" | "false" | "hayır" | "no") => false,
+                Some("1" | "true" | "evet" | "yes") => app_presence,
+                _ => app_presence,
+            };
             if let Some(owner) = &app.owner {
                 owners.insert(owner.id);
             }
@@ -284,10 +289,14 @@ async fn run() -> anyhow::Result<()> {
                         "Komut çalıştırılıyor"
                     );
                     ctx.set_invocation_data(std::time::Instant::now()).await;
-                    // Para birimi bellekte hazır olsun (ayar önbellekli; çoğu zaman veritabanına gidilmez).
+                    // Para birimi bellekte hazır olsun (yalnızca ekonomi/profil/mağaza komutlarında).
                     if let Some(guild_id) = ctx.guild_id() {
-                        if let Err(e) = economy::load_settings(&ctx.data().settings, &ctx.data().db, guild_id).await {
-                            debug!(guild = %guild_id, error = ?e, "Ekonomi ayarı okunamadı");
+                        let cat = ctx.command().category.as_deref();
+                        let name = ctx.command().name.as_str();
+                        if cat == Some("Ekonomi") || matches!(name, "profil" | "kartım" | "soygun" | "borsa" | "balık-tut" | "avlan") {
+                            if let Err(e) = economy::load_settings(&ctx.data().settings, &ctx.data().db, guild_id).await {
+                                debug!(guild = %guild_id, error = ?e, "Ekonomi ayarı okunamadı");
+                            }
                         }
                     }
                 })
@@ -337,30 +346,138 @@ async fn run() -> anyhow::Result<()> {
                 if let Some(saved) = presence::load(&redis).await {
                     ctx.set_presence(saved.activity_data(), saved.online_status());
                 }
-                streams::spawn_poller(Arc::clone(&ctx.http), db.clone(), Arc::clone(&streams), stream_poll);
-                youtube::spawn_poller(Arc::clone(&ctx.http), db.clone(), http_client.clone());
-                statchannels::spawn_updater(ctx.clone(), db.clone());
-                birthdays::spawn_checker(ctx.clone(), db.clone(), plugin_settings.clone());
-                timers::spawn(ctx.clone(), db.clone(), plugin_settings.clone());
-                feeds::spawn_poller(ctx.clone(), db.clone(), plugin_settings.clone());
-                news::spawn(news::NewsContext {
-                    ctx: ctx.clone(),
-                    db: db.clone(),
-                    redis: redis.clone(),
-                    settings: plugin_settings.clone(),
-                    ai: Arc::clone(&ai),
+                // Açılışta PgPool ve ağ yükünü dağıtmak için arka plan görevleri kademeli (staggered: 5-65 sn) başlar.
+                tokio::spawn({
+                    let http = Arc::clone(&ctx.http);
+                    let db = db.clone();
+                    let streams = Arc::clone(&streams);
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        streams::spawn_poller(http, db, streams, stream_poll);
+                    }
                 });
-                rsvp::spawn(ctx.clone(), db.clone(), plugin_settings.clone());
-                backup::spawn_auto(ctx.clone(), db.clone(), plugin_settings.clone());
-                economy::spawn_interest(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone());
-                privacy::spawn_purge(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone());
-                tickets::spawn_auto_close(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone(), Arc::clone(&modlog));
+                tokio::spawn({
+                    let http = Arc::clone(&ctx.http);
+                    let db = db.clone();
+                    let http_client = http_client.clone();
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        youtube::spawn_poller(http, db, http_client);
+                    }
+                });
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(15)).await;
+                        statchannels::spawn_updater(ctx, db);
+                    }
+                });
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    let settings = plugin_settings.clone();
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(20)).await;
+                        birthdays::spawn_checker(ctx, db, settings);
+                    }
+                });
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    let settings = plugin_settings.clone();
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(25)).await;
+                        timers::spawn(ctx, db, settings);
+                    }
+                });
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    let settings = plugin_settings.clone();
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        feeds::spawn_poller(ctx, db, settings);
+                    }
+                });
+                tokio::spawn({
+                    let news_ctx = news::NewsContext {
+                        ctx: ctx.clone(),
+                        db: db.clone(),
+                        redis: redis.clone(),
+                        settings: plugin_settings.clone(),
+                        ai: Arc::clone(&ai),
+                    };
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(35)).await;
+                        news::spawn(news_ctx);
+                    }
+                });
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    let settings = plugin_settings.clone();
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(40)).await;
+                        rsvp::spawn(ctx, db, settings);
+                    }
+                });
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    let settings = plugin_settings.clone();
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(45)).await;
+                        backup::spawn_auto(ctx, db, settings);
+                    }
+                });
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    let redis = redis.clone();
+                    let settings = plugin_settings.clone();
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(50)).await;
+                        economy::spawn_interest(ctx, db, redis, settings);
+                    }
+                });
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    let redis = redis.clone();
+                    let settings = plugin_settings.clone();
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(55)).await;
+                        privacy::spawn_purge(ctx, db, redis, settings);
+                    }
+                });
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    let redis = redis.clone();
+                    let settings = plugin_settings.clone();
+                    let modlog = Arc::clone(&modlog);
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        tickets::spawn_auto_close(ctx, db, redis, settings, modlog);
+                    }
+                });
                 if let Err(e) = tickets::load_awaiting(&db).await {
                     tracing::warn!(error = ?e, "Cevap bekleyen biletler yüklenemedi");
                 }
                 alerts::spawn(Arc::clone(&ctx.http), http_client.clone(), alert_owners);
                 let leveling = Arc::new(leveling::Leveling::new());
-                community::spawn_seasons(ctx.clone(), db.clone(), redis.clone(), plugin_settings.clone(), Arc::clone(&leveling));
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    let redis = redis.clone();
+                    let settings = plugin_settings.clone();
+                    let leveling = Arc::clone(&leveling);
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(65)).await;
+                        community::spawn_seasons(ctx, db, redis, settings, leveling);
+                    }
+                });
                 let autoresponder = Arc::new(autoresponder::AutoResponder::default());
                 let tags = Arc::new(tags::Tags::default());
                 web::spawn(
