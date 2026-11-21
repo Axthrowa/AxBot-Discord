@@ -302,7 +302,7 @@ async fn dg_kanal(
         }
     }
     if let Some(role) = &rol {
-        if let Err(reason) = crate::rolepanel::check_role(ctx.serenity_context(), guild_id, role) {
+        if let Err(reason) = crate::reaction_roles::check_role(ctx.serenity_context(), guild_id, role) {
             return reply_private(ctx, format!("❌ {reason}")).await;
         }
     }

@@ -10,7 +10,7 @@ use crate::data::Data;
 use crate::error::Error;
 use crate::leveling::settings::{render_message, roles_on_level_up, Announce, LevelSettings};
 use crate::leveling::LevelUp;
-use crate::{appeals, applications, eventlog, giveaway, members, rolepanel, starboard, suggestions, tickets, verification};
+use crate::{appeals, applications, eventlog, giveaway, members, reaction_roles, starboard, suggestions, tickets, verification};
 
 const SLOW_EVENT_MS: u128 = 200;
 
@@ -211,10 +211,8 @@ async fn handle_inner(
                 tickets::handle_component(ctx, data, component).await?;
             } else if id.starts_with(crate::newsprefs::PREFIX) {
                 crate::newsprefs::handle_component(ctx, data, component).await?;
-            } else if id.starts_with(crate::reactionroles::PREFIX) {
-                crate::reactionroles::handle_component(ctx, data, component).await?;
-            } else if id.starts_with(rolepanel::PREFIX) {
-                rolepanel::handle_button(ctx, component).await?;
+            } else if reaction_roles::matches_component(id) {
+                reaction_roles::handle_component(ctx, data, component).await?;
             } else if id.starts_with(giveaway::BUTTON_PREFIX) {
                 giveaway::handle_button(ctx, data, component).await?;
             } else if id.starts_with(suggestions::BUTTON_PREFIX) {
@@ -261,11 +259,11 @@ async fn handle_inner(
             if let Some(guild_id) = reaction.guild_id {
                 starboard::on_reaction_event(ctx, data, guild_id, reaction.channel_id, reaction.message_id, &reaction.emoji).await;
             }
-            crate::reactionroles::on_reaction(ctx, data, reaction, true).await;
+            reaction_roles::on_reaction(ctx, data, reaction, true).await;
             if let (Some(guild_id), Some(member)) = (reaction.guild_id, reaction.member.as_ref()) {
                 crate::achievements::bump(ctx, data, guild_id, &member.user, crate::achievements::Kind::Reactions, 1, Some(reaction.channel_id)).await;
                 let emoji = match &reaction.emoji {
-                    serenity::ReactionType::Unicode(text) => crate::reactionroles::emoji_key(text),
+                    serenity::ReactionType::Unicode(text) => reaction_roles::emoji_key(text),
                     serenity::ReactionType::Custom { id, .. } => Some(id.to_string()),
                     _ => None,
                 };
@@ -283,7 +281,7 @@ async fn handle_inner(
             if let Some(guild_id) = reaction.guild_id {
                 starboard::on_reaction_event(ctx, data, guild_id, reaction.channel_id, reaction.message_id, &reaction.emoji).await;
             }
-            crate::reactionroles::on_reaction(ctx, data, reaction, false).await;
+            reaction_roles::on_reaction(ctx, data, reaction, false).await;
         }
         serenity::FullEvent::ReactionRemoveEmoji { removed_reactions: reaction } => {
             if let Some(guild_id) = reaction.guild_id {
@@ -579,7 +577,7 @@ async fn award_xp(ctx: &serenity::Context, data: &Data, guild_id: GuildId, msg: 
             .unwrap_or_default();
         roles
             .into_iter()
-            .filter(|role| match crate::rolepanel::check_role(ctx, guild_id, role) {
+            .filter(|role| match crate::reaction_roles::check_role(ctx, guild_id, role) {
                 Ok(()) => true,
                 Err(reason) => {
                     warn!(guild = %guild_id, role = %role.id, reason, "Seviye ödülü verilmedi");

@@ -272,7 +272,7 @@ pub async fn on_bot_join(ctx: &serenity::Context, data: &Data, guild_id: GuildId
 
 /// Bir role yeni yönetici/moderasyon yetkisi verildiyse kazanılan yetkiler (yoksa boş).
 pub fn gained_dangerous(old: Permissions, new: Permissions) -> Permissions {
-    new & crate::rolepanel::dangerous() & !old
+    new & crate::reaction_roles::dangerous() & !old
 }
 
 /// Bir rolün yetkileri değişti ya da rol oluşturuldu. `old`: önceki yetkiler (`None` = yeni rol).
@@ -307,7 +307,7 @@ pub async fn on_member_roles_added(ctx: &serenity::Context, data: &Data, guild_i
             added
                 .iter()
                 .copied()
-                .filter(|id| g.roles.get(id).is_some_and(|r| r.permissions.intersects(crate::rolepanel::dangerous())))
+                .filter(|id| g.roles.get(id).is_some_and(|r| r.permissions.intersects(crate::reaction_roles::dangerous())))
                 .collect()
         })
         .unwrap_or_default();
@@ -344,7 +344,7 @@ async fn punish(ctx: &serenity::Context, guild_id: GuildId, user: UserId, roles:
             let dangerous: Vec<RoleId> = ctx
                 .cache
                 .guild(guild_id)
-                .map(|g| roles.iter().copied().filter(|id| g.roles.get(id).is_some_and(|r| r.permissions.intersects(crate::rolepanel::dangerous()))).collect())
+                .map(|g| roles.iter().copied().filter(|id| g.roles.get(id).is_some_and(|r| r.permissions.intersects(crate::reaction_roles::dangerous()))).collect())
                 .unwrap_or_default();
             match guild_id.member(&ctx.http, user).await {
                 Ok(member) => member.remove_roles(&ctx.http, &dangerous).await.map(|_| "Yetki içeren rolleri alındı."),

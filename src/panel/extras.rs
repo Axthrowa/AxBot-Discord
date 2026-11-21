@@ -9,7 +9,7 @@ use tracing::warn;
 
 use super::plugins::{checkbox, checklist, field, section, textarea, Input, Options};
 use crate::customcmd::{self, Command, CustomCommandSettings};
-use crate::reactionroles::{self, Menu, Mode, Pair, ReactionRoleSettings};
+use crate::reaction_roles::{self, Menu, Mode, Pair, ReactionRoleSettings};
 use crate::timers::{self, EmbedSettings, SavedEmbed, Timer, TimerSettings};
 use crate::web::{escape, WebState};
 
@@ -86,7 +86,7 @@ pub async fn role_menu_fields(state: &WebState, guild_id: GuildId, options: &Opt
     } else {
         list.push_str("<table><tr><th>Başlık</th><th>Kanal</th><th>Tür</th><th>Rol</th><th>Sil</th></tr>");
         for menu in &settings.menus {
-            let behavior = if menu.behavior == reactionroles::Behavior::Normal { String::new() } else { format!(" · {}", menu.behavior.label()) };
+            let behavior = if menu.behavior == reaction_roles::Behavior::Normal { String::new() } else { format!(" · {}", menu.behavior.label()) };
             let _ = write!(
                 list,
                 "<tr><td><a href=\"https://discord.com/channels/{guild_id}/{}/{}\" target=\"_blank\" rel=\"noopener\">{}</a></td>\
@@ -112,12 +112,12 @@ pub async fn role_menu_fields(state: &WebState, guild_id: GuildId, options: &Opt
     }
     modes.push_str("</select>");
     let mut behaviors = String::from("<select name=\"behavior\">");
-    for (_, code, label) in reactionroles::Behavior::ALL {
+    for (_, code, label) in reaction_roles::Behavior::ALL {
         let _ = write!(behaviors, "<option value=\"{code}\">{label}</option>");
     }
     behaviors.push_str("</select>");
     let mut rows = String::from("<table><tr><th style=\"width:150px\">Emoji</th><th>Rol</th><th>Etiket (buton / menü yazısı)</th></tr>");
-    for i in 0..reactionroles::MAX_PAIRS {
+    for i in 0..reaction_roles::MAX_PAIRS {
         let _ = write!(
             rows,
             "<tr><td><input type=\"text\" name=\"pair_emoji_{i}\" maxlength=\"64\" placeholder=\"🎮\"></td><td>{}</td>\
@@ -152,16 +152,16 @@ fn parse_menu(input: &Input<'_>) -> Result<Option<Menu>, &'static str> {
     let mode = Mode::from_code(input.raw("mode")).ok_or("hata")?;
     // Eski formlar davranış göndermez: normal sayılır.
     let behavior = match input.raw("behavior") {
-        "" => reactionroles::Behavior::Normal,
-        code => reactionroles::Behavior::from_code(code).ok_or("hata")?,
+        "" => reaction_roles::Behavior::Normal,
+        code => reaction_roles::Behavior::from_code(code).ok_or("hata")?,
     };
-    if behavior == reactionroles::Behavior::Reverse && mode != Mode::Reactions {
+    if behavior == reaction_roles::Behavior::Reverse && mode != Mode::Reactions {
         return Err("ters");
     }
-    let temp_minutes = if behavior == reactionroles::Behavior::Temporary { input.number("temp_minutes", 1, 43_200)? } else { 0 };
+    let temp_minutes = if behavior == reaction_roles::Behavior::Temporary { input.number("temp_minutes", 1, 43_200)? } else { 0 };
     let mut pairs: Vec<Pair> = Vec::new();
     let mut seen_emojis = Vec::new();
-    for i in 0..reactionroles::MAX_PAIRS {
+    for i in 0..reaction_roles::MAX_PAIRS {
         let Some(role) = input.role(&format!("pair_role_{i}"))? else {
             continue;
         };
@@ -169,7 +169,7 @@ fn parse_menu(input: &Input<'_>) -> Result<Option<Menu>, &'static str> {
             return Err("tekrar");
         }
         let emoji = short(input, &format!("pair_emoji_{i}"), 64)?;
-        match emoji.as_deref().map(reactionroles::emoji_key) {
+        match emoji.as_deref().map(reaction_roles::emoji_key) {
             Some(None) => return Err("emoji"),
             Some(Some(key)) => {
                 if seen_emojis.contains(&key) {
@@ -209,11 +209,11 @@ pub async fn role_menu_save(state: &WebState, guild_id: GuildId, input: &Input<'
 
     let (gone, kept): (Vec<Menu>, Vec<Menu>) = settings.menus.into_iter().partition(|m| removed.contains(&m.message_id));
     settings.menus = kept;
-    if new_menu.is_some() && settings.menus.len() >= reactionroles::MAX_MENUS {
+    if new_menu.is_some() && settings.menus.len() >= reaction_roles::MAX_MENUS {
         return Err("limit");
     }
     if let Some(mut menu) = new_menu {
-        reactionroles::publish(&state.http, &mut menu).await.map_err(|e| {
+        reaction_roles::publish(&state.http, &mut menu).await.map_err(|e| {
             warn!(guild = %guild_id, error = ?e, "Panel: rol menüsü gönderilemedi");
             "gonder"
         })?;

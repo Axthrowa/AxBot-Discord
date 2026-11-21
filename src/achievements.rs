@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 
 use crate::data::Data;
 use crate::db::snowflake;
-use crate::rolepanel;
+use crate::reaction_roles;
 use crate::settings::PluginConfig;
 
 pub const MAX_CUSTOM: usize = 30;
@@ -202,7 +202,7 @@ async fn unlock(
     if let Some(role_id) = definition.reward_role.filter(|id| *id != 0).map(RoleId::new) {
         let role = ctx.cache.guild(guild_id).and_then(|g| g.roles.get(&role_id).cloned());
         // Yetkili roller ödül olarak verilmez.
-        if role.is_some_and(|role| rolepanel::check_role(ctx, guild_id, &role).is_ok()) {
+        if role.is_some_and(|role| reaction_roles::check_role(ctx, guild_id, &role).is_ok()) {
             match ctx.http.add_member_role(guild_id, user.id, role_id, Some("Başarım ödülü")).await {
                 Ok(()) => rewards.push(role_id.mention().to_string()),
                 Err(e) => warn!(guild = %guild_id, role = %role_id, error = %e, "Başarım ödül rolü verilemedi"),

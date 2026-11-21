@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 
 use crate::data::Data;
 use crate::settings::PluginConfig;
-use crate::{rolepanel, tags};
+use crate::{reaction_roles, tags};
 
 pub const MAX_COMMANDS: usize = 100;
 pub const MAX_RESPONSE: usize = 2000;
@@ -214,7 +214,7 @@ pub async fn handle(ctx: &serenity::Context, data: &Data, guild_id: GuildId, msg
 async fn change_role(ctx: &serenity::Context, guild_id: GuildId, msg: &Message, role_id: RoleId, add: bool) {
     let role = ctx.cache.guild(guild_id).and_then(|g| g.roles.get(&role_id).cloned());
     let Some(role) = role else { return };
-    if let Err(reason) = rolepanel::check_role(ctx, guild_id, &role) {
+    if let Err(reason) = reaction_roles::check_role(ctx, guild_id, &role) {
         debug!(guild = %guild_id, role = %role_id, reason, "Özel komut: rol değiştirilmedi");
         return;
     }

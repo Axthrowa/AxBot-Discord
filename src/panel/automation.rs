@@ -8,7 +8,7 @@ use tracing::warn;
 use super::plugins::{checkbox, checklist, field, section, textarea, Input, Options};
 use crate::achievements::{self, AchievementSettings, Definition, Kind, DEFAULTS};
 use crate::automations::{self, Automation, AutomationSettings, Trigger};
-use crate::reactionroles::emoji_key;
+use crate::reaction_roles::emoji_key;
 use crate::web::{escape, WebState};
 
 fn text_input(name: &str, placeholder: &str, max: usize) -> String {

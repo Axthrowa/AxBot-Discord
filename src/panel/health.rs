@@ -90,7 +90,7 @@ async fn collect_links(state: &WebState, guild_id: GuildId) -> Vec<Link> {
     if let Ok(s) = settings.get::<crate::automod::rules::ModSettings>(db, guild_id).await {
         links.extend(s.exempt_roles.iter().map(|r| link("moderasyon", "Otomatik moderasyondan muaf rol", Role(*r))));
     }
-    if let Ok(s) = settings.get::<crate::reactionroles::ReactionRoleSettings>(db, guild_id).await {
+    if let Ok(s) = settings.get::<crate::reaction_roles::ReactionRoleSettings>(db, guild_id).await {
         for menu in &s.menus {
             links.push(link("tepki-rol", format!("Rol menüsü “{}”", menu.title), Channel(menu.channel_id)));
             links.extend(menu.pairs.iter().map(|p| link("tepki-rol", format!("Rol menüsü “{}” içindeki rol", menu.title), Role(p.role))));

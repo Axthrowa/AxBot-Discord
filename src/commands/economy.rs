@@ -594,7 +594,7 @@ async fn magaza_ekle(
 ) -> Result<(), Error> {
     let guild = guild_id(ctx)?;
     if let Some(role) = &rol {
-        if let Err(reason) = crate::rolepanel::check_role(ctx.serenity_context(), guild, role) {
+        if let Err(reason) = crate::reaction_roles::check_role(ctx.serenity_context(), guild, role) {
             return reply_private(ctx, format!("❌ {reason}")).await;
         }
     }

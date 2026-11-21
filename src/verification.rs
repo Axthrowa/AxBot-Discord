@@ -11,7 +11,7 @@ use poise::serenity_prelude::{
 use tracing::{info, warn};
 
 use crate::data::Data;
-use crate::{modals, rand_util, rolepanel};
+use crate::{modals, rand_util, reaction_roles};
 
 pub const PREFIX: &str = "verify:";
 const BUTTON: &str = "verify:start";
@@ -145,7 +145,7 @@ async fn grant(ctx: &serenity::Context, guild_id: GuildId, user: serenity::UserI
         .cache
         .guild(guild_id)
         .and_then(|g| g.roles.get(&role).cloned())
-        .map(|r| rolepanel::check_role(ctx, guild_id, &r));
+        .map(|r| reaction_roles::check_role(ctx, guild_id, &r));
     match checked {
         None => return "Doğrulama rolü artık yok; yöneticilere haber ver.".to_owned(),
         Some(Err(reason)) => return format!("❌ {reason}"),

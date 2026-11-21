@@ -246,9 +246,9 @@ mod tests {
         }
         for (label, fields) in ROLE_MENU_TEMPLATES {
             let get = |key: &str| fields.iter().find(|(k, _)| *k == key).map(|(_, v)| *v);
-            assert!(get("mode").and_then(crate::reactionroles::Mode::from_code).is_some(), "{label}");
+            assert!(get("mode").and_then(crate::reaction_roles::Mode::from_code).is_some(), "{label}");
             let pairs = fields.iter().filter(|(k, _)| k.starts_with("pair_emoji_")).count();
-            assert!((1..=crate::reactionroles::MAX_PAIRS).contains(&pairs), "{label}");
+            assert!((1..=crate::reaction_roles::MAX_PAIRS).contains(&pairs), "{label}");
         }
     }
 

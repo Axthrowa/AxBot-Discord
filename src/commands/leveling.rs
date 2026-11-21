@@ -186,7 +186,7 @@ async fn odul_ekle(
         return reply(ctx, "❌ @everyone ödül olarak verilemez.".to_owned()).await;
     }
     // Yönetici/moderasyon yetkili bir rol XP kasılarak elde edilmesin (panel de aynı rolleri gizler).
-    if let Err(reason) = crate::rolepanel::check_role(ctx.serenity_context(), guild_id, &rol) {
+    if let Err(reason) = crate::reaction_roles::check_role(ctx.serenity_context(), guild_id, &rol) {
         return reply(ctx, format!("❌ {reason}")).await;
     }
 

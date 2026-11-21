@@ -344,7 +344,7 @@ impl Extra {
         Self {
             levels: settings.get::<crate::leveling::settings::LevelSettings>(db, guild_id).await.is_ok_and(|s| s.enabled),
             moderation: crate::automod::config::load_settings(db, guild_id).await.is_ok_and(|s| s.enabled),
-            role_menus: settings.get::<crate::reactionroles::ReactionRoleSettings>(db, guild_id).await.is_ok_and(|s| !s.menus.is_empty()),
+            role_menus: settings.get::<crate::reaction_roles::ReactionRoleSettings>(db, guild_id).await.is_ok_and(|s| !s.menus.is_empty()),
             commands: settings.get::<crate::customcmd::CustomCommandSettings>(db, guild_id).await.is_ok_and(|s| !s.commands.is_empty()),
             timers: settings.get::<crate::timers::TimerSettings>(db, guild_id).await.is_ok_and(|s| !s.timers.is_empty()),
             embeds: settings.get::<crate::timers::EmbedSettings>(db, guild_id).await.is_ok_and(|s| !s.embeds.is_empty()),
@@ -494,7 +494,7 @@ impl Options {
             .filter(|r| {
                 r.id != guild_id.everyone_role()
                     && !r.managed
-                    && !r.permissions.intersects(crate::rolepanel::dangerous())
+                    && !r.permissions.intersects(crate::reaction_roles::dangerous())
                     && r.position < top
             })
             .map(|r| (r.position, r.id.get(), r.name.clone()))

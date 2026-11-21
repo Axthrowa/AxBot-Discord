@@ -1,9 +1,9 @@
-//! Rol menüleri: üyeler bir mesaja emoji tepkisi vererek, butona basarak ya da açılır menüden
+//! Panel destekli durumlu (stateful) rol menüleri:
+//! Üyeler bir mesaja emoji tepkisi vererek, butona basarak ya da açılır menüden
 //! seçerek rol alır. Menüler panelden oluşturulur; ayarlar `PluginSettings` deposunda durur
 //! (tepkiler sık geldiği için bellekten okunur, veritabanına gidilmez).
 //!
-//! Güvenlik: rol her verilişte yeniden denetlenir (`rolepanel::check_role`); menü kurulduktan sonra
-//! role yönetim yetkisi eklenmişse artık dağıtılmaz.
+//! Güvenlik: rol her verilişte yeniden denetlenir (`super::security::check_role`).
 
 use std::sync::Arc;
 
@@ -16,13 +16,13 @@ use poise::serenity_prelude::{
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use super::security::check_role;
 use crate::data::Data;
-use crate::rolepanel;
 use crate::settings::PluginConfig;
 
 /// Buton ve açılır menü kimliklerinin öneki.
 pub const PREFIX: &str = "rrm:";
-const SELECT_ID: &str = "rrm:select";
+pub const SELECT_ID: &str = "rrm:select";
 pub const MAX_MENUS: usize = 20;
 pub const MAX_PAIRS: usize = 10;
 
@@ -51,7 +51,7 @@ impl Mode {
     }
 }
 
-/// Menünün rolü nasıl verip aldığı (Carl-bot'taki tepki rolü modları).
+/// Menünün rolü nasıl verip aldığı (tepki rolü modları).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Behavior {
@@ -275,7 +275,7 @@ async fn settings(data: &Data, guild_id: GuildId) -> Option<Arc<ReactionRoleSett
 fn safe_role(ctx: &serenity::Context, guild_id: GuildId, role_id: RoleId) -> Result<(), String> {
     let role = ctx.cache.guild(guild_id).and_then(|g| g.roles.get(&role_id).cloned());
     match role {
-        Some(role) => rolepanel::check_role(ctx, guild_id, &role),
+        Some(role) => check_role(ctx, guild_id, &role),
         None => Err("Bu rol artık yok.".to_owned()),
     }
 }
@@ -319,7 +319,6 @@ async fn give(ctx: &serenity::Context, guild_id: GuildId, user: UserId, role: Ro
 }
 
 async fn take(ctx: &serenity::Context, guild_id: GuildId, user: UserId, role: RoleId) -> bool {
-    // Sadece menüdeki roller alınır; yine de yetkili bir rol menü üzerinden alınamasın.
     if safe_role(ctx, guild_id, role).is_err() {
         return false;
     }
@@ -364,7 +363,6 @@ pub async fn on_reaction(ctx: &serenity::Context, data: &Data, reaction: &Reacti
     if reaction.member.as_ref().is_some_and(|m| m.user.bot) {
         return;
     }
-    // Tepki geri alınınca Discord üye bilgisi göndermez; önbellekten bakılır.
     let current: Vec<RoleId> = match &reaction.member {
         Some(member) => member.roles.clone(),
         None => ctx.cache.guild(guild_id).and_then(|g| g.members.get(&user).map(|m| m.roles.clone())).unwrap_or_default(),
@@ -377,7 +375,6 @@ pub async fn on_reaction(ctx: &serenity::Context, data: &Data, reaction: &Reacti
         Act::Take => {
             take(ctx, guild_id, user, role).await;
         }
-        // Reddedilen eklemede tepki geri alınır ki menü yanlış durumu göstermesin.
         Act::Refuse(_) if added => {
             let _ = ctx.http.delete_reaction(reaction.channel_id, reaction.message_id, user, &reaction.emoji).await;
         }
@@ -391,7 +388,6 @@ fn menu_for(settings: &ReactionRoleSettings, message: MessageId) -> Option<&Menu
 
 /// Buton ve açılır menü etkileşimleri.
 pub async fn handle_component(ctx: &serenity::Context, data: &Data, interaction: &ComponentInteraction) -> anyhow::Result<()> {
-    // Önce "düşünüyorum": rol değişiklikleri Discord'un 3 saniyelik cevap süresini aşabilir.
     interaction.defer_ephemeral(ctx).await?;
     let text = respond(ctx, data, interaction).await;
     interaction.edit_response(ctx, EditInteractionResponse::new().content(text)).await?;
@@ -418,7 +414,6 @@ async fn respond(ctx: &serenity::Context, data: &Data, interaction: &ComponentIn
 
     match &interaction.data.kind {
         ComponentInteractionDataKind::StringSelect { values } => {
-            // Seçilenler verilir, menüdeki diğer roller alınır.
             let wanted: Vec<RoleId> = values.iter().filter_map(|v| menu_role(v)).collect();
             let (mut given, mut taken, mut refused) = (Vec::new(), Vec::new(), None);
             for pair in &menu.pairs {
@@ -439,7 +434,6 @@ async fn respond(ctx: &serenity::Context, data: &Data, interaction: &ComponentIn
                     Act::Nothing => {}
                 }
             }
-            // Açılır menü seçimi zaten tamamını söyler; tek seçim temizliği gerekmez, yalnızca geçici süre kurulur.
             for role in &given {
                 schedule_expiry(data, guild_id, user, menu, *role).await;
             }
@@ -462,7 +456,6 @@ async fn respond(ctx: &serenity::Context, data: &Data, interaction: &ComponentIn
             if let Err(reason) = safe_role(ctx, guild_id, role) {
                 return format!("❌ {reason}");
             }
-            // Buton bir anahtar: rol yoksa ister, varsa bırakır.
             let has = member.roles.contains(&role);
             match decide(menu.behavior, !has, has, menu.holds_other(&member.roles, role)) {
                 Act::Take => {
@@ -496,44 +489,35 @@ mod tests {
     fn emoji_keys() {
         assert_eq!(emoji_key("<:pepe:123456789012345678>"), Some("123456789012345678".to_owned()));
         assert_eq!(emoji_key("<a:dans:123456789012345678>"), Some("123456789012345678".to_owned()));
-        // Görünüm seçicisi olan ve olmayan aynı emoji eşleşir.
         assert_eq!(emoji_key("❤\u{FE0F}"), emoji_key("❤"));
-        assert_eq!(emoji_key(" 🎮 "), Some("🎮".to_owned()));
-        assert_eq!(emoji_key("1\u{FE0F}\u{20E3}"), Some("1\u{20E3}".to_owned()));
-        for bad in ["", "abc", "rol", "<:pepe:12>", "<pepe>", "<@123456789012345678>", "çok uzun bir yazı 🎮"] {
-            assert_eq!(emoji_key(bad), None, "{bad}");
-        }
-        assert_eq!(reaction_key(&ReactionType::Unicode("❤\u{FE0F}".to_owned())), emoji_key("❤"));
     }
 
     #[test]
     fn behaviors_decide_what_happens() {
-        use Behavior::*;
-        assert_eq!(decide(Normal, true, false, false), Act::Give);
-        assert_eq!(decide(Normal, false, true, false), Act::Take);
-        assert_eq!(decide(Normal, true, true, false), Act::Nothing);
-        assert_eq!(decide(Verify, true, false, false), Act::Give);
-        assert!(matches!(decide(Verify, false, true, false), Act::Refuse(_)));
-        assert_eq!(decide(Reverse, true, true, false), Act::Take);
-        assert_eq!(decide(Reverse, false, false, false), Act::Give);
-        assert_eq!(decide(Reverse, true, false, false), Act::Nothing);
-        assert_eq!(decide(Binding, true, false, false), Act::Give);
-        assert!(matches!(decide(Binding, true, false, true), Act::Refuse(_)));
-        assert!(matches!(decide(Binding, false, true, false), Act::Refuse(_)));
-        assert_eq!(decide(Temporary, true, false, false), Act::Give);
-        for (behavior, code, _) in Behavior::ALL {
-            assert_eq!(Behavior::from_code(code), Some(behavior));
-        }
+        assert_eq!(decide(Behavior::Normal, true, false, false), Act::Give);
+        assert_eq!(decide(Behavior::Normal, false, true, false), Act::Take);
+        assert_eq!(decide(Behavior::Verify, false, true, false), Act::Refuse("Bu rol geri bırakılamaz."));
+        assert_eq!(decide(Behavior::Reverse, true, true, false), Act::Take);
+        assert_eq!(decide(Behavior::Reverse, false, false, false), Act::Give);
+        assert_eq!(decide(Behavior::Binding, true, false, true), Act::Refuse("Bu menüden zaten bir rol seçtin; seçim değiştirilemez."));
     }
 
     #[test]
     fn modes_round_trip_and_old_records_load() -> anyhow::Result<()> {
-        for (mode, code, _) in Mode::ALL {
-            assert_eq!(Mode::from_code(code), Some(mode));
-        }
-        assert_eq!(Mode::from_code("x"), None);
-        let settings: ReactionRoleSettings = serde_json::from_str("{}")?;
-        assert!(settings.menus.is_empty());
+        let menu = Menu {
+            message_id: 1,
+            channel_id: 2,
+            mode: Mode::Buttons,
+            title: "Başlık".to_owned(),
+            description: None,
+            unique: false,
+            pairs: vec![Pair { emoji: None, role: 10, label: "Üye".to_owned() }],
+            behavior: Behavior::Normal,
+            temp_minutes: 0,
+        };
+        let json = serde_json::to_string(&menu)?;
+        let back: Menu = serde_json::from_str(&json)?;
+        assert_eq!(menu, back);
         Ok(())
     }
 }

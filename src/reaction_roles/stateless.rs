@@ -1,54 +1,18 @@
-//! Butonlu rol menüsü (Carl-bot "reaction roles" benzeri).
+//! Durumsuz (stateless) butonlu rol menüsü (komut tabanlı: `/rol-menüsü`).
 //!
 //! Rol ID'si butonun `custom_id`'sinde saklanır (`rr:<rol>`); tıklamada veritabanına gidilmez.
-//! Yönetici veya moderasyon yetkisi veren roller hiçbir zaman dağıtılmaz (hem kurulumda hem
-//! tıklama anında kontrol edilir; rol sonradan yetki kazanırsa buton çalışmayı bırakır).
+//! Yönetici veya moderasyon yetkisi veren roller hiçbir zaman dağıtılmaz.
 
 use poise::serenity_prelude::{
     self as serenity, ButtonStyle, ComponentInteraction, CreateActionRow, CreateButton,
     CreateEmbed, CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage,
-    GuildId, Mentionable, Permissions, Role, RoleId,
+    Mentionable, Role, RoleId,
 };
+
+use super::security::check_role;
 
 pub const PREFIX: &str = "rr:";
 pub const MAX_ROLES: usize = 10;
-
-/// Butonla dağıtılması güvenli olmayan izinler.
-pub fn dangerous() -> Permissions {
-    Permissions::ADMINISTRATOR
-        | Permissions::MANAGE_GUILD
-        | Permissions::MANAGE_ROLES
-        | Permissions::MANAGE_CHANNELS
-        | Permissions::MANAGE_MESSAGES
-        | Permissions::MANAGE_WEBHOOKS
-        | Permissions::MANAGE_NICKNAMES
-        | Permissions::BAN_MEMBERS
-        | Permissions::KICK_MEMBERS
-        | Permissions::MODERATE_MEMBERS
-        | Permissions::MENTION_EVERYONE
-        | Permissions::VIEW_AUDIT_LOG
-}
-
-/// Rol dağıtılabilir mi? Değilse sebebini döner.
-pub fn check_role(ctx: &serenity::Context, guild_id: GuildId, role: &Role) -> Result<(), String> {
-    if role.id == guild_id.everyone_role() {
-        return Err("@everyone dağıtılamaz.".to_owned());
-    }
-    if role.managed {
-        return Err(format!("{} bir bota/entegrasyona ait, elle verilemez.", role.name));
-    }
-    if role.permissions.intersects(dangerous()) {
-        return Err(format!(
-            "{} yönetici/moderasyon yetkisi içeriyor; güvenlik için butonla dağıtılamaz.",
-            role.name
-        ));
-    }
-    let bot_top = bot_top_position(ctx, guild_id);
-    if role.position >= bot_top {
-        return Err(format!("{} rolü benim rolümün üstünde (veya eşit); rolümü yukarı taşı.", role.name));
-    }
-    Ok(())
-}
 
 pub fn panel_message(title: &str, description: Option<&str>, roles: &[Role]) -> CreateMessage {
     let list = roles.iter().map(|r| format!("• {}", r.id.mention())).collect::<Vec<_>>().join("\n");
@@ -131,16 +95,18 @@ async fn toggle(ctx: &serenity::Context, interaction: &ComponentInteraction) -> 
     }
 }
 
-fn bot_top_position(ctx: &serenity::Context, guild_id: GuildId) -> u16 {
-    let bot_id = ctx.cache.current_user().id;
-    ctx.cache.guild(guild_id).map_or(0, |guild| {
-        guild.members.get(&bot_id).map_or(0, |bot| {
-            bot.roles
-                .iter()
-                .filter_map(|r| guild.roles.get(r))
-                .map(|r| r.position)
-                .max()
-                .unwrap_or(0)
-        })
-    })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefix_parsing() {
+        let custom_id = "rr:123456789012345678";
+        assert!(custom_id.starts_with(PREFIX));
+        let role_id = custom_id.strip_prefix(PREFIX).and_then(|s| s.parse::<u64>().ok());
+        assert_eq!(role_id, Some(123456789012345678));
+
+        let bad_id = "rrm:123456789";
+        assert!(!bad_id.starts_with(PREFIX));
+    }
 }

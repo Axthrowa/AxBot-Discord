@@ -8,7 +8,7 @@ use crate::applications;
 use crate::data::Context;
 use crate::error::Error;
 use crate::guild_config::Setting;
-use crate::{modals, rolepanel, verification};
+use crate::{modals, reaction_roles, verification};
 
 /// Butonlu doğrulama sistemi.
 #[poise::command(
@@ -37,7 +37,7 @@ async fn dogrulama_kur(
     math: Option<bool>,
 ) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
-    if let Err(reason) = rolepanel::check_role(ctx.serenity_context(), guild_id, &rol) {
+    if let Err(reason) = reaction_roles::check_role(ctx.serenity_context(), guild_id, &rol) {
         return reply_private(ctx, format!("❌ {reason}")).await;
     }
     if let Some(problem) = cannot_send(ctx, &kanal) {
@@ -128,7 +128,7 @@ async fn form_ekle(
 ) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
     if let Some(role) = &rol {
-        if let Err(reason) = rolepanel::check_role(ctx.serenity_context(), guild_id, role) {
+        if let Err(reason) = reaction_roles::check_role(ctx.serenity_context(), guild_id, role) {
             return reply_private(ctx, format!("❌ {reason}\n_(Yetkili rolleri güvenlik için otomatik verilmez; kabul edince elle verebilirsin.)_")).await;
         }
     }

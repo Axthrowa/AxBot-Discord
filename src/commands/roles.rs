@@ -10,7 +10,7 @@ use super::moderation::{guild_id, reply_private};
 use crate::data::Context;
 use crate::error::Error;
 use crate::moderation::duration;
-use crate::rolepanel;
+use crate::reaction_roles;
 use crate::scheduler::Task;
 
 /// En uzun süreli rol: 1 yıl.
@@ -74,7 +74,7 @@ async fn sureli_ver(
         Ok(d) => d,
         Err(e) => return reply_private(ctx, format!("❌ Geçersiz süre: {e}")).await,
     };
-    if let Err(reason) = rolepanel::check_role(ctx.serenity_context(), guild, &rol) {
+    if let Err(reason) = reaction_roles::check_role(ctx.serenity_context(), guild, &rol) {
         return reply_private(ctx, format!("❌ {reason}")).await;
     }
     let Some(author) = ctx.author_member().await else {
@@ -200,7 +200,7 @@ async fn toplu(
     if hedef == BulkTarget::WithRole && filtre.is_none() {
         return reply_private(ctx, "❌ Bu hedef için `filtre-rol` seçmelisin.").await;
     }
-    if let Err(reason) = rolepanel::check_role(ctx.serenity_context(), guild, &rol) {
+    if let Err(reason) = reaction_roles::check_role(ctx.serenity_context(), guild, &rol) {
         return reply_private(ctx, format!("❌ {reason}")).await;
     }
     let Some(author) = ctx.author_member().await else {

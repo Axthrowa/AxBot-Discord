@@ -8,7 +8,7 @@ use crate::error::Error;
 use crate::greetings;
 use crate::guild_config::Setting;
 use crate::members::{self, RAID_MODE_SECS};
-use crate::rolepanel;
+use crate::reaction_roles;
 
 const TEMPLATE_HELP: &str = concat!(
     "Değişkenler: `{kullanıcı}` (etiket), `{isim}`, `{sunucu}`, `{üye}` (üye sayısı). ",
@@ -255,7 +255,7 @@ pub async fn otorol(
         data.guild_configs.set(&data.db, guild_id, Setting::Autorole(None)).await?;
         return reply_private(ctx, "✅ Otomatik rol kapatıldı.").await;
     };
-    if let Err(reason) = rolepanel::check_role(ctx.serenity_context(), guild_id, &role) {
+    if let Err(reason) = reaction_roles::check_role(ctx.serenity_context(), guild_id, &role) {
         return reply_private(ctx, format!("❌ {reason}")).await;
     }
     data.guild_configs.set(&data.db, guild_id, Setting::Autorole(Some(role.id))).await?;
@@ -463,12 +463,12 @@ pub async fn rol_paneli(
     description: Option<String>,
 ) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
-    let mut roles: Vec<Role> = Vec::with_capacity(rolepanel::MAX_ROLES);
+    let mut roles: Vec<Role> = Vec::with_capacity(reaction_roles::MAX_ROLES);
     for role in [Some(rol1), rol2, rol3, rol4, rol5, rol6, rol7, rol8, rol9, rol10].into_iter().flatten() {
         if roles.iter().any(|r| r.id == role.id) {
             continue;
         }
-        if let Err(reason) = rolepanel::check_role(ctx.serenity_context(), guild_id, &role) {
+        if let Err(reason) = reaction_roles::check_role(ctx.serenity_context(), guild_id, &role) {
             return reply_private(ctx, format!("❌ {reason}")).await;
         }
         roles.push(role);
@@ -476,7 +476,7 @@ pub async fn rol_paneli(
 
     kanal
         .id
-        .send_message(ctx, rolepanel::panel_message(&title, description.as_deref(), &roles))
+        .send_message(ctx, reaction_roles::panel_message(&title, description.as_deref(), &roles))
         .await?;
     reply_private(ctx, format!("✅ {} rollü panel {} kanalına gönderildi.", roles.len(), kanal.id.mention())).await
 }

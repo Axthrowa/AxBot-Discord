@@ -49,7 +49,7 @@ pub async fn on_boost(ctx: &serenity::Context, data: &Data, guild_id: GuildId, u
     };
     if let Some(role) = settings.boost_role.filter(|r| *r != 0).map(RoleId::new) {
         let safe = ctx.cache.guild(guild_id).and_then(|g| g.roles.get(&role).cloned());
-        match safe.map(|r| crate::rolepanel::check_role(ctx, guild_id, &r)) {
+        match safe.map(|r| crate::reaction_roles::check_role(ctx, guild_id, &r)) {
             Some(Ok(())) => {
                 if let Err(e) = ctx.http.add_member_role(guild_id, user.id, role, Some("Sunucu takviyesi")).await {
                     warn!(guild = %guild_id, error = %e, "Takviye rolü verilemedi");
@@ -612,7 +612,7 @@ pub async fn on_join(ctx: &serenity::Context, data: &Data, member: &Member) {
         wanted.iter().filter_map(|id| guild.roles.get(id).cloned()).collect()
     };
     // `check_role` önbelleğe kendisi bakar; yukarıdaki kilit bırakıldıktan sonra çağrılır.
-    let allowed: Vec<RoleId> = known.iter().filter(|role| crate::rolepanel::check_role(ctx, guild_id, role).is_ok()).map(|role| role.id).collect();
+    let allowed: Vec<RoleId> = known.iter().filter(|role| crate::reaction_roles::check_role(ctx, guild_id, role).is_ok()).map(|role| role.id).collect();
     if allowed.is_empty() {
         return;
     }

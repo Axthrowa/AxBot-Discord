@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::data::Data;
-use crate::rolepanel;
+use crate::reaction_roles;
 use crate::settings::PluginConfig;
 
 pub const MAX_AUTOMATIONS: usize = 20;
@@ -152,7 +152,7 @@ pub fn matches(automation: &Automation, facts: &Facts<'_>) -> bool {
             .as_deref()
             .is_none_or(|keyword| fold(facts.content).contains(&fold(keyword))),
         Trigger::Reaction => {
-            let wanted = automation.emoji.as_deref().and_then(crate::reactionroles::emoji_key);
+            let wanted = automation.emoji.as_deref().and_then(crate::reaction_roles::emoji_key);
             automation.emoji.is_none() || (wanted.is_some() && wanted.as_deref() == facts.emoji)
         }
         _ => true,
@@ -252,7 +252,7 @@ async fn execute(ctx: &serenity::Context, event: &Event<'_>, automation: &Automa
         for role_id in list.iter().filter(|id| **id != 0).map(|id| RoleId::new(*id)) {
             let role = ctx.cache.guild(event.guild_id).and_then(|g| g.roles.get(&role_id).cloned());
             let Some(role) = role else { continue };
-            if rolepanel::check_role(ctx, event.guild_id, &role).is_err() {
+            if reaction_roles::check_role(ctx, event.guild_id, &role).is_err() {
                 continue;
             }
             let result = if add {
@@ -318,7 +318,7 @@ mod tests {
         assert!(matches(&Automation { role: Some(7), ..rule(Trigger::RoleAdded) }, &added));
         assert!(!matches(&Automation { role: Some(8), ..rule(Trigger::RoleAdded) }, &added));
 
-        let key = crate::reactionroles::emoji_key("⭐");
+        let key = crate::reaction_roles::emoji_key("⭐");
         let reaction = Facts { trigger: Trigger::Reaction, emoji: key.as_deref(), ..Facts::default() };
         assert!(matches(&rule(Trigger::Reaction), &reaction));
         assert!(matches(&Automation { emoji: Some("⭐\u{FE0F}".to_owned()), ..rule(Trigger::Reaction) }, &reaction));
