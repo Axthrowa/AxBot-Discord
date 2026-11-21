@@ -1,15 +1,20 @@
-//! Tekrarlı mesajlar (zamanlayıcılar; isteğe bağlı otomatik kanal temizleme) ve panelden gönderilen gömülü mesajların kayıtları.
+//! Tekrarlı mesajlar (zamanlayıcılar) ve otomatik kanal temizliği (purge).
 //!
-//! Zamanlayıcılar `PluginSettings` deposunda durur; arka plan görevi yarım dakikada bir bellekteki
-//! ayarlara bakar (veritabanına yalnızca bir mesaj gönderildiğinde, yeni zamanı yazmak için gider).
+//! Zamanlayıcılar `PluginSettings` deposunda `"timers"` anahtarında tutulur.
+//! Boş sunucu yükünü önlemek için yalnızca aktif zamanlayıcısı olan sunucular (`ACTIVE_GUILDS`)
+//! döngü tarafından taranır.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
-use poise::serenity_prelude::{self as serenity, ChannelId, CreateAllowedMentions, CreateEmbed, CreateEmbedFooter, CreateMessage, GetMessages, MessageId};
+use dashmap::DashSet;
+use poise::serenity_prelude::{
+    self as serenity, ChannelId, CreateAllowedMentions, CreateMessage, GetMessages, GuildId, MessageId,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::settings::{PluginConfig, PluginSettings};
 
@@ -17,6 +22,31 @@ pub const MAX_TIMERS: usize = 10;
 pub const MIN_INTERVAL_MINS: u32 = 5;
 pub const MAX_INTERVAL_MINS: u32 = 7 * 24 * 60;
 const TICK: Duration = Duration::from_secs(30);
+
+/// Aktif zamanlayıcısı bulunan sunucuların hızlı bellek içi kümesi.
+static ACTIVE_GUILDS: LazyLock<DashSet<GuildId>> = LazyLock::new(DashSet::new);
+static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Bir sunucuyu aktif tekrarlı mesaj listesine ekler.
+pub fn mark_active(guild_id: GuildId) {
+    ACTIVE_GUILDS.insert(guild_id);
+}
+
+/// Bir sunucuyu aktif tekrarlı mesaj listesinden çıkarır.
+pub fn mark_inactive(guild_id: GuildId) {
+    ACTIVE_GUILDS.remove(&guild_id);
+}
+
+/// Sunucunun aktif zamanlayıcı kümesinde olup olmadığını döner (testler için).
+#[cfg(test)]
+pub fn is_active(guild_id: GuildId) -> bool {
+    ACTIVE_GUILDS.contains(&guild_id)
+}
+
+/// Aktif zamanlayıcısı bulunan sunucu sayısını döner.
+pub fn active_guild_count() -> usize {
+    ACTIVE_GUILDS.len()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Timer {
@@ -63,16 +93,33 @@ pub fn take_due(settings: &mut TimerSettings, now: i64) -> Vec<Timer> {
     due
 }
 
-/// Uygulama kapanana kadar zamanlayıcıları çalıştırır.
+/// Uygulama kapanana kadar periyodik zamanlayıcıları çalıştırır.
 pub fn spawn(ctx: serenity::Context, db: PgPool, settings: PluginSettings) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(TICK);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
-            crate::supervise::round("tekrarlı mesajlar", std::time::Duration::from_secs(300), async {
+            crate::supervise::round("tekrarlı mesajlar", Duration::from_secs(300), async {
                 let now = serenity::Timestamp::now().unix_timestamp();
-                for guild_id in ctx.cache.guilds() {
+
+                // İlk turda mevcut tüm sunucular taranarak aktif zamanlayıcısı olanlar indekse alınır.
+                if !INITIALIZED.load(Ordering::Relaxed) {
+                    for guild_id in ctx.cache.guilds() {
+                        if let Ok(current) = settings.get::<TimerSettings>(&db, guild_id).await {
+                            if !current.timers.is_empty() {
+                                mark_active(guild_id);
+                            }
+                        }
+                    }
+                    INITIALIZED.store(true, Ordering::SeqCst);
+                    debug!(active_guilds = active_guild_count(), "Tekrarlı mesaj sunucu indeksi hazırlandı");
+                }
+
+                // Sadece aktif zamanlayıcısı bulunan sunucular işlenir.
+                let guilds_to_process: Vec<GuildId> = ACTIVE_GUILDS.iter().map(|g| *g).collect();
+
+                for guild_id in guilds_to_process {
                     let current: Arc<TimerSettings> = match settings.get(&db, guild_id).await {
                         Ok(current) => current,
                         Err(e) => {
@@ -80,16 +127,25 @@ pub fn spawn(ctx: serenity::Context, db: PgPool, settings: PluginSettings) {
                             continue;
                         }
                     };
+
+                    if current.timers.is_empty() {
+                        mark_inactive(guild_id);
+                        continue;
+                    }
+
                     if !current.timers.iter().any(|t| t.next_unix <= now) {
                         continue;
                     }
+
                     let mut updated = (*current).clone();
                     let due = take_due(&mut updated, now);
+
                     // Önce yeni zaman yazılır: gönderim uzun sürse bile aynı mesaj iki kez gitmez.
                     if let Err(e) = settings.set(&db, guild_id, updated).await {
                         warn!(guild = %guild_id, error = ?e, "Zamanlayıcı zamanı kaydedilemedi");
                         continue;
                     }
+
                     for timer in due {
                         let (channel, text) = (timer.channel, timer.message);
                         if timer.purge {
@@ -116,7 +172,6 @@ pub fn spawn(ctx: serenity::Context, db: PgPool, settings: PluginSettings) {
 /// Kanaldaki son 14 gün içindeki mesajları siler (Discord daha eskileri toplu silmez); sabitlenenler kalır.
 /// Tur başına en fazla 500 mesaj. Silinen mesaj sayısını döner.
 async fn purge(http: &serenity::Http, channel: ChannelId) -> usize {
-    // 14 günün sınırına bir dakika pay bırakılır.
     let cutoff = serenity::Timestamp::now().unix_timestamp() - 14 * 86_400 + 60;
     let mut deleted = 0;
     let mut before: Option<MessageId> = None;
@@ -141,64 +196,11 @@ async fn purge(http: &serenity::Http, channel: ChannelId) -> usize {
             break;
         }
         deleted += ids.len();
-        // Son sayfaya ya da 14 günden eski mesajlara gelindiyse devam etmenin anlamı yok.
         if batch.len() < 100 || batch.last().is_some_and(|m| m.timestamp.unix_timestamp() <= cutoff) {
             break;
         }
     }
     deleted
-}
-
-// ---------------------------------------------------------------- Gömülü mesajlar
-
-pub const MAX_EMBEDS: usize = 50;
-
-/// Panelden gönderilmiş bir gömülü mesaj (düzenlemek ve silmek için saklanır).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SavedEmbed {
-    pub message_id: u64,
-    pub channel_id: u64,
-    pub title: String,
-    pub description: String,
-    /// `#RRGGBB`
-    pub colour: String,
-    pub image: Option<String>,
-    pub thumbnail: Option<String>,
-    pub footer: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct EmbedSettings {
-    pub embeds: Vec<SavedEmbed>,
-}
-
-impl PluginConfig for EmbedSettings {
-    const KEY: &'static str = "embeds";
-}
-
-impl SavedEmbed {
-    pub fn build(&self) -> CreateEmbed {
-        let [r, g, b] = crate::cards::parse_hex(&self.colour).unwrap_or([88, 101, 242]);
-        let mut embed = CreateEmbed::new().colour(serenity::Colour::from_rgb(r, g, b));
-        if !self.title.is_empty() {
-            embed = embed.title(&self.title);
-        }
-        if !self.description.is_empty() {
-            embed = embed.description(&self.description);
-        }
-        if let Some(image) = &self.image {
-            embed = embed.image(image);
-        }
-        if let Some(thumbnail) = &self.thumbnail {
-            embed = embed.thumbnail(thumbnail);
-        }
-        if let Some(footer) = &self.footer {
-            embed = embed.footer(CreateEmbedFooter::new(footer));
-        }
-        embed
-    }
 }
 
 #[cfg(test)]
@@ -212,7 +214,6 @@ mod tests {
     #[test]
     fn due_timers_advance_past_now_without_backlog() {
         let mut settings = TimerSettings { timers: vec![timer(1, 10, 1_000), timer(2, 60, 5_000)] };
-        // 1 numaralı zamanlayıcı 3 tur kaçırmış (bot kapalıydı): tek mesaj gider, sıradaki zaman ileride.
         let due = take_due(&mut settings, 2_900);
         assert_eq!(due.iter().map(|t| (t.id, t.message.as_str())).collect::<Vec<_>>(), vec![(1, "m1")]);
         assert_eq!(settings.timers[0].next_unix, 3_400);
@@ -224,9 +225,26 @@ mod tests {
 
     #[test]
     fn too_small_intervals_cannot_spam() {
-        // Kayıt elle bozulsa bile en az 5 dakikada bir gönderilir.
         let mut settings = TimerSettings { timers: vec![timer(1, 0, 100)] };
         take_due(&mut settings, 100);
         assert_eq!(settings.timers[0].next_unix, 100 + 300);
+    }
+
+    #[test]
+    fn active_guilds_index_tracking() {
+        let g1 = GuildId::new(1001);
+        let g2 = GuildId::new(1002);
+
+        mark_active(g1);
+        mark_active(g2);
+        assert!(is_active(g1));
+        assert!(is_active(g2));
+
+        mark_inactive(g1);
+        assert!(!is_active(g1));
+        assert!(is_active(g2));
+
+        mark_inactive(g2);
+        assert!(!is_active(g2));
     }
 }

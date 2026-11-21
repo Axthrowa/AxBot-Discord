@@ -110,7 +110,7 @@ async fn collect_links(state: &WebState, guild_id: GuildId) -> Vec<Link> {
             links.extend(automation.role.iter().chain(&automation.add_roles).chain(&automation.remove_roles).map(|r| link("otomasyon", format!("{what}: rol"), Role(*r))));
         }
     }
-    if let Ok(s) = settings.get::<crate::timers::TimerSettings>(db, guild_id).await {
+    if let Ok(s) = settings.get::<crate::scheduler::recurring::TimerSettings>(db, guild_id).await {
         links.extend(s.timers.iter().map(|t| link("zamanlayici", "Tekrarlı mesajın kanalı", Channel(t.channel))));
     }
     if let Ok(s) = settings.get::<crate::feeds::FeedSettings>(db, guild_id).await {

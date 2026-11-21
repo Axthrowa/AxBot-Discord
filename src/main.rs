@@ -69,7 +69,7 @@ mod streams;
 mod suggestions;
 mod tags;
 mod tempvoice;
-mod timers;
+mod embeds;
 mod telemetry;
 mod tickets;
 mod verification;
@@ -387,7 +387,7 @@ async fn run() -> anyhow::Result<()> {
                     let settings = plugin_settings.clone();
                     async move {
                         tokio::time::sleep(Duration::from_secs(25)).await;
-                        timers::spawn(ctx, db, settings);
+                        scheduler::spawn_recurring(ctx, db, settings);
                     }
                 });
                 tokio::spawn({

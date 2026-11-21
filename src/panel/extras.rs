@@ -9,8 +9,9 @@ use tracing::warn;
 
 use super::plugins::{checkbox, checklist, field, section, textarea, Input, Options};
 use crate::customcmd::{self, Command, CustomCommandSettings};
+use crate::embeds::{self, EmbedSettings, SavedEmbed};
 use crate::reaction_roles::{self, Menu, Mode, Pair, ReactionRoleSettings};
-use crate::timers::{self, EmbedSettings, SavedEmbed, Timer, TimerSettings};
+use crate::scheduler::recurring::{self, Timer, TimerSettings};
 use crate::web::{escape, WebState};
 
 fn text_input(name: &str, value: &str, placeholder: &str, max: usize) -> String {
@@ -384,7 +385,7 @@ pub async fn timer_fields(state: &WebState, guild_id: GuildId, options: &Options
                 &format!(
                     "<input type=\"number\" name=\"timer_every\" value=\"1\" min=\"1\" max=\"{}\"> \
                      <select name=\"timer_unit\" style=\"max-width:160px\"><option value=\"hours\">saat</option><option value=\"minutes\">dakika</option></select>",
-                    timers::MAX_INTERVAL_MINS
+                    recurring::MAX_INTERVAL_MINS
                 ),
                 "En az 5 dakika, en fazla 7 gün. İlk mesaj bu süre dolunca gönderilir.",
             )
@@ -408,13 +409,13 @@ fn parse_timer(input: &Input<'_>, id: u32, now: i64) -> Result<Option<Timer>, &'
         None if purge => String::new(),
         None => return Err("bos"),
     };
-    let every = input.number("timer_every", 1, timers::MAX_INTERVAL_MINS)?;
+    let every = input.number("timer_every", 1, recurring::MAX_INTERVAL_MINS)?;
     let interval_mins = match input.raw("timer_unit") {
         "minutes" => every,
         "hours" => every.checked_mul(60).ok_or("sayi")?,
         _ => return Err("hata"),
     };
-    if !(timers::MIN_INTERVAL_MINS..=timers::MAX_INTERVAL_MINS).contains(&interval_mins) {
+    if !(recurring::MIN_INTERVAL_MINS..=recurring::MAX_INTERVAL_MINS).contains(&interval_mins) {
         return Err("sayi");
     }
     Ok(Some(Timer { id, channel: channel.get(), message, interval_mins, next_unix: now + i64::from(interval_mins) * 60, purge }))
@@ -428,12 +429,20 @@ pub async fn timer_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) 
     let new_timer = parse_timer(input, settings.next_id(), serenity::Timestamp::now().unix_timestamp())?;
     settings.timers.retain(|t| !removed.contains(&t.id));
     if let Some(timer) = new_timer {
-        if settings.timers.len() >= timers::MAX_TIMERS {
+        if settings.timers.len() >= recurring::MAX_TIMERS {
             return Err("limit");
         }
         settings.timers.push(timer);
     }
-    state.settings.set(&state.db, guild_id, settings).await.map_err(&failed)
+    let res = state.settings.set(&state.db, guild_id, settings.clone()).await.map_err(&failed);
+    if res.is_ok() {
+        if settings.timers.is_empty() {
+            recurring::mark_inactive(guild_id);
+        } else {
+            recurring::mark_active(guild_id);
+        }
+    }
+    res
 }
 
 // ---------------------------------------------------------------- Gömülü mesajlar
@@ -556,7 +565,7 @@ pub async fn embed_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) 
             let Some(channel) = channel else {
                 return Err("kanal");
             };
-            if settings.embeds.len() >= timers::MAX_EMBEDS {
+            if settings.embeds.len() >= embeds::MAX_EMBEDS {
                 return Err("limit");
             }
             let sent = channel.send_message(&state.http, CreateMessage::new().embed(content.build())).await.map_err(send_failed)?;

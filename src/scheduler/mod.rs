@@ -4,6 +4,8 @@
 //! Çalıştırıcı periyodik sorgulamaz: bir sonraki görevin zamanına kadar uyur, daha yakın
 //! bir görev eklenirse `Notify` ile anında uyanır.
 
+pub mod recurring;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +17,8 @@ use sqlx::types::Json;
 use sqlx::PgPool;
 use tokio::sync::Notify;
 use tracing::{debug, info, warn};
+
+pub use recurring::spawn as spawn_recurring;
 
 use crate::modlog::{CaseLog, ModLog};
 use crate::moderation::{self, ModAction};

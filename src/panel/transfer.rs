@@ -61,7 +61,7 @@ async fn apply(state: &WebState, guild_id: GuildId, key: &str, value: &Value, wr
         news::NewsSettings,
         crate::starboard::StarboardSettings,
         tickets::TicketExtras,
-        timers::TimerSettings,
+        crate::scheduler::recurring::TimerSettings,
         backup::BackupSettings,
     ])
 }
