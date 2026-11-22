@@ -200,6 +200,7 @@ pub fn router() -> Router<WebState> {
         .route("/panel/sunucu/{guild}/saglik", get(health::page))
         .route("/panel/sunucu/{guild}/kurulum", get(wizard::page))
         .route("/panel/sunucu/{guild}/ayarlar-disa-aktar", get(transfer::export))
+        .route("/panel/sunucu/{guild}/otomasyon/test", post(automation::dry_run_handler))
         .route("/panel/panel.js", get(pages::script))
         .route("/panel/ws", get(ws::ws_handler))
 }

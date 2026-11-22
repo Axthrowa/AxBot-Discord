@@ -54,6 +54,12 @@
   "automations": {
     "stream_live": "{yayinci} {platform}'da yayında: {baslik}",
     "stream_offline": "{yayinci} yayını kapattı.",
-    "webhook_sent": "Webhook tetiklendi: {url}"
+    "webhook_sent": "Webhook tetiklendi: {url}",
+    "dry_run": "Simülasyon (Dry-Run)",
+    "test_rule": "Kuralı Test Et",
+    "run_simulation": "Simülasyonu Çalıştır",
+    "matched": "Koşullar Eşleşti (Eylemler Çalıştırılır)",
+    "not_matched": "Koşullar Eşleşmedi (Eylemler Çalıştırılmaz)",
+    "probe_webhook": "Webhook uç noktasını canlı yokla (Probe)"
   }
 }

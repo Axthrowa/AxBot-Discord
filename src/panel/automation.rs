@@ -2,9 +2,16 @@
 
 use std::fmt::Write as _;
 
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
+use axum::Json;
 use poise::serenity_prelude::{ChannelId, GuildId, RoleId};
+use serde::Deserialize;
 use tracing::warn;
 
+use super::auth;
+use super::can_manage;
 use super::plugins::{checkbox, checklist, field, section, textarea, Input, Options};
 use crate::achievements::{self, AchievementSettings, Definition, Kind, DEFAULTS};
 use crate::automations::{self, Automation, AutomationSettings, Trigger};
@@ -111,7 +118,8 @@ pub async fn automation_fields(state: &WebState, guild_id: GuildId, options: &Op
                        {status_badge}\
                        <strong style=\"font-size:1.05em;\">{}</strong>\
                      </div>\
-                     <div style=\"display:flex;gap:16px;align-items:center;\">\
+                     <div style=\"display:flex;gap:12px;align-items:center;\">\
+                       <button type=\"button\" onclick=\"toggleDryRun({id})\" style=\"background:rgba(88,101,242,0.15);border:1px solid rgba(88,101,242,0.4);color:#5865F2;padding:3px 10px;border-radius:6px;font-size:0.85em;cursor:pointer;font-weight:600;\">🧪 Test Et (Dry-Run)</button>\
                        <label style=\"display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.9em;\">\
                          <input type=\"checkbox\" name=\"auto_on\" value=\"{id}\"{}>\
                          <span>Aktif</span>\
@@ -127,14 +135,115 @@ pub async fn automation_fields(state: &WebState, guild_id: GuildId, options: &Op
                      <span>➔</span>\
                      <span>{}</span>\
                    </div>\
+                   <div id=\"dryrun-box-{id}\" style=\"display:none;margin-top:12px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.08);border-radius:6px;\">\
+                     <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;\">\
+                       <strong style=\"font-size:0.95em;\">Simülasyon Girdileri (Canlı Yan Etki Yoktur)</strong>\
+                       <button type=\"button\" onclick=\"execDryRun({id}, '{trigger_code}', '{guild_id}')\" style=\"background:#5865F2;color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:0.85em;font-weight:600;\">Simülasyonu Çalıştır</button>\
+                     </div>\
+                     <div style=\"display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:8px;font-size:0.85em;\">\
+                       <div>\
+                         <label style=\"display:block;color:#b5bac1;margin-bottom:2px;\">Mesaj / İsim</label>\
+                         <input type=\"text\" id=\"dr-content-{id}\" placeholder=\"Örnek mesaj veya içerik\" style=\"width:100%;box-sizing:border-box;padding:4px 8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#fff;border-radius:4px;\">\
+                       </div>\
+                       <div>\
+                         <label style=\"display:block;color:#b5bac1;margin-bottom:2px;\">Yayıncı / Platform</label>\
+                         <input type=\"text\" id=\"dr-streamer-{id}\" placeholder=\"elraenn veya twitch\" style=\"width:100%;box-sizing:border-box;padding:4px 8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#fff;border-radius:4px;\">\
+                       </div>\
+                       <div>\
+                         <label style=\"display:block;color:#b5bac1;margin-bottom:2px;\">Yayın Başlığı</label>\
+                         <input type=\"text\" id=\"dr-title-{id}\" placeholder=\"Canlı Yayın Başlığı\" style=\"width:100%;box-sizing:border-box;padding:4px 8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#fff;border-radius:4px;\">\
+                       </div>\
+                     </div>\
+                     <div style=\"margin-top:8px;display:flex;align-items:center;gap:6px;font-size:0.85em;color:#b5bac1;\">\
+                       <input type=\"checkbox\" id=\"dr-probe-{id}\">\
+                       <label for=\"dr-probe-{id}\" style=\"cursor:pointer;\">Webhook uç noktasını canlı yokla (Probe POST, 4sn timeout)</label>\
+                     </div>\
+                     <div id=\"dr-res-{id}\" style=\"margin-top:10px;display:none;\"></div>\
+                   </div>\
                  </div>",
                 escape(&a.name),
                 if a.enabled { " checked" } else { "" },
                 a.trigger.label(),
                 escape(&summary(a, options)),
-                id = a.id
+                id = a.id,
+                trigger_code = a.trigger.code(),
+                guild_id = guild_id.get()
             );
         }
+        list.push_str(
+            "<script>\
+            function toggleDryRun(id) {\
+              var el = document.getElementById('dryrun-box-' + id);\
+              if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';\
+            }\
+            function execDryRun(id, triggerCode, guildId) {\
+              var content = document.getElementById('dr-content-' + id).value;\
+              var streamer = document.getElementById('dr-streamer-' + id).value;\
+              var title = document.getElementById('dr-title-' + id).value;\
+              var probe = document.getElementById('dr-probe-' + id).checked;\
+              var resBox = document.getElementById('dr-res-' + id);\
+              resBox.style.display = 'block';\
+              resBox.innerHTML = '<span style=\"color:#b5bac1;\">Simülasyon çalıştırılıyor...</span>';\
+              var payload = {\
+                automation_id: id,\
+                input: {\
+                  trigger: triggerCode,\
+                  content: content,\
+                  streamer: streamer,\
+                  platform: streamer,\
+                  title: title,\
+                  probe_webhook: probe\
+                }\
+              };\
+              fetch('/panel/sunucu/' + guildId + '/otomasyon/test', {\
+                method: 'POST',\
+                headers: { 'Content-Type': 'application/json' },\
+                body: JSON.stringify(payload)\
+              })\
+              .then(function(r) { return r.json(); })\
+              .then(function(data) {\
+                var html = '<div style=\"background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:10px;font-size:0.85em;\">';\
+                var badge = data.matched\
+                  ? '<span style=\"color:#23a55a;font-weight:bold;\">● Koşullar Eşleşti (Eylemler Çalıştırılır)</span>'\
+                  : '<span style=\"color:#ed4245;font-weight:bold;\">○ Koşullar Eşleşmedi (Eylemler Çalıştırılmaz)</span>';\
+                html += '<div style=\"margin-bottom:8px;\">' + badge + '</div>';\
+                html += '<div style=\"margin-bottom:8px;\"><strong>Koşul Kontrolleri:</strong><ul style=\"margin:4px 0 0 16px;padding:0;\">';\
+                data.condition_results.forEach(function(c) {\
+                  var icon = c.passed ? '<span style=\"color:#23a55a;\">✓</span> ' : '<span style=\"color:#ed4245;\">✗</span> ';\
+                  html += '<li style=\"margin-bottom:2px;\">' + icon + '<strong>' + c.name + ':</strong> ' + c.reason + '</li>';\
+                });\
+                html += '</ul></div>';\
+                if (data.rendered_message) {\
+                  html += '<div style=\"margin-bottom:6px;\"><strong>Mesaj Önizleme:</strong> <code style=\"background:rgba(255,255,255,0.1);padding:2px 6px;border-radius:3px;\">' + data.rendered_message + '</code></div>';\
+                }\
+                if (data.planned_actions && data.planned_actions.length > 0) {\
+                  html += '<div style=\"margin-bottom:6px;\"><strong>Planlanan Eylemler:</strong><ul style=\"margin:4px 0 0 16px;padding:0;\">';\
+                  data.planned_actions.forEach(function(pa) {\
+                    html += '<li><strong>' + pa.action_type + '</strong> (' + pa.target + '): ' + pa.preview + '</li>';\
+                  });\
+                  html += '</ul></div>';\
+                }\
+                if (data.webhook_check) {\
+                  var wc = data.webhook_check;\
+                  html += '<div><strong>Webhook Denetimi:</strong> ' + wc.ssrf_status;\
+                  if (wc.probe_attempted) {\
+                    if (wc.probe_status_code) {\
+                      html += ' | <span style=\"color:#23a55a;\">Probe Yanıtı: HTTP ' + wc.probe_status_code + ' (' + wc.probe_latency_ms + 'ms)</span>';\
+                    } else if (wc.probe_error) {\
+                      html += ' | <span style=\"color:#ed4245;\">Probe Hatası: ' + wc.probe_error + '</span>';\
+                    }\
+                  }\
+                  html += '</div>';\
+                }\
+                html += '</div>';\
+                resBox.innerHTML = html;\
+              })\
+              .catch(function(err) {\
+                resBox.innerHTML = '<span style=\"color:#ed4245;\">Simülasyon isteği başarısız: ' + err + '</span>';\
+              });\
+            }\
+            </script>"
+        );
         list.push_str("</div>");
     }
     let mut out = section("Otomasyonlar", list);
@@ -277,6 +386,54 @@ pub async fn automation_save(state: &WebState, guild_id: GuildId, input: &Input<
         settings.automations.push(automation);
     }
     state.settings.set(&state.db, guild_id, settings).await.map_err(failed)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DryRunRequest {
+    pub automation_id: Option<u32>,
+    pub draft: Option<Automation>,
+    #[serde(default)]
+    pub input: automations::DryRunInput,
+}
+
+pub async fn dry_run_handler(
+    State(state): State<WebState>,
+    Path(guild_str): Path<String>,
+    headers: HeaderMap,
+    Json(payload): Json<DryRunRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let Some(session) = auth::session(&state, &headers).await else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+    let Ok(guild_num) = guild_str.parse::<u64>() else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+    let guild_id = GuildId::new(guild_num);
+    if !can_manage(&state, session.user, guild_id).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let automation = if let Some(draft) = payload.draft {
+        draft
+    } else if let Some(id) = payload.automation_id {
+        let Ok(settings) = state.settings.get::<AutomationSettings>(&state.db, guild_id).await else {
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        };
+        let Some(found) = settings.automations.iter().find(|a| a.id == id).cloned() else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+        found
+    } else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    let mut input = payload.input;
+    if input.guild_name.is_none() {
+        input.guild_name = state.cache.guild(guild_id).map(|g| g.name.clone());
+    }
+
+    let report = automation.evaluate_dry_run(&input, Some(&state.http_client)).await;
+    Ok(Json(report))
 }
 
 // ---------------------------------------------------------------- Başarımlar

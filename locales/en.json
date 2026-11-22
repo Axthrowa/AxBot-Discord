@@ -54,6 +54,12 @@
   "automations": {
     "stream_live": "{yayinci} is live on {platform}: {baslik}",
     "stream_offline": "{yayinci} went offline.",
-    "webhook_sent": "Webhook triggered: {url}"
+    "webhook_sent": "Webhook triggered: {url}",
+    "dry_run": "Simulation (Dry-Run)",
+    "test_rule": "Test Rule",
+    "run_simulation": "Run Simulation",
+    "matched": "Conditions Matched (Actions Would Run)",
+    "not_matched": "Conditions Did Not Match (Actions Will Not Run)",
+    "probe_webhook": "Probe webhook endpoint"
   }
 }

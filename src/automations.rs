@@ -61,6 +61,10 @@ impl Trigger {
         Self::ALL.iter().find(|(_, c, _)| *c == code).map(|(t, _, _)| *t)
     }
 
+    pub fn code(self) -> &'static str {
+        Self::ALL.iter().find(|(t, _, _)| *t == self).map_or("", |(_, c, _)| c)
+    }
+
     pub fn label(self) -> &'static str {
         Self::ALL.iter().find(|(t, _, _)| *t == self).map_or("", |(_, _, label)| label)
     }
@@ -107,6 +111,404 @@ pub struct Automation {
     pub webhook_payload: Option<String>,
     /// `127.0.0.1` ve `localhost` adreslerine istek atılmasına açıkça izin verilsin mi?
     pub allow_localhost: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DryRunInput {
+    pub trigger: Trigger,
+    pub channel_id: Option<u64>,
+    pub role_id: Option<u64>,
+    pub member_roles: Vec<u64>,
+    pub user_id: Option<u64>,
+    pub user_name: Option<String>,
+    pub content: Option<String>,
+    pub emoji: Option<String>,
+    pub platform: Option<String>,
+    pub streamer: Option<String>,
+    pub title: Option<String>,
+    pub game: Option<String>,
+    pub viewers: Option<u64>,
+    pub guild_name: Option<String>,
+    pub probe_webhook: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConditionCheck {
+    pub name: String,
+    pub passed: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlannedAction {
+    pub action_type: String,
+    pub target: String,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookDryRunResult {
+    pub url_valid: bool,
+    pub target_url: Option<String>,
+    pub allow_localhost: bool,
+    pub ssrf_status: String,
+    pub headers_preview: Vec<String>,
+    pub payload_preview: Option<String>,
+    pub probe_attempted: bool,
+    pub probe_status_code: Option<u16>,
+    pub probe_latency_ms: Option<u64>,
+    pub probe_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DryRunReport {
+    pub matched: bool,
+    pub condition_results: Vec<ConditionCheck>,
+    pub rendered_message: Option<String>,
+    pub rendered_dm: Option<String>,
+    pub rendered_payload: Option<String>,
+    pub planned_actions: Vec<PlannedAction>,
+    pub webhook_check: Option<WebhookDryRunResult>,
+}
+
+impl Automation {
+    pub async fn evaluate_dry_run(&self, input: &DryRunInput, client: Option<&reqwest::Client>) -> DryRunReport {
+        let mut conditions = Vec::new();
+
+        // 1. Durum / Aktiflik
+        conditions.push(ConditionCheck {
+            name: "Kural Durumu".to_owned(),
+            passed: self.enabled,
+            reason: if self.enabled {
+                "Otomasyon kuralı aktif.".to_owned()
+            } else {
+                "Otomasyon kuralı devre dışı bırakılmış (kapalı).".to_owned()
+            },
+        });
+
+        // 2. Tetikleyici Türü
+        let trigger_passed = self.trigger == input.trigger;
+        conditions.push(ConditionCheck {
+            name: "Tetikleyici Türü".to_owned(),
+            passed: trigger_passed,
+            reason: if trigger_passed {
+                format!("Tetikleyici eşleşti: {}", self.trigger.label())
+            } else {
+                format!(
+                    "Tetikleyici uyuşmuyor (Kural: {}, Gelen Olay: {})",
+                    self.trigger.label(),
+                    input.trigger.label()
+                )
+            },
+        });
+
+        // 3. Kanal Koşulu
+        if let Some(wanted_channel) = self.channel {
+            let passed = input.channel_id == Some(wanted_channel);
+            conditions.push(ConditionCheck {
+                name: "Kanal Koşulu".to_owned(),
+                passed,
+                reason: if passed {
+                    format!("Hedef kanal eşleşti (<#{wanted_channel}>).")
+                } else {
+                    format!(
+                        "Kanal uyuşmuyor: beklenen <#{wanted_channel}>, gelen {}",
+                        input.channel_id.map(|id| format!("<#{id}>")).unwrap_or_else(|| "yok".to_owned())
+                    )
+                },
+            });
+        } else {
+            conditions.push(ConditionCheck {
+                name: "Kanal Koşulu".to_owned(),
+                passed: true,
+                reason: "Kanal filtresi yok (tüm kanallar geçerli).".to_owned(),
+            });
+        }
+
+        // 4. Rol Koşulu
+        if let Some(wanted_role) = self.role {
+            let passed = match self.trigger {
+                Trigger::RoleAdded | Trigger::RoleRemoved => input.role_id == Some(wanted_role),
+                _ => input.member_roles.contains(&wanted_role) || input.role_id == Some(wanted_role),
+            };
+            conditions.push(ConditionCheck {
+                name: "Rol Koşulu".to_owned(),
+                passed,
+                reason: if passed {
+                    format!("Rol koşulu sağlandı (<@&{wanted_role}>).")
+                } else {
+                    format!("Rol koşulu sağlanamadı: beklenen <@&{wanted_role}> üyede/olayda bulunamadı.")
+                },
+            });
+        } else {
+            conditions.push(ConditionCheck {
+                name: "Rol Koşulu".to_owned(),
+                passed: true,
+                reason: "Rol filtresi yok.".to_owned(),
+            });
+        }
+
+        // 5. Mesaj / Anahtar Kelime Koşulu
+        if let Some(ref keyword) = self.keyword {
+            let content_str = input.content.as_deref().unwrap_or_default();
+            let passed = fold(content_str).contains(&fold(keyword));
+            conditions.push(ConditionCheck {
+                name: "Anahtar Kelime".to_owned(),
+                passed,
+                reason: if passed {
+                    format!("İçerikte \"{keyword}\" anahtar kelimesi bulundu.")
+                } else {
+                    format!("İçerik \"{keyword}\" anahtar kelimesini içermiyor.")
+                },
+            });
+        }
+
+        // 6. Tepki Emojisi Koşulu
+        if let Some(ref emoji) = self.emoji {
+            let wanted = crate::reaction_roles::emoji_key(emoji);
+            let input_key = input.emoji.as_deref().and_then(crate::reaction_roles::emoji_key);
+            let passed = wanted.is_some() && wanted == input_key;
+            conditions.push(ConditionCheck {
+                name: "Tepki Emojisi".to_owned(),
+                passed,
+                reason: if passed {
+                    format!("Tepki emojisi eşleşti: {emoji}")
+                } else {
+                    format!("Tepki emojisi uyuşmuyor: beklenen {emoji}, gelen {}", input.emoji.as_deref().unwrap_or("yok"))
+                },
+            });
+        }
+
+        // 7. Yayıncı veya Platform Koşulu
+        if let Some(ref wanted_streamer) = self.streamer {
+            let ws = fold(wanted_streamer.trim());
+            let streamer_match = input.streamer.as_deref().map(|s| fold(s) == ws).unwrap_or(false);
+            let platform_match = input.platform.as_deref().map(|p| fold(p) == ws).unwrap_or(false);
+            let passed = streamer_match || platform_match;
+            conditions.push(ConditionCheck {
+                name: "Yayıncı / Platform".to_owned(),
+                passed,
+                reason: if passed {
+                    format!("Yayıncı veya platform filtresi eşleşti: \"{wanted_streamer}\".")
+                } else {
+                    format!(
+                        "Yayın filtresi uyuşmuyor: beklenen \"{}\", gelen yayıncı: \"{}\", platform: \"{}\".",
+                        wanted_streamer,
+                        input.streamer.as_deref().unwrap_or("yok"),
+                        input.platform.as_deref().unwrap_or("yok")
+                    )
+                },
+            });
+        }
+
+        let matched = conditions.iter().all(|c| c.passed);
+
+        // Şablon Çözümleme (Render)
+        let guild = input.guild_name.as_deref().unwrap_or("Örnek Sunucu");
+        let content_text = input.content.as_deref().unwrap_or_default();
+        let is_stream = matches!(self.trigger, Trigger::StreamWentLive | Trigger::StreamWentOffline);
+
+        let mut mock_user = User::default();
+        mock_user.id = UserId::new(input.user_id.unwrap_or(1001));
+        mock_user.name = input.user_name.clone().unwrap_or_else(|| "OrnekUye".to_owned());
+
+        let fill_text = |tpl: &str| -> String {
+            if is_stream {
+                render_stream(
+                    tpl,
+                    guild,
+                    self.message_channel.or(input.channel_id),
+                    input.streamer.as_deref().unwrap_or("Yayinci"),
+                    input.platform.as_deref().unwrap_or("twitch"),
+                    input.title.as_deref().unwrap_or("Yayın Başlığı"),
+                )
+            } else {
+                render(
+                    tpl,
+                    &mock_user,
+                    guild,
+                    self.message_channel.or(input.channel_id),
+                    self.role.or(input.role_id),
+                    content_text,
+                )
+            }
+        };
+
+        let rendered_message = self.message.as_deref().map(fill_text);
+        let rendered_dm = self.dm.as_deref().map(fill_text);
+
+        // Planlanan Aksiyonlar
+        let mut planned_actions = Vec::new();
+        if let Some(ref msg) = rendered_message {
+            let target_ch = self.message_channel.or(input.channel_id);
+            planned_actions.push(PlannedAction {
+                action_type: "Mesaj Gönder".to_owned(),
+                target: target_ch.map(|c| format!("<#{c}>")).unwrap_or_else(|| "Olayın olduğu kanal".to_owned()),
+                preview: msg.clone(),
+            });
+        }
+        if let Some(ref dm) = rendered_dm {
+            planned_actions.push(PlannedAction {
+                action_type: "Özel Mesaj (DM)".to_owned(),
+                target: format!("@{}", mock_user.name),
+                preview: dm.clone(),
+            });
+        }
+        if !self.add_roles.is_empty() {
+            let roles_str = self.add_roles.iter().map(|r| format!("<@&{r}>")).collect::<Vec<_>>().join(", ");
+            planned_actions.push(PlannedAction {
+                action_type: "Rol Ver".to_owned(),
+                target: format!("@{}", mock_user.name),
+                preview: format!("Verilecek roller: {roles_str}"),
+            });
+        }
+        if !self.remove_roles.is_empty() {
+            let roles_str = self.remove_roles.iter().map(|r| format!("<@&{r}>")).collect::<Vec<_>>().join(", ");
+            planned_actions.push(PlannedAction {
+                action_type: "Rol Al".to_owned(),
+                target: format!("@{}", mock_user.name),
+                preview: format!("Alınacak roller: {roles_str}"),
+            });
+        }
+        if let Some(ref emoji) = self.react {
+            planned_actions.push(PlannedAction {
+                action_type: "Tepki Ekle".to_owned(),
+                target: "Tetikleyen Mesaj".to_owned(),
+                preview: format!("Emoji: {emoji}"),
+            });
+        }
+        if let Some(ref thread) = self.thread_name {
+            planned_actions.push(PlannedAction {
+                action_type: "Alt Başlık Aç".to_owned(),
+                target: "Tetikleyen Mesaj".to_owned(),
+                preview: format!("Başlık: {}", fill_text(thread)),
+            });
+        }
+        if self.delete_message {
+            planned_actions.push(PlannedAction {
+                action_type: "Mesajı Sil".to_owned(),
+                target: "Tetikleyen Mesaj".to_owned(),
+                preview: "Tetikleyen mesaj sohbet kanalından silinir.".to_owned(),
+            });
+        }
+
+        // Webhook Kontrolü ve Probe
+        let mut webhook_check = None;
+        let mut rendered_payload = None;
+
+        if let Some(ref raw_url) = self.webhook_url.as_deref().filter(|u| !u.trim().is_empty()) {
+            let val_res = validate_webhook_url(raw_url, self.allow_localhost);
+            let url_valid = val_res.is_ok();
+            let ssrf_status = match val_res {
+                Ok(ref u) => {
+                    let host = u.host_str().unwrap_or_default();
+                    if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+                        "Yerel Hedef (allow_localhost açık, izin verildi)".to_owned()
+                    } else {
+                        "SSRF Güvenli (Genel Webhook Uç Noktası)".to_owned()
+                    }
+                }
+                Err(err) => format!("SSRF Engeli: {err}"),
+            };
+
+            let mut headers_preview = vec!["content-type: application/json".to_owned()];
+            if self.webhook_secret.is_some() {
+                headers_preview.push("Authorization: Bearer <GİZLİ_ANAHTAR>".to_owned());
+                headers_preview.push("x-webhook-secret: <GİZLİ_ANAHTAR>".to_owned());
+            }
+
+            let default_payload = if is_stream {
+                serde_json::json!({
+                    "event": self.trigger.label(),
+                    "trigger": self.trigger,
+                    "platform": input.platform.as_deref().unwrap_or("twitch"),
+                    "streamer": input.streamer.as_deref().unwrap_or("Yayinci"),
+                    "title": input.title,
+                    "game": input.game,
+                    "viewers": input.viewers,
+                })
+            } else {
+                serde_json::json!({
+                    "event": self.trigger.label(),
+                    "trigger": self.trigger,
+                    "user_id": input.user_id.unwrap_or(1001),
+                    "user_name": mock_user.name,
+                    "channel_id": input.channel_id,
+                    "content": input.content,
+                })
+            };
+
+            let payload_str = if let Some(custom) = self.webhook_payload.as_deref().filter(|p| !p.trim().is_empty()) {
+                fill_text(custom)
+            } else {
+                default_payload.to_string()
+            };
+            rendered_payload = Some(payload_str.clone());
+
+            planned_actions.push(PlannedAction {
+                action_type: "Webhook İsteği".to_owned(),
+                target: raw_url.to_string(),
+                preview: format!("Payload ({})", if self.webhook_payload.is_some() { "özel şablon" } else { "varsayılan JSON" }),
+            });
+
+            let mut probe_attempted = false;
+            let mut probe_status_code = None;
+            let mut probe_latency_ms = None;
+            let mut probe_error = None;
+
+            if input.probe_webhook && url_valid {
+                if let (Some(client), Ok(target_url)) = (client, val_res) {
+                    probe_attempted = true;
+                    let start_t = Instant::now();
+                    let mut req = client
+                        .post(target_url.as_str())
+                        .timeout(Duration::from_secs(4))
+                        .header("X-AxBot-Dry-Run", "true")
+                        .header("content-type", "application/json");
+
+                    if let Some(ref secret) = self.webhook_secret {
+                        req = req.header("x-webhook-secret", secret)
+                            .header("Authorization", format!("Bearer {secret}"));
+                    }
+
+                    match req.body(payload_str.clone()).send().await {
+                        Ok(resp) => {
+                            probe_latency_ms = u64::try_from(start_t.elapsed().as_millis()).ok();
+                            probe_status_code = Some(resp.status().as_u16());
+                        }
+                        Err(err) => {
+                            probe_latency_ms = u64::try_from(start_t.elapsed().as_millis()).ok();
+                            probe_error = Some(err.to_string());
+                        }
+                    }
+                }
+            }
+
+            webhook_check = Some(WebhookDryRunResult {
+                url_valid,
+                target_url: Some(raw_url.to_string()),
+                allow_localhost: self.allow_localhost,
+                ssrf_status,
+                headers_preview,
+                payload_preview: Some(payload_str),
+                probe_attempted,
+                probe_status_code,
+                probe_latency_ms,
+                probe_error,
+            });
+        }
+
+        DryRunReport {
+            matched,
+            condition_results: conditions,
+            rendered_message,
+            rendered_dm,
+            rendered_payload,
+            planned_actions,
+            webhook_check,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -778,5 +1180,178 @@ mod tests {
             ..Automation::default()
         };
         send_webhook(&client, &closed_automation, &payload).await;
+    }
+
+    #[tokio::test]
+    async fn dry_run_stream_trigger_match_and_mismatch() {
+        let automation = Automation {
+            id: 10,
+            name: "Yayın Bildirimi".to_owned(),
+            enabled: true,
+            trigger: Trigger::StreamWentLive,
+            streamer: Some("elraenn".to_owned()),
+            message: Some("🔴 {yayinci} {platform}'da yayında: {baslik}".to_owned()),
+            message_channel: Some(999),
+            ..Automation::default()
+        };
+
+        // 1. Eşleşen yayın senaryosu
+        let matching_input = DryRunInput {
+            trigger: Trigger::StreamWentLive,
+            platform: Some("twitch".to_owned()),
+            streamer: Some("Elraenn".to_owned()),
+            title: Some("Büyük Turnuva".to_owned()),
+            guild_name: Some("Test Sunucu".to_owned()),
+            ..DryRunInput::default()
+        };
+        let report = automation.evaluate_dry_run(&matching_input, None).await;
+        assert!(report.matched);
+        assert_eq!(
+            report.rendered_message.as_deref(),
+            Some("🔴 Elraenn twitch'da yayında: Büyük Turnuva")
+        );
+        assert_eq!(report.planned_actions.len(), 1);
+        assert_eq!(report.planned_actions[0].action_type, "Mesaj Gönder");
+        assert_eq!(report.planned_actions[0].target, "<#999>");
+
+        // 2. Farklı yayıncı senaryosu (koşul reddi)
+        let mismatch_input = DryRunInput {
+            trigger: Trigger::StreamWentLive,
+            platform: Some("twitch".to_owned()),
+            streamer: Some("wtcn".to_owned()),
+            ..DryRunInput::default()
+        };
+        let mismatch_report = automation.evaluate_dry_run(&mismatch_input, None).await;
+        assert!(!mismatch_report.matched);
+        let streamer_check = mismatch_report
+            .condition_results
+            .iter()
+            .find(|c| c.name == "Yayıncı / Platform");
+        assert!(streamer_check.is_some_and(|c| !c.passed));
+
+        // 3. Farklı tetikleyici türü (örn. çevrimdışı)
+        let offline_input = DryRunInput {
+            trigger: Trigger::StreamWentOffline,
+            streamer: Some("elraenn".to_owned()),
+            ..DryRunInput::default()
+        };
+        let offline_report = automation.evaluate_dry_run(&offline_input, None).await;
+        assert!(!offline_report.matched);
+        let trigger_check = offline_report
+            .condition_results
+            .iter()
+            .find(|c| c.name == "Tetikleyici Türü");
+        assert!(trigger_check.is_some_and(|c| !c.passed));
+    }
+
+    #[tokio::test]
+    async fn dry_run_message_keyword_and_roles() {
+        let automation = Automation {
+            id: 20,
+            name: "Soru Cevaplayıcı".to_owned(),
+            enabled: true,
+            trigger: Trigger::Message,
+            keyword: Some("destek".to_owned()),
+            channel: Some(101),
+            role: Some(501),
+            message: Some("Merhaba {kullanıcı}, sorunu aldık.".to_owned()),
+            dm: Some("Özel bildirim: {mesaj}".to_owned()),
+            add_roles: vec![502],
+            react: Some("👍".to_owned()),
+            ..Automation::default()
+        };
+
+        let valid_input = DryRunInput {
+            trigger: Trigger::Message,
+            channel_id: Some(101),
+            role_id: Some(501),
+            member_roles: vec![501],
+            user_id: Some(777),
+            user_name: Some("Ahmet".to_owned()),
+            content: Some("Acil DESTEK talebi".to_owned()),
+            guild_name: Some("Topluluk".to_owned()),
+            ..DryRunInput::default()
+        };
+
+        let report = automation.evaluate_dry_run(&valid_input, None).await;
+        assert!(report.matched);
+        assert_eq!(
+            report.rendered_message.as_deref(),
+            Some("Merhaba <@777>, sorunu aldık.")
+        );
+        assert_eq!(
+            report.rendered_dm.as_deref(),
+            Some("Özel bildirim: Acil DESTEK talebi")
+        );
+        assert_eq!(report.planned_actions.len(), 4); // Mesaj, DM, Rol Ver, Tepki
+    }
+
+    #[tokio::test]
+    async fn dry_run_ssrf_and_webhook_probe() {
+        // 1. allow_localhost = false iken yerel adres reddedilmeli
+        let ssrf_blocked = Automation {
+            id: 30,
+            name: "SSRF Test".to_owned(),
+            enabled: true,
+            trigger: Trigger::MemberJoin,
+            webhook_url: Some("http://127.0.0.1:9090/hook".to_owned()),
+            allow_localhost: false,
+            ..Automation::default()
+        };
+        let input = DryRunInput {
+            trigger: Trigger::MemberJoin,
+            probe_webhook: false,
+            ..DryRunInput::default()
+        };
+        let report = ssrf_blocked.evaluate_dry_run(&input, None).await;
+        let check = report.webhook_check.as_ref();
+        assert!(check.is_some_and(|c| !c.url_valid && c.ssrf_status.contains("SSRF Engeli")));
+
+        // 2. allow_localhost = true ve probe_webhook = true iken yerel sunucuya probe gitmeli
+        let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:0").await else {
+            return;
+        };
+        let Ok(addr) = listener.local_addr() else {
+            return;
+        };
+        let url = format!("http://127.0.0.1:{}/probe", addr.port());
+
+        let server_task = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let req_str = String::from_utf8_lossy(&buf[..n]);
+                let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(response.as_bytes()).await;
+                req_str.to_string()
+            } else {
+                String::new()
+            }
+        });
+
+        let allowed = Automation {
+            id: 31,
+            name: "Probe Test".to_owned(),
+            enabled: true,
+            trigger: Trigger::MemberJoin,
+            webhook_url: Some(url),
+            webhook_secret: Some("probe-secret".to_owned()),
+            allow_localhost: true,
+            ..Automation::default()
+        };
+
+        let client = reqwest::Client::new();
+        let probe_input = DryRunInput {
+            trigger: Trigger::MemberJoin,
+            probe_webhook: true,
+            ..DryRunInput::default()
+        };
+        let probe_report = allowed.evaluate_dry_run(&probe_input, Some(&client)).await;
+        let req_header = server_task.await.unwrap_or_default();
+        assert!(req_header.to_lowercase().contains("x-axbot-dry-run: true"));
+
+        let check = probe_report.webhook_check.as_ref();
+        assert!(check.is_some_and(|c| c.url_valid && c.probe_status_code == Some(200)));
     }
 }
