@@ -346,16 +346,109 @@ pub fn clean_title(title: &str) -> String {
 
 // ===================== İleri sarma =====================
 
+/// "90", "90s", "1:30", "01:30", "1:02:03", "1m30s", "+15", "-15" gibi mutlak veya göreceli zaman girdilerini ayrıştırır.
+pub fn parse_seek_timestamp(input: &str, current_pos: Option<Duration>) -> Result<Duration, &'static str> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("Konum belirtilmedi.");
+    }
+
+    // Göreceli sarma: +15, -15, +1:30, -30s
+    if let Some(rest) = trimmed.strip_prefix('+') {
+        let delta = parse_absolute_duration(rest)?;
+        let cur = current_pos.unwrap_or(Duration::ZERO);
+        return Ok(cur + delta);
+    }
+    if let Some(rest) = trimmed.strip_prefix('-') {
+        let delta = parse_absolute_duration(rest)?;
+        let cur = current_pos.unwrap_or(Duration::ZERO);
+        return Ok(cur.saturating_sub(delta));
+    }
+
+    parse_absolute_duration(trimmed)
+}
+
+fn parse_absolute_duration(input: &str) -> Result<Duration, &'static str> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Err("Geçersiz zaman biçimi.");
+    }
+
+    // 1. Durum: Colon ile ayrılmış (1:30, 01:30, 1:02:03, 01:02:03)
+    if s.contains(':') {
+        let mut parts = Vec::new();
+        for p in s.split(':') {
+            let part_str = p.trim();
+            if part_str.is_empty() {
+                return Err("Geçersiz saat/dakika/saniye biçimi.");
+            }
+            let Ok(val) = part_str.parse::<u64>() else {
+                return Err("Geçersiz sayısal değer.");
+            };
+            parts.push(val);
+        }
+        let secs = match parts.as_slice() {
+            [s] => *s,
+            [m, s] if *s < 60 => m * 60 + s,
+            [_, _] => return Err("Saniye 60'tan küçük olmalı (örn. 1:30)."),
+            [h, m, s] if *m < 60 && *s < 60 => h * 3600 + m * 60 + s,
+            [_, m, _] if *m >= 60 => return Err("Dakika 60'tan küçük olmalı (örn. 1:02:03)."),
+            [_, _, _] => return Err("Saniye 60'tan küçük olmalı."),
+            _ => return Err("Çok fazla zaman bölümü belirtildi (en fazla saat:dakika:saniye)."),
+        };
+        return Ok(Duration::from_secs(secs));
+    }
+
+    // 2. Durum: 1h30m15s, 1m30s, 90s, 2m, 1h formatı
+    if s.ends_with('s') || s.ends_with('S') || s.contains('m') || s.contains('M') || s.contains('h') || s.contains('H') {
+        let mut total_secs: u64 = 0;
+        let mut current_num = String::new();
+        let mut had_unit = false;
+
+        for ch in s.chars() {
+            if ch.is_ascii_digit() {
+                current_num.push(ch);
+            } else {
+                let unit = ch.to_ascii_lowercase();
+                if unit == ' ' {
+                    continue;
+                }
+                if current_num.is_empty() {
+                    return Err("Geçersiz zaman biçimi (sayı eksik).");
+                }
+                let Ok(val) = current_num.parse::<u64>() else {
+                    return Err("Sayı değeri çok büyük.");
+                };
+                current_num.clear();
+                had_unit = true;
+                match unit {
+                    'h' => total_secs = total_secs.saturating_add(val.saturating_mul(3600)),
+                    'm' => total_secs = total_secs.saturating_add(val.saturating_mul(60)),
+                    's' => total_secs = total_secs.saturating_add(val),
+                    _ => return Err("Desteklenmeyen zaman birimi (yalnızca h, m, s)."),
+                }
+            }
+        }
+        if !current_num.is_empty() {
+            return Err("Birim belirtilmemiş kalan sayı var.");
+        }
+        if had_unit {
+            return Ok(Duration::from_secs(total_secs));
+        }
+    }
+
+    // 3. Durum: Saf saniye sayısı ("90")
+    if let Ok(secs) = s.parse::<u64>() {
+        return Ok(Duration::from_secs(secs));
+    }
+
+    Err("Geçersiz zaman formatı. `1:30`, `90`, `90s`, `1m30s`, `+15` veya `-15` gibi yazın.")
+}
+
 /// "90", "1:30", "1:02:03" → süre.
+#[allow(dead_code)]
 pub fn parse_position(input: &str) -> Option<Duration> {
-    let parts: Vec<u64> = input.trim().split(':').map(|p| p.trim().parse().ok()).collect::<Option<_>>()?;
-    let secs = match parts.as_slice() {
-        [s] => *s,
-        [m, s] if *s < 60 => m * 60 + s,
-        [h, m, s] if *m < 60 && *s < 60 => h * 3600 + m * 60 + s,
-        _ => return None,
-    };
-    Some(Duration::from_secs(secs))
+    parse_seek_timestamp(input, None).ok()
 }
 
 // ===================== Bağlantı güvenliği =====================
@@ -557,6 +650,30 @@ mod tests {
         assert_eq!(parse_position("1:02:03"), Some(Duration::from_secs(3723)));
         assert_eq!(parse_position("1:75"), None);
         assert_eq!(parse_position("abc"), None);
+
+        // Kapsamlı parse_seek_timestamp testleri
+        assert_eq!(parse_seek_timestamp("90", None), Ok(Duration::from_secs(90)));
+        assert_eq!(parse_seek_timestamp("90s", None), Ok(Duration::from_secs(90)));
+        assert_eq!(parse_seek_timestamp("1:30", None), Ok(Duration::from_secs(90)));
+        assert_eq!(parse_seek_timestamp("01:30", None), Ok(Duration::from_secs(90)));
+        assert_eq!(parse_seek_timestamp("1:02:03", None), Ok(Duration::from_secs(3723)));
+        assert_eq!(parse_seek_timestamp("1m30s", None), Ok(Duration::from_secs(90)));
+        assert_eq!(parse_seek_timestamp("2m", None), Ok(Duration::from_secs(120)));
+        assert_eq!(parse_seek_timestamp("1h2m3s", None), Ok(Duration::from_secs(3723)));
+
+        // Göreceli sarma (+15, -15)
+        let cur = Some(Duration::from_secs(45));
+        assert_eq!(parse_seek_timestamp("+15", cur), Ok(Duration::from_secs(60)));
+        assert_eq!(parse_seek_timestamp("+15s", cur), Ok(Duration::from_secs(60)));
+        assert_eq!(parse_seek_timestamp("-15", cur), Ok(Duration::from_secs(30)));
+        assert_eq!(parse_seek_timestamp("-15s", cur), Ok(Duration::from_secs(30)));
+        // Negatif taşmada 0'a doyma
+        assert_eq!(parse_seek_timestamp("-60", cur), Ok(Duration::ZERO));
+
+        // Hatalı girdiler
+        assert!(parse_seek_timestamp("1:75", None).is_err());
+        assert!(parse_seek_timestamp("abc", None).is_err());
+        assert!(parse_seek_timestamp("", None).is_err());
     }
 
     #[test]

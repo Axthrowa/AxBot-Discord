@@ -228,7 +228,8 @@ pub async fn handle_button(ctx: &serenity::Context, music: &Music, interaction: 
                 };
                 Duration::from_secs(secs)
             } else {
-                let position = current.get_info().await?.position;
+                let offset = music.position_offset_of(guild_id);
+                let position = current.get_info().await?.position + offset;
                 shifted(position, total, action == "forward")
             };
             // Kaynak sarmayı desteklemezse veya takılırsa bekleme sınırlı tutulur.
@@ -341,6 +342,42 @@ pub async fn handle_modal(ctx: &serenity::Context, music: &Music, modal: &ModalI
                 }
             };
             modal.edit_response(ctx, EditInteractionResponse::new().content(text)).await?;
+            music.refresh_card_now(&ctx.http, guild_id).await;
+            Ok(())
+        }
+        "seek" | "seekmodal" => {
+            let Some(call) = music.songbird().get(guild_id) else {
+                return modal_reply(ctx, modal, "❌ Şu an müzik çalmıyor.").await;
+            };
+            let (cur_pos, total) = {
+                let handler = call.lock().await;
+                let queue = handler.queue().clone();
+                let Some(current) = queue.current() else {
+                    return modal_reply(ctx, modal, "❌ Şu an çalan bir şarkı yok.").await;
+                };
+                let offset = music.position_offset_of(guild_id);
+                let cur = current.get_info().await.ok().map(|s| s.position + offset);
+                let tot = music.track_info(current.uuid()).and_then(|i| i.duration);
+                (cur, tot)
+            };
+            let target = match super::extra::parse_seek_timestamp(&value, cur_pos) {
+                Ok(t) => t,
+                Err(msg) => return modal_reply(ctx, modal, &format!("❌ {msg}")).await,
+            };
+            if let Some(total) = total {
+                if target >= total {
+                    return modal_reply(
+                        ctx,
+                        modal,
+                        &format!("❌ Şarkı {} uzunluğunda; daha ileri sarılamaz.", super::format_duration(total)),
+                    )
+                    .await;
+                }
+            }
+            modal.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
+            if let Err(e) = music.seek_to(&ctx.http, guild_id, target).await {
+                tracing::warn!(guild = %guild_id, error = %e, "Modal ile sarılamadı");
+            }
             music.refresh_card_now(&ctx.http, guild_id).await;
             Ok(())
         }

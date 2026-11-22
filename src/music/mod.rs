@@ -21,6 +21,7 @@ pub mod icons;
 pub mod playlists;
 pub mod soundboard;
 mod prefetch;
+pub mod cache;
 
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -153,6 +154,10 @@ pub struct Shared {
     guild_names: DashMap<GuildId, String>,
     /// Sunucu başına ses filtresi (`/müzik filtre`).
     filters: filters::Filters,
+    /// seek_to nedeniyle elle durdurulan parçaların UUID'leri (TrackEvent::End bastırma).
+    pub(crate) suppressed_ends: Arc<dashmap::DashSet<Uuid>>,
+    /// seek_to ile atlanan saniye ofseti (kart ve panel senkronizasyonu).
+    pub(crate) position_offsets: Arc<DashMap<GuildId, Duration>>,
 }
 
 /// Müzik sistemi; ucuzca klonlanır, alanlarına `Deref` ile erişilir.
@@ -176,6 +181,27 @@ impl Shared {
             },
             |v| *v,
         )
+    }
+
+    /// Sunucu için aktif parça sarma (seek_to) saniye ofseti.
+    pub fn position_offset_of(&self, guild_id: GuildId) -> Duration {
+        self.position_offsets.get(&guild_id).map(|o| *o).unwrap_or(Duration::ZERO)
+    }
+
+    /// yt-dlp -g ile taze doğrudan medya URL'sini çözümler (FFmpeg'e web sayfası linki vermemek için).
+    pub async fn resolve_direct_stream_url(&self, target: &str) -> Option<String> {
+        let mut cmd = Command::new(self.ytdlp);
+        cmd.args(["-g", "-f", "bestaudio[ext=webm]/bestaudio[ext=m4a]/ba/b", "--no-warnings", "--no-playlist"]);
+        cmd.args(self.args());
+        cmd.arg(target);
+        let output = tokio::time::timeout(Duration::from_secs(15), cmd.output()).await.ok()?.ok()?;
+        if output.status.success() {
+            let url = String::from_utf8_lossy(&output.stdout).lines().next()?.trim().to_owned();
+            if !url.is_empty() {
+                return Some(url);
+            }
+        }
+        None
     }
 }
 
@@ -292,6 +318,7 @@ impl Music {
         ytdlp_args.extend(server_ytdlp_args());
 
         let driver = driver::resolve_driver(&http);
+        cache::clear_orphaned_cache();
         Self(Arc::new(Shared {
             songbird,
             http,
@@ -312,6 +339,8 @@ impl Music {
             names: DashMap::new(),
             guild_names: DashMap::new(),
             filters: Arc::new(DashMap::new()),
+            suppressed_ends: Arc::new(dashmap::DashSet::new()),
+            position_offsets: Arc::new(DashMap::new()),
         }))
     }
 
@@ -447,35 +476,72 @@ impl Music {
         Ok(())
     }
 
-    /// Çalan şarkıyı belirli bir zamana sarar (milisaniyeler içinde doğrudan yeni akış başlatma).
+    /// Çalan şarkıyı belirli bir zamana sarar.
     pub async fn seek_to(&self, http: &Arc<Http>, guild_id: GuildId, target: Duration) -> Result<(), String> {
         let Some(call) = self.songbird.get(guild_id) else {
             return Err("Şu an çalan bir şarkı yok.".to_owned());
         };
-        let mut handler = call.lock().await;
-        let queue = handler.queue().clone();
-        let Some(current) = queue.current() else {
-            return Err("Şu an çalan bir şarkı yok.".to_owned());
+
+        let (current, uuid, info) = {
+            let handler = call.lock().await;
+            let queue = handler.queue().clone();
+            let Some(current) = queue.current() else {
+                return Err("Şu an çalan bir şarkı yok.".to_owned());
+            };
+            let uuid = current.uuid();
+            let Some(info) = self.tracks.get(&uuid).map(|t| t.value().clone()) else {
+                return Err("Şarkı bilgisi bulunamadı.".to_owned());
+            };
+            (current, uuid, info)
         };
-        let uuid = current.uuid();
-        let Some(info) = self.tracks.get(&uuid).map(|t| t.value().clone()) else {
-            return Err("Şarkı bilgisi bulunamadı.".to_owned());
-        };
+
+        if let Some(total) = info.duration {
+            if target >= total {
+                return Err(format!(
+                    "Şarkı {} uzunluğunda; daha ileri sarılamaz.",
+                    format_duration(total)
+                ));
+            }
+        }
+
+        let current_filter = self.filters.get(&guild_id).map(|f| *f).unwrap_or(filters::Filter::Off);
+
+        // Yol A: Filtre kapalıysa Songbird'ün yerel/seekable TrackHandle::seek_async metodunu dene
+        if current_filter == filters::Filter::Off && current.seek_async(target).await.is_ok() {
+            self.position_offsets.insert(guild_id, Duration::ZERO);
+            self.refresh_card_now(http, guild_id).await;
+            return Ok(());
+        }
+
+        // Yol B: Hızlı FFmpeg input seeking (-ss <target> -i ...) ile taze akış başlatma
         let Some(url) = info.url.clone() else {
             return Err("Bu yayın/şarkı sarılamıyor.".to_owned());
         };
-        let source = YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), url.clone()).user_args(self.args());
-        let input = prefetch::Prefetched::seek_from(url, source, self.args(), target);
-        let input = filters::wrap(input, guild_id, &self.filters);
+
+        let cached_path = cache::get_cached_track(&url);
+        let input = if let Some(ref path) = cached_path {
+            filters::open_file_seek(path, target, current_filter)
+                .map_err(|e| format!("Önbellek dosyası açılamadı: {e}"))?
+        } else {
+            let direct_url = self.resolve_direct_stream_url(&url).await.unwrap_or_else(|| url.clone());
+            filters::open_direct_url_seek(&direct_url, &std::collections::HashMap::new(), target, current_filter)
+                .map_err(|e| format!("Doğrudan akış açılamadı: {e}"))?
+        };
+
+        let mut handler = call.lock().await;
+        let queue = handler.queue().clone();
         let volume = self.volume_of(guild_id);
+
+        // Eski parçanın TrackEvent::End olayında autoplay tetiklenmemesi ve kuyruğun bozulmaması için bastır
+        self.suppressed_ends.insert(uuid);
         let _ = current.stop();
         self.tracks.remove(&uuid);
 
         let handle = queue.add_with_preload(Track::new(input).volume(volume), &mut handler, None);
         queue.modify_queue(|q| {
-            if q.len() > 1 {
-                let _ = q.pop_front();
-                if let Some(track) = q.pop_back() {
+            if let Some(pos) = q.iter().position(|t| t.uuid() == handle.uuid()) {
+                if let Some(track) = q.remove(pos) {
+                    q.retain(|t| t.uuid() != uuid);
                     q.push_front(track);
                 }
             }
@@ -493,6 +559,10 @@ impl Music {
             };
             let _ = handle.add_event(Event::Track(event), notifier);
         }
+
+        self.position_offsets.insert(guild_id, target);
+        drop(handler);
+        self.refresh_card_now(http, guild_id).await;
         Ok(())
     }
 
@@ -550,11 +620,11 @@ impl Music {
                 let query = format!("{} - {}", t.artists, t.title);
                 let target = format!("ytsearch1:{query}");
                 let source = YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), query.clone()).user_args(self.args());
-                let input = prefetch::Prefetched::lazy(target, source, self.args());
+                let input = prefetch::Prefetched::lazy(target.clone(), source, self.args());
                 let info = TrackInfo {
                     guild_id,
                     title: query,
-                    url: None,
+                    url: Some(target),
                     duration: t.duration,
                     thumbnail: t.cover,
                     requester,
@@ -968,6 +1038,7 @@ impl Music {
         self.autoplay_tasks.remove(&guild_id);
         self.empty_channels.remove(&guild_id);
         self.card_tasks.remove(&guild_id);
+        self.position_offsets.remove(&guild_id);
         if let Some(call) = self.songbird.get(guild_id) {
             call.lock().await.queue().stop();
         }
@@ -975,6 +1046,7 @@ impl Music {
             warn!(guild = %guild_id, error = %e, "Ses kanalından ayrılırken hata");
         }
         self.tracks.retain(|_, t| t.guild_id != guild_id);
+        let _ = cache::prune_cache();
     }
 
     /// Ses kanalı değişikliklerinde: bot yalnız kaldıysa (7/24 kapalıysa) veya kanaldan atıldıysa ayrılır.
@@ -1040,6 +1112,12 @@ impl Shared {
             .and_then(|h| self.tracks.get(&h.uuid()).map(|t| t.title.clone()))
             .map(|title| card::split_title(&title))
             .map(|(artist, song)| artist.map_or_else(|| song.clone(), |a| format!("{a} - {song}")));
+        let offset = self.position_offset_of(guild_id);
+        let raw_pos = state.position + offset;
+        let effective_position = match info.duration {
+            Some(total) => raw_pos.min(total),
+            None => raw_pos,
+        };
         Some((
             info,
             card::CardState {
@@ -1047,7 +1125,7 @@ impl Shared {
                 paused: matches!(state.playing, songbird::tracks::PlayMode::Pause),
                 looping: state.loops != songbird::tracks::LoopState::default(),
                 upcoming: queue.len().saturating_sub(1),
-                position: state.position,
+                position: effective_position,
                 next,
             },
         ))
@@ -1186,20 +1264,18 @@ impl Shared {
         }
     }
 
-    /// Sıradaki parçayı arka planda önceden çözümler (şarkı geçişinde yt-dlp beklemesini sıfırlar).
+    /// Sıradaki parçayı arka planda önceden çözümler ve yerel diske indirir (şarkı geçişini anında ve sıfır gecikmeli yapar).
     pub(crate) async fn prefetch_next(this: Arc<Self>, guild_id: GuildId) {
         let Some(call) = this.songbird.get(guild_id) else { return; };
-        let next_uuid = {
+        let next_track = {
             let handler = call.lock().await;
             let queue = handler.queue().current_queue();
-            queue.get(1).map(|h| h.uuid())
+            queue.get(1).and_then(|h| this.tracks.get(&h.uuid()).map(|t| (t.url.clone(), t.duration)))
         };
-        let Some(uuid) = next_uuid else { return; };
-        let target = this.tracks.get(&uuid).and_then(|t| t.url.clone());
-        if let Some(target) = target {
-            if !target.is_empty() {
-                let _ = Music(Arc::clone(&this)).fetch(&target, false).await;
-            }
+        let Some((Some(target), duration)) = next_track else { return; };
+        if !target.is_empty() {
+            let _ = Music(Arc::clone(&this)).fetch(&target, false).await;
+            let _ = cache::download_to_cache(this.ytdlp, &this.args(), &target, duration).await;
         }
     }
 
@@ -1575,6 +1651,39 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(5)), "0:05");
         assert_eq!(format_duration(Duration::from_secs(225)), "3:45");
         assert_eq!(format_duration(Duration::from_secs(3723)), "1:02:03");
+    }
+
+    #[test]
+    fn suppressed_ends_and_position_offset_logic() {
+        let suppressed = dashmap::DashSet::new();
+        let track_uuid = Uuid::new_v4();
+
+        // Parça seek_to tarafından durdurulunca suppressed listesine eklenir
+        suppressed.insert(track_uuid);
+        assert!(suppressed.contains(&track_uuid));
+
+        // TrackEvent::End geldiğinde tek sefer kontrol edilip tüketilir
+        assert!(suppressed.remove(&track_uuid).is_some());
+        assert!(!suppressed.contains(&track_uuid));
+        assert!(suppressed.remove(&track_uuid).is_none());
+
+        // Konum ofseti hesabı
+        let offsets = DashMap::new();
+        let guild_id = GuildId::new(42);
+        let seek_target = Duration::from_secs(90);
+        offsets.insert(guild_id, seek_target);
+
+        let stream_position = Duration::from_secs(12);
+        let offset = offsets.get(&guild_id).map(|o| *o).unwrap_or(Duration::ZERO);
+        let total = Duration::from_secs(180);
+
+        let effective = (stream_position + offset).min(total);
+        assert_eq!(effective, Duration::from_secs(102));
+
+        // Süre taşması durumunda clamp kontrolü
+        let large_stream_pos = Duration::from_secs(100);
+        let clamped = (large_stream_pos + offset).min(total);
+        assert_eq!(clamped, Duration::from_secs(180));
     }
 }
 

@@ -762,28 +762,31 @@ async fn m_filtre(
     Ok(())
 }
 
-/// Çalan şarkıyı belirli bir ana sarar (örn. 1:30).
+/// Çalan şarkıyı belirli bir ana sarar (örn. 1:30, 90, 1m30s, +15, -15).
 #[poise::command(slash_command, guild_only, rename = "sar")]
 async fn m_sar(
     ctx: Context<'_>,
     #[rename = "konum"]
-    #[description = "Gidilecek an (örn. 90, 1:30, 1:02:03)"]
+    #[description = "Gidilecek an (örn. 1:30, 90, 1m30s, +15, -15)"]
     position: String,
 ) -> Result<(), Error> {
     let Some((guild_id, call)) = same_channel_call(ctx).await? else {
         return Ok(());
     };
-    let Some(target) = crate::music::extra::parse_position(&position) else {
-        return private(ctx, "❌ Konumu `1:30` veya `90` (saniye) gibi yaz.").await;
-    };
     let Some(current) = call.lock().await.queue().current() else {
         return private(ctx, "Şu an çalan bir şarkı yok.").await;
+    };
+    let offset = ctx.data().music.position_offset_of(guild_id);
+    let cur_pos = current.get_info().await.ok().map(|s| s.position + offset);
+    let target = match crate::music::extra::parse_seek_timestamp(&position, cur_pos) {
+        Ok(t) => t,
+        Err(msg) => return private(ctx, &format!("❌ {msg}")).await,
     };
     let info = ctx.data().music.track_info(current.uuid());
     match info.as_ref().and_then(|i| i.duration) {
         None => return private(ctx, "Bu yayın/şarkı sarılamıyor.").await,
         Some(total) if target >= total => {
-            return private(ctx, &format!("Şarkı {} uzunluğunda; daha ileri sarılamaz.", format_duration(total))).await;
+            return private(ctx, &format!("❌ Şarkı {} uzunluğunda; daha ileri sarılamaz.", format_duration(total))).await;
         }
         Some(_) => {}
     }

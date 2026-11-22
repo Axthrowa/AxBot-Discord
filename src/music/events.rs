@@ -64,7 +64,12 @@ impl EventHandler for TrackNotifier {
                     }
                 }
                 TrackNotice::Ended => {
+                    // Eğer parça seek_to tarafından durdurulduysa olay bastırılır (kuyruk ve autoplay bozulmaz)
+                    if music.suppressed_ends.remove(&id).is_some() {
+                        return None;
+                    }
                     if let Some((_, info)) = music.tracks.remove(&id) {
+                        music.position_offsets.remove(&info.guild_id);
                         if music.settings.get(&info.guild_id).is_some_and(|s| s.autoplay) {
                             // Kuyruk kilidi burada alınmaz; ayrı görevde bakılır.
                             tokio::spawn(Shared::autoplay_after(Arc::clone(&music), Arc::clone(&self.http), info));
@@ -72,7 +77,11 @@ impl EventHandler for TrackNotifier {
                     }
                 }
                 TrackNotice::Failed => {
+                    if music.suppressed_ends.remove(&id).is_some() {
+                        return None;
+                    }
                     if let Some((_, info)) = music.tracks.remove(&id) {
+                        music.position_offsets.remove(&info.guild_id);
                         let err_detail = handle.get_info().await.map(|st| format!("{:?}", st.playing)).unwrap_or_default();
                         warn!(title = %info.title, error = %err_detail, "Parça çalınamadı");
                         let text = format!("⚠️ **{}** çalınamadı, sıradakine geçiliyor.", info.title);

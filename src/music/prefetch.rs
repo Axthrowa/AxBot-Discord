@@ -56,6 +56,7 @@ impl Prefetched {
     }
 
     /// Belirli bir saniyeden itibaren başlayan kaynak.
+    #[allow(dead_code)]
     pub fn seek_from(target: String, inner: YoutubeDl<'static>, args: Vec<String>, seek: Duration) -> Input {
         Input::Lazy(Box::new(Self {
             target,
@@ -125,6 +126,34 @@ impl Compose for Prefetched {
     }
 
     async fn create_async(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+        // 1. Önbellekte yerel dosya var mı kontrol et. Varsa sıfır ağ gecikmesi ve sıfır takılmayla aç.
+        if !self.target.is_empty() {
+            if let Some(cached_path) = super::cache::get_cached_track(&self.target) {
+                if let Some(seek) = self.seek_to {
+                    if seek.as_secs() > 0 {
+                        return super::filters::open_file_seek_stream(&cached_path, seek, super::filters::Filter::Off);
+                    }
+                }
+                match songbird::input::File::new(cached_path.clone()).create_async().await {
+                    Ok(stream) => return Ok(stream),
+                    Err(e) => {
+                        tracing::warn!(error = %e, path = ?cached_path, "Önbellekteki dosya açılamadı, alternatif deneniyor");
+                    }
+                }
+            }
+        }
+
+        // 2. Eğer yerel önbellekte yoksa ve arama/sarma yoksa arka planda disk önbelleğine indirmeyi dene.
+        if !self.target.is_empty() && self.seek_to.is_none() {
+            let ytdlp_bin = super::filters::ytdlp();
+            if let Ok(cached_path) = super::cache::download_to_cache(ytdlp_bin, &self.args, &self.target, None).await {
+                if let Ok(stream) = songbird::input::File::new(cached_path).create_async().await {
+                    return Ok(stream);
+                }
+            }
+        }
+
+        // 3. İndirme yapılamadıysa veya canlı akış ise pipeline/doğrudan akış ile devam et.
         let mut had_cached_result = false;
         if let Some((result, fetched_at)) = self.result.take() {
             had_cached_result = true;

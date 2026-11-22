@@ -6,16 +6,17 @@
 //! - HLS akışı (`open_url`): ffmpeg adresi kendisi okur (parçalı MP4'ün başlangıç parçası dahil) ve PCM verir.
 //!   Bu PCM'e filtre gerekirse songbird başlığı atılıp ham PCM olarak ikinci ffmpeg'e verilir.
 
-use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::process::{Command, Stdio};
-use std::sync::{Arc, OnceLock};
+use std::collections::{HashMap, VecDeque};
+use std::io::{ErrorKind, Read, Result as IoResult, Write};
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 use poise::serenity_prelude::GuildId;
-use songbird::input::{AudioStream, AudioStreamError, AuxMetadata, ChildContainer, Compose, Input, RawAdapter};
+use songbird::input::{AudioStream, AudioStreamError, AuxMetadata, Compose, Input, LiveInput, RawAdapter};
 use symphonia::core::io::{MediaSource, ReadOnlySource};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, poise::ChoiceParameter)]
@@ -34,13 +35,14 @@ pub enum Filter {
 
 impl Filter {
     /// ffmpeg `-af` zinciri. Hız/tempo değiştirenler önce zaman damgasını sabitler, sonra hızı uygular ve 48 kHz'e kilitler.
+    /// `async=1` kaldırılmıştır; ses hızlanma ve yavaşlama dalgalanması yapmaz.
     pub fn chain(self) -> Option<&'static str> {
         match self {
             Self::Off => None,
-            Self::Bass => Some("asetpts=PTS-STARTPTS,bass=g=10:f=110:w=0.6,aresample=48000:async=1:first_pts=0"),
-            Self::Nightcore => Some("asetpts=PTS-STARTPTS,asetrate=60000,aresample=48000:async=1:first_pts=0"),
-            Self::Vaporwave => Some("asetpts=PTS-STARTPTS,asetrate=38400,aresample=48000:async=1:first_pts=0"),
-            Self::EightD => Some("asetpts=PTS-STARTPTS,apulsator=hz=0.125,aresample=48000:async=1:first_pts=0"),
+            Self::Bass => Some("asetpts=PTS-STARTPTS,bass=g=10:f=110:w=0.6,aresample=48000:first_pts=0"),
+            Self::Nightcore => Some("asetpts=PTS-STARTPTS,asetrate=60000,aresample=48000:first_pts=0"),
+            Self::Vaporwave => Some("asetpts=PTS-STARTPTS,asetrate=38400,aresample=48000:first_pts=0"),
+            Self::EightD => Some("asetpts=PTS-STARTPTS,apulsator=hz=0.125,aresample=48000:first_pts=0"),
         }
     }
 }
@@ -56,7 +58,7 @@ pub fn set_ffmpeg(path: String) {
     let _ = FFMPEG.set(path);
 }
 
-fn ffmpeg() -> &'static str {
+pub fn ffmpeg() -> &'static str {
     FFMPEG.get().map_or("ffmpeg", String::as_str)
 }
 
@@ -65,7 +67,7 @@ pub fn set_ytdlp(path: String) {
     let _ = YTDLP.set(path);
 }
 
-fn ytdlp() -> &'static str {
+pub fn ytdlp() -> &'static str {
     YTDLP.get().map_or("yt-dlp", String::as_str)
 }
 
@@ -74,12 +76,236 @@ pub const TARGET_SAMPLE_RATE: u32 = 48_000;
 pub const TARGET_CHANNELS: u32 = 2;
 
 /// Kararlı zaman damgası normalizasyonu ve 48 kHz kilidi sağlayan temel resample filtresi.
-pub const BASE_RESAMPLE_AF: &str = "asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0";
+/// `async=1` KESİNLİKLE bulunmaz; saf 48 kHz resample uygulanır.
+pub const BASE_RESAMPLE_AF: &str = "asetpts=PTS-STARTPTS,aresample=48000:first_pts=0";
 
 /// songbird'ün ham PCM başlığı (`RawAdapter`): imza + örnek hızı + kanal sayısı.
 const RAW_MAGIC: &[u8; 8] = b"SbirdRaw";
 const RAW_HEADER_LEN: usize = 16;
 pub const PCM_OUT: [&str; 7] = ["-f", "f32le", "-ac", "2", "-ar", "48000", "pipe:1"];
+
+struct BufferState {
+    data: VecDeque<u8>,
+    finished: bool,
+    error: Option<std::io::Error>,
+}
+
+/// Arka plan iş parçacığıyla ffmpeg/pipe çıkışını bellek ring tamponuna okur.
+/// 256 KB pre-buffer eşiği ile oynatıcıyı besler; böylece mikser iş parçacığı asla takılmaz.
+pub struct PrebufferedPipeReader {
+    inner: Arc<(Mutex<BufferState>, Condvar, Condvar)>,
+    children: Arc<Mutex<Vec<Child>>>,
+    prebuffered: bool,
+    prebuffer_target: usize,
+}
+
+impl PrebufferedPipeReader {
+    pub fn new(mut children: Vec<Child>) -> Result<Self, AudioStreamError> {
+        let Some(mut stdout) = children.last_mut().and_then(|c| c.stdout.take()) else {
+            for mut c in children {
+                let _ = c.kill();
+            }
+            return Err(AudioStreamError::Fail("ffmpeg stdout çıktısı alınamadı".into()));
+        };
+
+        let capacity = 1_572_864; // ~1.5 MB (~4 sn PCM)
+        let prebuffer_target = 262_144; // ~256 KB (~0.68 sn PCM)
+        let inner = Arc::new((
+            Mutex::new(BufferState {
+                data: VecDeque::with_capacity(prebuffer_target * 2),
+                finished: false,
+                error: None,
+            }),
+            Condvar::new(),
+            Condvar::new(),
+        ));
+
+        let worker_inner = Arc::clone(&inner);
+        std::thread::spawn(move || {
+            let mut temp = [0u8; 16384];
+            loop {
+                match stdout.read(&mut temp) {
+                    Ok(0) => {
+                        if let Ok(mut state) = worker_inner.0.lock() {
+                            state.finished = true;
+                            worker_inner.1.notify_all();
+                        }
+                        break;
+                    }
+                    Ok(n) => {
+                        let Ok(mut state) = worker_inner.0.lock() else { break };
+                        while state.data.len() + n > capacity && !state.finished {
+                            state = match worker_inner.2.wait(state) {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                        }
+                        state.data.extend(&temp[..n]);
+                        worker_inner.1.notify_all();
+                    }
+                    Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                    Err(e) => {
+                        if let Ok(mut state) = worker_inner.0.lock() {
+                            state.error = Some(e);
+                            state.finished = true;
+                            worker_inner.1.notify_all();
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            inner,
+            children: Arc::new(Mutex::new(children)),
+            prebuffered: false,
+            prebuffer_target,
+        })
+    }
+}
+
+impl Read for PrebufferedPipeReader {
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+        let Ok(mut state) = self.inner.0.lock() else {
+            return Ok(0);
+        };
+
+        if !self.prebuffered {
+            while state.data.len() < self.prebuffer_target && !state.finished && state.error.is_none() {
+                state = match self.inner.1.wait(state) {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+            }
+            self.prebuffered = true;
+        }
+
+        while state.data.is_empty() && !state.finished && state.error.is_none() {
+            state = match self.inner.1.wait(state) {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+        }
+
+        if let Some(err) = state.error.take() {
+            return Err(err);
+        }
+
+        if state.data.is_empty() && state.finished {
+            return Ok(0);
+        }
+
+        let to_copy = buf.len().min(state.data.len());
+        for (i, b) in state.data.drain(..to_copy).enumerate() {
+            buf[i] = b;
+        }
+
+        self.inner.2.notify_all();
+        Ok(to_copy)
+    }
+}
+
+impl Drop for PrebufferedPipeReader {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.inner.0.lock() {
+            state.finished = true;
+            self.inner.1.notify_all();
+            self.inner.2.notify_all();
+        }
+        if let Ok(mut children) = self.children.lock() {
+            for mut c in children.drain(..) {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+        }
+    }
+}
+
+pub fn pcm_stream_prebuffered(children: Vec<Child>) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+    let reader = PrebufferedPipeReader::new(children)?;
+    let pcm = ReadOnlySource::new(reader);
+    Ok(AudioStream {
+        input: Box::new(RawAdapter::new(pcm, TARGET_SAMPLE_RATE, TARGET_CHANNELS)) as Box<dyn MediaSource>,
+    })
+}
+
+/// Yerel bir ses dosyasını ffmpeg ile belirli bir saniyeden itibaren açar (AudioStream).
+/// `-ss` parametresi `-i` girişinden ÖNCE yer alır (hızlı input seeking).
+pub fn open_file_seek_stream(
+    path: &Path,
+    seek: Duration,
+    filter: Filter,
+) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+    let mut ff_cmd = Command::new(ffmpeg());
+    ff_cmd.args(["-hide_banner", "-loglevel", "error"]);
+    let seek_str;
+    if seek.as_secs() > 0 {
+        seek_str = seek.as_secs_f64().to_string();
+        ff_cmd.args(["-ss", &seek_str]);
+    }
+    ff_cmd.arg("-i");
+    ff_cmd.arg(path);
+    ff_cmd.arg("-vn");
+    let chain = filter.chain().unwrap_or(BASE_RESAMPLE_AF);
+    ff_cmd.args(["-af", chain]);
+    ff_cmd.args(PCM_OUT);
+    ff_cmd.stdin(Stdio::null());
+    ff_cmd.stdout(Stdio::piped());
+    ff_cmd.stderr(Stdio::null());
+
+    let child = ff_cmd.spawn().map_err(|e| AudioStreamError::Fail(format!("ffmpeg çalıştırılamadı: {e}").into()))?;
+    pcm_stream_prebuffered(vec![child])
+}
+
+/// Yerel bir ses dosyasını Songbird Input olarak belirli bir saniyeden açar.
+pub fn open_file_seek(
+    path: &Path,
+    seek: Duration,
+    filter: Filter,
+) -> Result<Input, AudioStreamError> {
+    let stream = open_file_seek_stream(path, seek, filter)?;
+    Ok(Input::Live(LiveInput::Raw(stream), None))
+}
+
+/// Doğrudan HTTP medya URL'sini (googlevideo vb.) ffmpeg ile belirli bir saniyeden itibaren açar (AudioStream).
+/// Yeniden bağlanma parametreleri ve hızlı input seeking içerir.
+pub fn open_direct_url_seek_stream(
+    url: &str,
+    headers: &HashMap<String, String>,
+    seek: Duration,
+    filter: Filter,
+) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+    let headers_str: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
+    let mut args = Vec::new();
+    args.extend(["-probesize", "1048576", "-analyzeduration", "2000000"]);
+    args.extend(["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]);
+    if !headers_str.is_empty() {
+        args.extend(["-headers", headers_str.as_str()]);
+    }
+    let seek_str;
+    if seek.as_secs() > 0 {
+        seek_str = seek.as_secs_f64().to_string();
+        args.extend(["-ss", &seek_str]);
+    }
+    args.extend(["-i", url, "-vn"]);
+    let chain = filter.chain().unwrap_or(BASE_RESAMPLE_AF);
+    args.extend(["-af", chain]);
+    args.extend(PCM_OUT);
+    let child = spawn(&args, Stdio::null())?;
+    pcm_stream_prebuffered(vec![child])
+}
+
+/// Doğrudan HTTP medya URL'sini Songbird Input olarak belirli bir saniyeden açar.
+pub fn open_direct_url_seek(
+    url: &str,
+    headers: &HashMap<String, String>,
+    seek: Duration,
+    filter: Filter,
+) -> Result<Input, AudioStreamError> {
+    let stream = open_direct_url_seek_stream(url, headers, seek, filter)?;
+    Ok(Input::Live(LiveInput::Raw(stream), None))
+}
 
 /// yt-dlp ile ses akışını stdout'a indirip ffmpeg'e pipe eder; 48 kHz stereo f32le PCM verir.
 pub fn open_ytdlp_pipeline(
@@ -107,7 +333,6 @@ pub fn open_ytdlp_pipeline(
 
     let mut ff_cmd = Command::new(ffmpeg());
     ff_cmd.args(["-hide_banner", "-loglevel", "error"]);
-    // Kararlı akış analizi için güvenli probe/analiz süreleri (1MB / 2 sn)
     ff_cmd.args(["-probesize", "1048576", "-analyzeduration", "2000000"]);
     let seek_str;
     if let Some(seek) = seek {
@@ -131,11 +356,7 @@ pub fn open_ytdlp_pipeline(
         }
     };
 
-    let container = ChildContainer::from(vec![ytdl_child, ff_child]);
-    let pcm = ReadOnlySource::new(container);
-    Ok(AudioStream {
-        input: Box::new(RawAdapter::new(pcm, TARGET_SAMPLE_RATE, TARGET_CHANNELS)) as Box<dyn MediaSource>,
-    })
+    pcm_stream_prebuffered(vec![ytdl_child, ff_child])
 }
 
 fn spawn(args: &[&str], stdin: Stdio) -> Result<std::process::Child, AudioStreamError> {
@@ -149,11 +370,6 @@ fn spawn(args: &[&str], stdin: Stdio) -> Result<std::process::Child, AudioStream
         .map_err(|e| AudioStreamError::Fail(format!("ffmpeg çalıştırılamadı: {e}").into()))
 }
 
-fn pcm_stream(child: std::process::Child) -> AudioStream<Box<dyn MediaSource>> {
-    let pcm = ReadOnlySource::new(ChildContainer::from(child));
-    AudioStream { input: Box::new(RawAdapter::new(pcm, 48_000, 2)) as Box<dyn MediaSource> }
-}
-
 /// HLS (m3u8) adresini ffmpeg ile açar. Engelleyici; `spawn_blocking` içinde çağrılmalı.
 pub fn open_url(url: &str, headers: &HashMap<String, String>) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
     open_url_with_seek(url, headers, Duration::ZERO)
@@ -161,12 +377,12 @@ pub fn open_url(url: &str, headers: &HashMap<String, String>) -> Result<AudioStr
 
 /// URL'yi belirli bir saniyeden itibaren ffmpeg ile açar. Engelleyici; `spawn_blocking` içinde çağrılmalı.
 pub fn open_url_with_seek(url: &str, headers: &HashMap<String, String>, seek: Duration) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-    let headers: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
+    let headers_str: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
     let mut args = Vec::new();
-    // Kararlı akış analizi ve HLS/HTTP başlıklarının doğru zaman tabanıyla okunması için güvenli probe
     args.extend(["-probesize", "1048576", "-analyzeduration", "2000000"]);
-    if !headers.is_empty() {
-        args.extend(["-headers", headers.as_str()]);
+    args.extend(["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]);
+    if !headers_str.is_empty() {
+        args.extend(["-headers", headers_str.as_str()]);
     }
     let seek_str;
     if seek.as_secs() > 0 {
@@ -176,7 +392,8 @@ pub fn open_url_with_seek(url: &str, headers: &HashMap<String, String>, seek: Du
     args.extend(["-i", url, "-vn"]);
     args.extend(["-af", BASE_RESAMPLE_AF]);
     args.extend(PCM_OUT);
-    Ok(pcm_stream(spawn(&args, Stdio::null())?))
+    let child = spawn(&args, Stdio::null())?;
+    pcm_stream_prebuffered(vec![child])
 }
 
 /// Kaynağı filtre zincirinden geçirir. `raw_pcm`: kaynak başlıksız 48 kHz stereo f32 PCM.
@@ -192,9 +409,9 @@ fn through_ffmpeg(chain: &str, source: Box<dyn MediaSource>, raw_pcm: bool) -> R
             format!("asetpts=PTS-STARTPTS,{chain}")
         }
     } else if chain.contains("asetpts=PTS-STARTPTS") {
-        format!("{chain},aresample=48000:async=1:first_pts=0")
+        format!("{chain},aresample=48000:first_pts=0")
     } else {
-        format!("asetpts=PTS-STARTPTS,{chain},aresample=48000:async=1:first_pts=0")
+        format!("asetpts=PTS-STARTPTS,{chain},aresample=48000:first_pts=0")
     };
     args.extend(["-i", "pipe:0", "-af", &full_chain]);
     args.extend(PCM_OUT);
@@ -202,7 +419,7 @@ fn through_ffmpeg(chain: &str, source: Box<dyn MediaSource>, raw_pcm: bool) -> R
     let Some(mut stdin) = child.stdin.take() else {
         return Err(AudioStreamError::Fail("ffmpeg girişi açılamadı".into()));
     };
-    // Kaynak eşzamanlı okunur; 32KB tampon ile aktarılır, ffmpeg kapanınca (şarkı bitti/atlandı) yazma hata verir ve iş parçacığı biter.
+    // Kaynak eşzamanlı okunur; 32KB tampon ile aktarılır, ffmpeg kapanınca yazma hata verir ve iş parçacığı biter.
     std::thread::spawn(move || {
         let mut source = source;
         let mut buf = [0u8; 32768];
@@ -220,7 +437,7 @@ fn through_ffmpeg(chain: &str, source: Box<dyn MediaSource>, raw_pcm: bool) -> R
         }
         let _ = stdin.flush();
     });
-    Ok(pcm_stream(child))
+    pcm_stream_prebuffered(vec![child])
 }
 
 /// Filtre seçiliyse akışı ffmpeg'den geçirir. Engelleyici okuma yapabilir.
@@ -407,8 +624,8 @@ mod tests {
                 "{filter:?} filtresi 48000 Hz resample içermiyor: {chain}"
             );
             assert!(
-                chain.contains("async=1"),
-                "{filter:?} filtresi kararlı async=1 kilidi içermiyor: {chain}"
+                !chain.contains("async=1"),
+                "{filter:?} filtresi istenmeyen async=1 içeriyor: {chain}"
             );
             assert!(
                 chain.contains("asetpts=PTS-STARTPTS"),
@@ -422,7 +639,42 @@ mod tests {
         assert_eq!(TARGET_SAMPLE_RATE, 48_000);
         assert_eq!(TARGET_CHANNELS, 2);
         assert!(BASE_RESAMPLE_AF.contains("asetpts=PTS-STARTPTS"));
-        assert!(BASE_RESAMPLE_AF.contains("aresample=48000:async=1:first_pts=0"));
+        assert!(BASE_RESAMPLE_AF.contains("aresample=48000:first_pts=0"));
+        assert!(!BASE_RESAMPLE_AF.contains("async=1"));
         assert_eq!(PCM_OUT, ["-f", "f32le", "-ac", "2", "-ar", "48000", "pipe:1"]);
+    }
+
+    #[test]
+    fn test_ss_is_placed_before_i_and_reconnect_options_present() {
+        let seek = Duration::from_secs(45);
+        let seek_str = seek.as_secs_f64().to_string();
+
+        let mut file_args = Vec::new();
+        file_args.extend(["-ss", &seek_str]);
+        file_args.extend(["-i", "test.webm", "-vn"]);
+        file_args.extend(["-af", BASE_RESAMPLE_AF]);
+        file_args.extend(PCM_OUT);
+
+        let ss_pos = file_args.iter().position(|&x| x == "-ss");
+        let i_pos = file_args.iter().position(|&x| x == "-i");
+        if let (Some(ss), Some(i)) = (ss_pos, i_pos) {
+            assert!(ss < i, "-ss girdiden (-i) önce olmalı");
+        } else {
+            panic!("-ss veya -i argümanı bulunamadı");
+        }
+
+        let mut url_args = Vec::new();
+        url_args.extend(["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]);
+        url_args.extend(["-ss", &seek_str]);
+        url_args.extend(["-i", "https://example.com/audio", "-vn"]);
+        let ss_pos_url = url_args.iter().position(|&x| x == "-ss");
+        let i_pos_url = url_args.iter().position(|&x| x == "-i");
+        if let (Some(ss), Some(i)) = (ss_pos_url, i_pos_url) {
+            assert!(ss < i, "-ss girdi URL'sinden (-i) önce olmalı");
+        } else {
+            panic!("-ss veya -i argümanı bulunamadı");
+        }
+        assert!(url_args.contains(&"-reconnect"));
+        assert!(url_args.contains(&"1"));
     }
 }
