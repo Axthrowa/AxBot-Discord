@@ -22,6 +22,7 @@ pub mod playlists;
 pub mod soundboard;
 mod prefetch;
 pub mod cache;
+pub mod meta_cache;
 
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -31,6 +32,7 @@ use std::time::Duration;
 
 use dashmap::DashMap;
 use poise::serenity_prelude::{self as serenity, ChannelId, GuildId, Http, UserId};
+use redis::aio::ConnectionManager;
 use songbird::input::{Input, YoutubeDl};
 use songbird::tracks::Track;
 use tokio::sync::Mutex;
@@ -127,6 +129,7 @@ pub struct TrackInfo {
 pub struct Shared {
     pub(crate) songbird: Arc<Songbird>,
     http: reqwest::Client,
+    pub(crate) redis: Option<ConnectionManager>,
     /// yt-dlp programı; `YoutubeDl` 'static yaşam süresi istediği için açılışta sabitlenir.
     ytdlp: &'static str,
     ytdlp_args: Vec<String>,
@@ -304,6 +307,14 @@ fn server_ytdlp_args() -> Vec<String> {
 
 impl Music {
     pub fn new(songbird: Arc<Songbird>, http: reqwest::Client) -> Self {
+        Self::with_options(songbird, http, None)
+    }
+
+    pub fn with_options(
+        songbird: Arc<Songbird>,
+        http: reqwest::Client,
+        redis: Option<ConnectionManager>,
+    ) -> Self {
         let tools = Path::new("tools");
         let ytdlp = find_tool(tools, "yt-dlp").unwrap_or_else(|| "yt-dlp".to_owned());
         filters::set_ytdlp(ytdlp.clone());
@@ -323,6 +334,7 @@ impl Music {
         Self(Arc::new(Shared {
             songbird,
             http,
+            redis,
             ytdlp: Box::leak(ytdlp.into_boxed_str()),
             ytdlp_args,
             tracks: Arc::new(DashMap::new()),
@@ -873,6 +885,83 @@ impl Music {
         prefetch::Prefetched::resolve(source, args, Some(self.http.clone())).await.map_err(|e| e.to_string())
     }
 
+    /// Arama sorgusunu veya bağlantıyı, önce Redis metaveri ve yerel disk önbelleğini denetleyerek
+    /// çalınabilir bir kaynağa çevirir.
+    ///
+    /// - Yol A (Redis İsabeti + Disk İsabeti): Şarkı daha önce dinlenmiş ve yerel diskte (`%TEMP%/axbot_music_cache`)
+    ///   hâlihazırda mevcutsa, yt-dlp ve Deno HİÇ çalıştırılmadan doğrudan diskten `<10 ms` içinde başlatılır.
+    /// - Yol B (Redis İsabeti + Disk Iska): Redis'te standart URL ve başlık var ancak disk önbelleği silinmişse,
+    ///   arama sorgusu yerine doğrudan kanonik URL ile yt-dlp'ye gidilir (hızlı ve doğru video garantisi).
+    /// - Yol C (Redis Iska): Normal `resolve_preferring_spotify` akışına devam edilir. Başarılı sonuç alındığında
+    ///   arkaplanda Redis'e (`q`, `vid`, `url`) anahtarlarıyla asenkron kaydedilir.
+    pub async fn resolve_with_cache(
+        &self,
+        query: &str,
+        requester: UserId,
+        guild_id: GuildId,
+    ) -> Result<(Input, TrackInfo), String> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Err("❌ Şarkı adı veya bağlantısı boş olamaz.".to_owned());
+        }
+
+        // 1. Redis'te metaveri kontrolü (fail-open)
+        if let Some(ref redis) = self.redis {
+            if let Some(meta) = meta_cache::get_cached_meta(redis, trimmed).await {
+                // Disk önbelleğinde dosya mevcut mu?
+                if let Some(cached_path) = cache::get_cached_track(&meta.webpage_url) {
+                    cache::touch_cached_track(&cached_path);
+                    let input: Input = songbird::input::File::new(cached_path).into();
+                    let info = TrackInfo {
+                        guild_id,
+                        title: meta.title,
+                        url: Some(meta.webpage_url),
+                        duration: meta.duration_secs.map(Duration::from_secs),
+                        thumbnail: meta.thumbnail,
+                        requester,
+                        announce: false,
+                        spotify_url: None,
+                    };
+                    info!(
+                        source = "redis+disk",
+                        title = %info.title,
+                        "Şarkı Redis metaveri + disk önbelleğinden anında (<10ms) başlatıldı"
+                    );
+                    return Ok((input, info));
+                }
+
+                // Yol B: Redis'te meta var ama disk dosyası yok -> kanonik URL ile doğrudan çöz
+                match self.resolve(&meta.webpage_url, requester, guild_id).await {
+                    Ok(res) => return Ok(res),
+                    Err(e) => {
+                        warn!(
+                            url = %meta.webpage_url,
+                            error = %e,
+                            "Kanonik URL çözülemedi, genel arama akışına dönülüyor"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Yol C: Standart Spotify/YouTube çözümlemesi
+        let (input, info) = self.resolve_preferring_spotify(trimmed, requester, guild_id).await?;
+
+        // Başarılı çözümleme sonrası arkaplanda Redis'e kaydet (yalnızca canlı olmayan, süresi belli parçalar)
+        if let Some(ref redis) = self.redis {
+            if info.url.is_some() && info.duration.is_some() {
+                let redis_clone = redis.clone();
+                let query_owned = trimmed.to_owned();
+                let info_clone = info.clone();
+                tokio::spawn(async move {
+                    meta_cache::save_track_info(&redis_clone, &query_owned, &info_clone).await;
+                });
+            }
+        }
+
+        Ok((input, info))
+    }
+
     /// Şarkı adıysa ve Spotify anahtarı varsa önce Spotify'da arar: kart, kapak ve bağlantı Spotify'ın
     /// (resmî ad ve sanatçı), ses aynı şarkının YouTube kaydından çalınır (Spotify sesi DRM'li; hiçbir bot
     /// doğrudan çalamaz). Spotify'da bulunamazsa ya da anahtar yoksa doğrudan YouTube'da aranır.
@@ -894,12 +983,51 @@ impl Music {
     /// Spotify'daki bir şarkıyı YouTube'da bulup çalınabilir hâle getirir; kartta Spotify bilgileri görünür.
     pub async fn resolve_spotify_track(&self, track: &extra::SpotifyTrack, requester: UserId, guild_id: GuildId) -> Result<(Input, TrackInfo), String> {
         let query = format!("{} - {}", track.artists, track.title);
+
+        // Fast-path: Redis meta + Disk cache
+        if let Some(ref redis) = self.redis {
+            if let Some(meta) = meta_cache::get_cached_meta(redis, &query).await {
+                if let Some(cached_path) = cache::get_cached_track(&meta.webpage_url) {
+                    cache::touch_cached_track(&cached_path);
+                    let input: Input = songbird::input::File::new(cached_path).into();
+                    let info = TrackInfo {
+                        guild_id,
+                        title: if track.artists.is_empty() { track.title.clone() } else { query },
+                        url: Some(meta.webpage_url),
+                        duration: meta.duration_secs.map(Duration::from_secs),
+                        thumbnail: track.cover.clone().or(meta.thumbnail),
+                        requester,
+                        announce: false,
+                        spotify_url: track.url.clone(),
+                    };
+                    info!(
+                        source = "redis+disk(spotify)",
+                        title = %info.title,
+                        "Spotify parçası Redis metaveri + disk önbelleğinden anında (<10ms) başlatıldı"
+                    );
+                    return Ok((input, info));
+                }
+            }
+        }
+
         let (input, mut info) = self.resolve(&query, requester, guild_id).await?;
-        info.title = if track.artists.is_empty() { track.title.clone() } else { query };
+        info.title = if track.artists.is_empty() { track.title.clone() } else { query.clone() };
         info.spotify_url = track.url.clone();
         if track.cover.is_some() {
             info.thumbnail = track.cover.clone();
         }
+
+        if let Some(ref redis) = self.redis {
+            if info.url.is_some() && info.duration.is_some() {
+                let redis_clone = redis.clone();
+                let query_clone = query.clone();
+                let info_clone = info.clone();
+                tokio::spawn(async move {
+                    meta_cache::save_track_info(&redis_clone, &query_clone, &info_clone).await;
+                });
+            }
+        }
+
         Ok((input, info))
     }
 
@@ -1284,15 +1412,16 @@ impl Shared {
         let next_track = {
             let handler = call.lock().await;
             let queue = handler.queue().current_queue();
-            queue.get(1).and_then(|h| this.tracks.get(&h.uuid()).map(|t| (t.url.clone(), t.duration)))
+            queue.get(1).and_then(|h| this.tracks.get(&h.uuid()).map(|t| (t.url.clone(), t.duration, t.title.clone())))
         };
-        let Some((Some(target), duration)) = next_track else { return; };
+        let Some((Some(target), duration, title)) = next_track else { return; };
         if !target.is_empty() {
-            if cache::get_cached_track(&target).is_some() {
+            if let Some(cached_path) = cache::get_cached_track(&target) {
+                cache::touch_cached_track(&cached_path);
                 return;
             }
             let _ = Music(Arc::clone(&this)).fetch(&target, false).await;
-            let _ = cache::download_to_cache(
+            let res = cache::download_to_cache(
                 Some(&this.http),
                 this.ytdlp,
                 &this.args(),
@@ -1302,6 +1431,25 @@ impl Shared {
                 duration,
             )
             .await;
+            if res.is_ok() {
+                if let Some(ref redis) = this.redis {
+                    let redis_clone = redis.clone();
+                    let target_clone = target.clone();
+                    let info = TrackInfo {
+                        guild_id,
+                        title,
+                        url: Some(target.clone()),
+                        duration,
+                        thumbnail: None,
+                        requester: UserId::new(1),
+                        announce: false,
+                        spotify_url: None,
+                    };
+                    tokio::spawn(async move {
+                        meta_cache::save_track_info(&redis_clone, &target_clone, &info).await;
+                    });
+                }
+            }
         }
     }
 
@@ -1951,5 +2099,20 @@ mod live_tests {
 
         music.empty_channels.remove(&guild_id);
         assert!(music.empty_channels.get(&guild_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_with_cache_empty_query_rejected() {
+        let music = Music::new(Songbird::serenity(), reqwest::Client::new());
+        let res = music.resolve_with_cache("   ", UserId::new(1), GuildId::new(1)).await;
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_music_with_options_initialization() {
+        let songbird = Songbird::serenity();
+        let client = reqwest::Client::new();
+        let music_none = Music::with_options(Arc::clone(&songbird), client.clone(), None);
+        assert!(music_none.redis.is_none());
     }
 }

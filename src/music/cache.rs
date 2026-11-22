@@ -39,7 +39,8 @@ pub fn ensure_cache_dir() -> std::io::Result<PathBuf> {
 
 /// URL veya şarkı kimliğinden güvenli, deterministik bir önbellek dosya adı üretir.
 pub fn track_cache_key(identifier: &str) -> String {
-    let trimmed = identifier.trim();
+    let canonical = super::meta_cache::canonical_identifier(identifier);
+    let trimmed = canonical.trim();
     let mut hasher = DefaultHasher::new();
     trimmed.hash(&mut hasher);
     let h1 = hasher.finish();
@@ -64,6 +65,13 @@ pub fn get_cached_track(identifier: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Dosyanın son erişim/değiştirme zamanını LRU için günceller.
+pub fn touch_cached_track(path: &std::path::Path) {
+    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path) {
+        let _ = file.set_modified(SystemTime::now());
+    }
 }
 
 /// URL'nin HLS akışı (parçalı / manifest) olup olmadığını denetler.
@@ -343,6 +351,15 @@ mod tests {
         assert!(!k1.contains('/'));
         assert!(!k1.contains('\\'));
         assert!(!k1.contains(':'));
+    }
+
+    #[test]
+    fn cache_key_unifies_youtube_urls() {
+        let k1 = track_cache_key("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+        let k2 = track_cache_key("https://youtu.be/dQw4w9WgXcQ");
+        let k3 = track_cache_key("https://music.youtube.com/watch?v=dQw4w9WgXcQ");
+        assert_eq!(k1, k2);
+        assert_eq!(k2, k3);
     }
 
     #[test]

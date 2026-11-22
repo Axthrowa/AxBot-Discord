@@ -330,7 +330,7 @@ pub async fn handle_modal(ctx: &serenity::Context, music: &Music, modal: &ModalI
                 modal.edit_response(ctx, EditInteractionResponse::new().content("🔇 Önce ses kanalına katıl.")).await?;
                 return Ok(());
             };
-            let text = match music.resolve_preferring_spotify(&query, modal.user.id, guild_id).await {
+            let text = match music.resolve_with_cache(&query, modal.user.id, guild_id).await {
                 Err(message) => message,
                 Ok((input, info)) => {
                     let title = info.title.clone();

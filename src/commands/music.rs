@@ -74,7 +74,7 @@ pub async fn cal(
     // Şarkı adı / arama: ses kanalına katılımı ve şarkı çözümlemesini paralel başlat
     let (join_res, resolved_res) = tokio::join!(
         music.ensure_connected(&http, guild_id, user_channel),
-        music.resolve_preferring_spotify(&query, ctx.author().id, guild_id)
+        music.resolve_with_cache(&query, ctx.author().id, guild_id)
     );
 
     if let Err(e) = join_res {

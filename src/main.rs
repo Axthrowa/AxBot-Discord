@@ -196,7 +196,7 @@ async fn run() -> anyhow::Result<()> {
 
     // Ses bağlantıları (müzik). Discord istemcisine de kaydedilir.
     let songbird = songbird::Songbird::serenity();
-    let music = Music::new(Arc::clone(&songbird), client.clone());
+    let music = Music::with_options(Arc::clone(&songbird), client.clone(), Some(redis.clone()));
     music.load_settings(&db).await?;
     match music.ytdlp_version().await {
         Some(version) => info!(yt_dlp = %version, "Müzik etkin"),
