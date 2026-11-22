@@ -63,6 +63,7 @@ async fn apply(state: &WebState, guild_id: GuildId, key: &str, value: &Value, wr
         tickets::TicketExtras,
         crate::scheduler::recurring::TimerSettings,
         backup::BackupSettings,
+        invites::InviteSettings,
     ])
 }
 
@@ -87,6 +88,47 @@ pub async fn import(state: &WebState, guild_id: GuildId, raw: &str) -> Result<us
     Ok(wanted.len())
 }
 
+/// Güvenli eklenti ayarlarını JSON nesnesi olarak çeker.
+pub async fn export_safe_settings(db: &sqlx::PgPool, guild_id: GuildId) -> anyhow::Result<Value> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT plugin, data FROM plugin_settings WHERE guild_id = $1 ORDER BY plugin",
+    )
+    .bind(snowflake(guild_id.get())?)
+    .fetch_all(db)
+    .await?;
+    let mut plugins = Map::new();
+    for (key, data) in rows {
+        if SKIP.contains(&key.as_str()) {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(&data) {
+            plugins.insert(key, value);
+        }
+    }
+    Ok(Value::Object(plugins))
+}
+
+/// Şablondan gelen ayarları güvenle uygular.
+#[allow(dead_code)]
+pub async fn apply_safe_settings(state: &WebState, guild_id: GuildId, settings: &Value) -> Result<usize, &'static str> {
+    let Some(plugins) = settings.as_object() else {
+        return Ok(0);
+    };
+    let wanted: Vec<(&String, &Value)> = plugins.iter().filter(|(key, _)| !SKIP.contains(&key.as_str())).collect();
+    for (key, value) in &wanted {
+        if !apply(state, guild_id, key, value, false).await? {
+            continue;
+        }
+    }
+    let mut count = 0;
+    for (key, value) in &wanted {
+        if apply(state, guild_id, key, value, true).await? {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 /// `GET /panel/sunucu/{id}/ayarlar-disa-aktar`: yalnızca gerçek sunucu yöneticileri.
 pub async fn export(State(state): State<WebState>, headers: HeaderMap, Path(guild): Path<u64>) -> Response {
     let Some(session) = auth::session(&state, &headers).await else {
@@ -98,22 +140,10 @@ pub async fn export(State(state): State<WebState>, headers: HeaderMap, Path(guil
     if !is_guild_admin(&state, session.user, guild_id).await {
         return forbidden();
     }
-    let rows: Result<Vec<(String, String)>, _> = match snowflake(guild_id.get()) {
-        Ok(id) => sqlx::query_as("SELECT plugin, data FROM plugin_settings WHERE guild_id = $1 ORDER BY plugin").bind(id).fetch_all(&state.db).await,
-        Err(_) => return forbidden(),
+    let plugins = match export_safe_settings(&state.db, guild_id).await {
+        Ok(Value::Object(map)) => map,
+        _ => Map::new(),
     };
-    let Ok(rows) = rows else {
-        return forbidden();
-    };
-    let mut plugins = Map::new();
-    for (key, data) in rows {
-        if SKIP.contains(&key.as_str()) {
-            continue;
-        }
-        if let Ok(value) = serde_json::from_str::<Value>(&data) {
-            plugins.insert(key, value);
-        }
-    }
     let body = serde_json::json!({ "format": FORMAT, "version": 1, "guild": guild_id.get().to_string(), "plugins": plugins });
     let text = serde_json::to_string_pretty(&body).unwrap_or_default();
     (

@@ -111,7 +111,7 @@ async fn etkinlik_iptal(ctx: Context<'_>, #[description = "Etkinlik numarası (/
     slash_command,
     guild_only,
     rename = "yedek",
-    subcommands("yedek_al", "yedek_liste", "yedek_yukle", "yedek_sil"),
+    subcommands("yedek_al", "yedek_liste", "yedek_yukle", "yedek_sil", "sablon_olustur", "sablon_yukle", "sablon_bilgi"),
     subcommand_required,
     default_member_permissions = "ADMINISTRATOR",
     required_permissions = "ADMINISTRATOR",
@@ -236,4 +236,142 @@ async fn yedek_sil(ctx: Context<'_>, #[description = "Yedek numarası (/yedek li
     };
     let text = if backup::delete(&ctx.data().db, guild_id, numara).await? { "🗑️ Yedek silindi." } else { "Bu numarada bir yedek yok." };
     reply_private(ctx, text).await
+}
+
+/// Sunucunun yapısından paylaşılabilir Xenon tarzı şablon kodu oluşturur.
+#[poise::command(slash_command, guild_only, rename = "şablon-oluştur")]
+async fn sablon_olustur(
+    ctx: Context<'_>,
+    #[description = "Şablonun adı"] #[max_length = 50] ad: String,
+    #[description = "Kategori (örn: genel, oyun, topluluk, yazılım)"] #[max_length = 20] kategori: Option<String>,
+    #[rename = "açıklama"]
+    #[description = "Şablon açıklaması"] #[max_length = 150] aciklama: Option<String>,
+) -> Result<(), Error> {
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let Some(snapshot) = backup::take(&ctx.serenity_context().cache, guild_id) else {
+        return reply_private(ctx, "Sunucu bilgisi okunamadı, biraz sonra tekrar dene.").await;
+    };
+    let safe_settings = crate::panel::transfer::export_safe_settings(&ctx.data().db, guild_id).await.ok();
+    let tmpl = backup::ServerTemplate {
+        id: backup::generate_template_id(),
+        name: ad.trim().to_owned(),
+        description: aciklama.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty()),
+        category: kategori.map(|k| k.trim().to_lowercase()).unwrap_or_else(|| "genel".to_owned()),
+        snapshot,
+        settings: safe_settings,
+    };
+    let template_id = backup::save_template(&ctx.data().db, Some(guild_id), Some(ctx.author().id), &tmpl).await?;
+    reply_private(
+        ctx,
+        format!(
+            "🧩 **Sunucu Şablonu Oluşturuldu!**\n\
+             • **Şablon Kodu:** `{template_id}`\n\
+             • **Ad:** {}\n\
+             • **Kategori:** `{}`\n\
+             • **İçerik:** {} rol, {} kanal (kanal izin ezmeleri dahil)\n\n\
+             Bu kodu herhangi bir sunucuda `/yedek şablon-yükle kod:{template_id}` ile uygulayabilirsin.",
+            tmpl.name, tmpl.category, tmpl.snapshot.roles.len(), tmpl.snapshot.channels.len()
+        ),
+    )
+    .await
+}
+
+/// Xenon tarzı bir sunucu şablonunu kod ile yükler (eksik rolleri ve kanalları oluşturur).
+#[poise::command(slash_command, guild_only, rename = "şablon-yükle")]
+async fn sablon_yukle(
+    ctx: Context<'_>,
+    #[description = "Şablon kodu"] kod: String,
+    #[description = "Gerçekten oluşturmak için Evet seçilmeli"] onay: Option<bool>,
+) -> Result<(), Error> {
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let db = &ctx.data().db;
+    let cache = &ctx.serenity_context().cache;
+    let Some(tmpl) = backup::get_template_peek(db, kod.trim()).await? else {
+        return reply_private(ctx, "Bu kodla eşleşen bir sunucu şablonu bulunamadı.").await;
+    };
+
+    let Some(current) = backup::take(cache, guild_id) else {
+        return reply_private(ctx, "Sunucu bilgisi okunamadı, biraz sonra tekrar dene.").await;
+    };
+    let (roles, channels) = backup::missing(&tmpl.snapshot, &current);
+
+    if !onay.unwrap_or(false) {
+        let preview = |names: Vec<&str>| {
+            let shown: Vec<&str> = names.iter().copied().take(15).collect();
+            shown.join(", ") + if names.len() > 15 { " …" } else { "" }
+        };
+        return reply_private(
+            ctx,
+            format!(
+                "🧩 **Şablon:** {} (`{}`) — Kategori: `{}`\n\
+                 Bu şablon yüklenirse **{}** rol ve **{}** kanal oluşturulacak; var olan hiçbir şey silinmez.\n\
+                 **Roller:** {}\n**Kanallar:** {}\n\n\
+                 Onaylıyorsan komutu `/yedek şablon-yükle kod:{} onay: Evet` ile yeniden çalıştır.",
+                tmpl.name,
+                tmpl.id,
+                tmpl.category,
+                roles.len(),
+                channels.len(),
+                preview(roles.iter().map(|r| r.name.as_str()).collect()),
+                preview(channels.iter().map(|c| c.name.as_str()).collect()),
+                tmpl.id
+            )
+            .chars()
+            .take(1900)
+            .collect::<String>(),
+        )
+        .await;
+    }
+
+    ctx.defer_ephemeral().await?;
+    let bot_permissions = {
+        let bot = cache.current_user().id;
+        cache
+            .guild(guild_id)
+            .and_then(|g| g.members.get(&bot).map(|me| g.member_permissions(me)))
+            .unwrap_or_else(serenity::Permissions::empty)
+    };
+
+    let _ = backup::get_template(db, kod.trim()).await;
+    let Some(done) = backup::restore(ctx.http(), cache, guild_id, &tmpl.snapshot, bot_permissions).await else {
+        return reply_private(ctx, "Sunucu bilgisi okunamadı, biraz sonra tekrar dene.").await;
+    };
+
+    reply_private(
+        ctx,
+        format!(
+            "♻️ **{}** şablonu uygulandı: **{}** rol, **{}** kanal oluşturuldu (kanal izin ezmeleri uygulandı).",
+            tmpl.name, done.roles, done.channels
+        ),
+    )
+    .await
+}
+
+/// Bir sunucu şablonunun içeriğini görüntüler.
+#[poise::command(slash_command, guild_only, rename = "şablon-bilgi")]
+async fn sablon_bilgi(
+    ctx: Context<'_>,
+    #[description = "Şablon kodu"] kod: String,
+) -> Result<(), Error> {
+    let db = &ctx.data().db;
+    let Some(tmpl) = backup::get_template_peek(db, kod.trim()).await? else {
+        return reply_private(ctx, "Bu kodla eşleşen bir sunucu şablonu bulunamadı.").await;
+    };
+    let desc = tmpl.description.as_deref().unwrap_or("_Açıklama belirtilmemiş_");
+    let embed = CreateEmbed::new()
+        .title(format!("🧩 Şablon: {}", tmpl.name))
+        .description(desc)
+        .colour(serenity::Colour::BLURPLE)
+        .field("Kod", format!("`{}`", tmpl.id), true)
+        .field("Kategori", format!("`{}`", tmpl.category), true)
+        .field("Rol Sayısı", tmpl.snapshot.roles.len().to_string(), true)
+        .field("Kanal Sayısı", tmpl.snapshot.channels.len().to_string(), true)
+        .field("Ayarlar", if tmpl.settings.is_some() { "✅ Var" } else { "❌ Yok" }, true);
+
+    ctx.send(CreateReply::default().embed(embed).ephemeral(true)).await?;
+    Ok(())
 }

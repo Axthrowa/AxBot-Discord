@@ -135,6 +135,7 @@ impl ModLog {
     }
 
     /// Kapanan destek biletinin özetini ve konuşma kaydını (transcript) gönderir.
+    #[allow(dead_code)]
     pub async fn ticket_closed(
         &self,
         http: &Http,
@@ -143,7 +144,22 @@ impl ModLog {
         embed: CreateEmbed,
         transcript: CreateAttachment,
     ) {
-        let message = CreateMessage::new().embed(embed).add_file(transcript);
+        self.ticket_closed_with_files(http, db, guild_id, embed, vec![transcript]).await;
+    }
+
+    /// Kapanan destek biletinin özetini ve birden çok konuşma kaydı dosyasını (.txt, .html) gönderir.
+    pub async fn ticket_closed_with_files(
+        &self,
+        http: &Http,
+        db: &PgPool,
+        guild_id: GuildId,
+        embed: CreateEmbed,
+        files: Vec<CreateAttachment>,
+    ) {
+        let mut message = CreateMessage::new().embed(embed);
+        for file in files {
+            message = message.add_file(file);
+        }
         self.send(http, db, guild_id, message).await;
     }
 

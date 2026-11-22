@@ -396,25 +396,40 @@ pub async fn layout(state: &WebState, session: &Session, nav: Nav, guild: Option
     let link = |target: Nav, href: &str, label: &str| {
         format!("<a class=\"nav{}\" href=\"{href}\">{label}</a>", if nav == target { " on" } else { "" })
     };
+    let l = session.lang;
+    let t_overview = format!("🏠 {}", crate::i18n::t(l, "panel.overview", &[]));
+    let t_logs = format!("📜 {}", crate::i18n::t(l, "panel.logs", &[]));
+    let t_system = format!("⚙️ {}", crate::i18n::t(l, "panel.system", &[]));
+    let t_plugins = format!("🧩 {}", crate::i18n::t(l, "panel.plugins", &[]));
+    let t_wizard = format!("🧭 {}", crate::i18n::t(l, "panel.wizard", &[]));
+    let t_stats = format!("📈 {}", crate::i18n::t(l, "panel.stats", &[]));
+    let t_transcripts = format!("🎫 {}", crate::i18n::t(l, "panel.transcripts", &[]));
+    let t_templates = format!("🧩 {}", crate::i18n::t(l, "panel.templates", &[]));
+    let t_health = format!("🩺 {}", crate::i18n::t(l, "panel.health", &[]));
+    let t_logout = crate::i18n::t(l, "panel.logout", &[]);
+    let t_connecting = crate::i18n::t(l, "panel.connecting", &[]);
+
     let mut aside = String::from("<div class=\"brand\">AX<span>BOT</span> PANEL</div>");
-    aside.push_str(&link(Nav::Home, "/panel", "🏠 Genel bakış"));
+    aside.push_str(&link(Nav::Home, "/panel", &t_overview));
     if owner {
-        aside.push_str(&link(Nav::Logs, "/panel/loglar", "📜 Loglar"));
-        aside.push_str(&link(Nav::System, "/panel/sistem", "⚙️ Sistem"));
+        aside.push_str(&link(Nav::Logs, "/panel/loglar", &t_logs));
+        aside.push_str(&link(Nav::System, "/panel/sistem", &t_system));
     }
     if let Some(guild) = &guild {
         let _ = write!(
             aside,
-            "<div class=\"navh\">{}</div><a class=\"nav sm{}\" href=\"/panel/sunucu/{}\">🧩 Eklentiler</a>",
+            "<div class=\"navh\">{}</div><a class=\"nav sm{}\" href=\"/panel/sunucu/{}\">{}</a>",
             escape(guild.name),
             if guild.active.is_empty() { " on" } else { "" },
-            guild.id
+            guild.id,
+            escape(&t_plugins)
         );
         let _ = write!(
             aside,
-            "<a class=\"nav sm{}\" href=\"/panel/sunucu/{}/kurulum\">🧭 Kurulum sihirbazı</a>",
+            "<a class=\"nav sm{}\" href=\"/panel/sunucu/{}/kurulum\">{}</a>",
             if guild.active == "kurulum" { " on" } else { "" },
-            guild.id
+            guild.id,
+            escape(&t_wizard)
         );
         let _ = write!(
             aside,
@@ -424,15 +439,31 @@ pub async fn layout(state: &WebState, session: &Session, nav: Nav, guild: Option
         );
         let _ = write!(
             aside,
-            "<a class=\"nav sm{}\" href=\"/panel/sunucu/{}/istatistik\">📈 İstatistikler</a>",
+            "<a class=\"nav sm{}\" href=\"/panel/sunucu/{}/istatistik\">{}</a>",
             if guild.active == "istatistik" { " on" } else { "" },
-            guild.id
+            guild.id,
+            escape(&t_stats)
         );
         let _ = write!(
             aside,
-            "<a class=\"nav sm{}\" href=\"/panel/sunucu/{}/saglik\">🩺 Sağlık kontrolü</a>",
+            "<a class=\"nav sm{}\" href=\"/panel/sunucu/{}/transkriptler\">{}</a>",
+            if guild.active == "transkriptler" { " on" } else { "" },
+            guild.id,
+            escape(&t_transcripts)
+        );
+        let _ = write!(
+            aside,
+            "<a class=\"nav sm{}\" href=\"/panel/sunucu/{}/sablonlar\">{}</a>",
+            if guild.active == "sablonlar" { " on" } else { "" },
+            guild.id,
+            escape(&t_templates)
+        );
+        let _ = write!(
+            aside,
+            "<a class=\"nav sm{}\" href=\"/panel/sunucu/{}/saglik\">{}</a>",
             if guild.active == "saglik" { " on" } else { "" },
-            guild.id
+            guild.id,
+            escape(&t_health)
         );
         let mut group = "";
         for plugin in super::plugins::PLUGINS {
@@ -451,15 +482,28 @@ pub async fn layout(state: &WebState, session: &Session, nav: Nav, guild: Option
             );
         }
     }
+    let lang_switch = format!(
+        "<div style=\"display:flex;gap:6px;justify-content:center;margin:6px 0 2px;font-size:0.75rem;\">\
+         <a href=\"?lang=tr\" onclick=\"document.cookie='lang=tr;path=/;max-age=31536000';location.reload();return false;\" style=\"color:{};font-weight:{};\">TR</a>\
+         <span style=\"color:var(--muted)\">|</span>\
+         <a href=\"?lang=en\" onclick=\"document.cookie='lang=en;path=/;max-age=31536000';location.reload();return false;\" style=\"color:{};font-weight:{};\">EN</a>\
+         </div>",
+        if l == crate::i18n::Lang::Tr { "var(--accent)" } else { "var(--muted)" },
+        if l == crate::i18n::Lang::Tr { "bold" } else { "normal" },
+        if l == crate::i18n::Lang::En { "var(--accent)" } else { "var(--muted)" },
+        if l == crate::i18n::Lang::En { "bold" } else { "normal" },
+    );
     let _ = write!(
         aside,
-        "<div class=\"me\">{}<div>{}<small>{}</small></div></div>\
+        "<div class=\"me\">{}<div>{}<small>{} · <span id=\"ws-live-badge\" style=\"color:#faa81a;font-weight:bold;\">○ {}</span></small></div></div>\
          <form method=\"post\" action=\"/panel/cikis\"><input type=\"hidden\" name=\"csrf\" value=\"{}\">\
-         <button class=\"ghost\" style=\"width:100%\">Çıkış</button></form>",
+         <button class=\"ghost\" style=\"width:100%\">{}</button></form>{lang_switch}",
         if avatar.is_empty() { String::new() } else { format!("<img src=\"{}\" alt=\"\">", escape(&avatar)) },
         escape(&name),
         if owner { "Bot sahibi" } else { "Sunucu yöneticisi" },
+        escape(&t_connecting),
         escape(&session.csrf),
+        escape(&t_logout),
     );
     document(page.title, &format!("<div class=\"shell\"><aside>{aside}</aside><main>{}</main></div>", page.body))
 }
@@ -872,6 +916,68 @@ const SCRIPT: &str = r#"(() => {
   }
   onlyWarn.addEventListener('change', () => { box.textContent = ''; after = 0; tick(); });
   tick(); setInterval(tick, 2000);
+})();
+(() => {
+  if (!location.pathname.startsWith('/panel')) return;
+  let ws, timer;
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/panel/ws');
+    ws.onopen = () => {
+      const badge = document.getElementById('ws-live-badge');
+      if (badge) { badge.textContent = '● Canlı'; badge.style.color = '#57f287'; }
+    };
+    ws.onmessage = (e) => {
+      try {
+        const ev = JSON.parse(e.data);
+        if (window.onRealtimeEvent) window.onRealtimeEvent(ev);
+        if (ev.type === 'track_change' && ev.data) {
+          const trackEl = document.getElementById('now-track-title');
+          if (trackEl) trackEl.textContent = ev.data.title;
+        }
+      } catch (err) {}
+    };
+    ws.onclose = () => {
+      const badge = document.getElementById('ws-live-badge');
+      if (badge) { badge.textContent = '○ Bağlanıyor'; badge.style.color = '#faa81a'; }
+      clearTimeout(timer);
+      timer = setTimeout(connect, 3000);
+    };
+  }
+  connect();
+})();
+(() => {
+  const preview = document.getElementById('embed-preview');
+  if (!preview) return;
+  const inTitle = document.querySelector('input[name="embed_title"]');
+  const inDesc = document.querySelector('textarea[name="embed_description"]');
+  const inColour = document.querySelector('input[name="embed_colour"]');
+  const inAuthor = document.querySelector('input[name="embed_author"]');
+  const inFooter = document.querySelector('input[name="embed_footer"]');
+  const pTitle = document.getElementById('prev-title');
+  const pDesc = document.getElementById('prev-desc');
+  const pAuthor = document.getElementById('prev-author');
+  const pFooter = document.getElementById('prev-footer');
+
+  function update() {
+    if (inColour && preview) preview.style.borderLeftColor = inColour.value;
+    if (inTitle && pTitle) pTitle.textContent = inTitle.value || 'Gömülü Mesaj Başlığı';
+    if (inDesc && pDesc) pDesc.textContent = inDesc.value || 'Mesaj açıklaması burada görünecektir.';
+    if (inAuthor && pAuthor) {
+      pAuthor.textContent = inAuthor.value;
+      pAuthor.style.display = inAuthor.value ? 'block' : 'none';
+    }
+    if (inFooter && pFooter) {
+      pFooter.textContent = inFooter.value;
+      pFooter.style.display = inFooter.value ? 'block' : 'none';
+    }
+  }
+  ['input', 'change'].forEach(ev => {
+    document.addEventListener(ev, (e) => {
+      if (e.target && e.target.name && e.target.name.startsWith('embed_')) update();
+    });
+  });
+  update();
 })();"#;
 
 pub async fn script() -> Response {

@@ -27,6 +27,7 @@ pub struct Session {
     pub id: String,
     pub user: UserId,
     pub csrf: String,
+    pub lang: crate::i18n::Lang,
 }
 
 fn random_hex() -> String {
@@ -66,7 +67,8 @@ pub async fn session(state: &WebState, headers: &HeaderMap) -> Option<Session> {
     let value: Option<String> = redis::cmd("GET").arg(format!("panel:oturum:{id}")).query_async(&mut conn).await.ok()?;
     let (user, csrf) = value?.split_once(':').map(|(u, c)| (u.to_owned(), c.to_owned()))?;
     let user = user.parse::<u64>().ok().filter(|u| *u != 0).map(UserId::new)?;
-    Some(Session { id, user, csrf })
+    let lang = crate::i18n::resolve_web_lang(headers, None);
+    Some(Session { id, user, csrf, lang })
 }
 
 /// Oturum yoksa gösterilecek sayfa.

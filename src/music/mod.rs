@@ -11,6 +11,8 @@
 //! şarkı ekleyebilsin diye.
 
 pub mod card;
+pub mod driver;
+pub mod lyrics;
 pub mod render;
 mod events;
 pub mod extra;
@@ -46,8 +48,6 @@ pub use self::events::track_line;
 pub const MAX_QUEUE: usize = 100;
 /// Varsayılan ses seviyesi (1.0 = %100).
 const DEFAULT_VOLUME: f32 = 0.6;
-/// Kuyruk boşken kanalda bu kadar beklenir, sonra ayrılınır.
-const IDLE_LEAVE_AFTER: Duration = Duration::from_secs(5 * 60);
 /// Çalma listesi okuma süresi sınırı.
 const PLAYLIST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Seslendirilecek metnin en fazla uzunluğu.
@@ -66,13 +66,45 @@ static RESOLVE_CACHE: std::sync::LazyLock<dashmap::DashMap<String, (songbird::in
 const RESOLVE_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const RESOLVE_CACHE_MAX: usize = 500;
 
-/// Sunucu başına müzik ayarları (veritabanında kalıcı).
-#[derive(Debug, Clone, Copy, Default)]
+/// Sunucu başına birleşik müzik ayarları (veritabanında kalıcı).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct MusicSettings {
     /// 7/24: kanal boşalsa da kuyruk bitse de ayrılma.
     pub always_on: bool,
     /// Kuyruk bitince benzer şarkılarla devam et.
     pub autoplay: bool,
+    /// Boşta kalınca ayrılma süresi (saniye; varsayılan 300 = 5 dk, 0 = anında).
+    pub idle_disconnect_secs: u32,
+    /// Tek bir ses oturumunda kalma üst süresi (dakika; 0 = sınırsız).
+    pub max_session_mins: u32,
+    /// Varsayılan ses seviyesi (1-100; varsayılan 60).
+    pub default_volume: u16,
+    /// Maksimum parça süresi (saniye; 0 = sınırsız).
+    pub max_length_secs: u32,
+    /// DJ rolü (varsa yalnızca bu rol ve yöneticiler yönetir).
+    pub dj_role: Option<u64>,
+}
+
+impl Default for MusicSettings {
+    fn default() -> Self {
+        Self {
+            always_on: false,
+            autoplay: false,
+            idle_disconnect_secs: 300,
+            max_session_mins: 0,
+            default_volume: 60,
+            max_length_secs: 0,
+            dj_role: None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub type MusicConfig = MusicSettings;
+
+impl crate::settings::PluginConfig for MusicSettings {
+    const KEY: &'static str = "music";
 }
 
 #[derive(Debug, Clone)]
@@ -91,22 +123,28 @@ pub struct TrackInfo {
 }
 
 pub struct Shared {
-    songbird: Arc<Songbird>,
+    pub(crate) songbird: Arc<Songbird>,
     http: reqwest::Client,
     /// yt-dlp programı; `YoutubeDl` 'static yaşam süresi istediği için açılışta sabitlenir.
     ytdlp: &'static str,
     ytdlp_args: Vec<String>,
-    tracks: Arc<DashMap<Uuid, TrackInfo>>,
+    pub(crate) tracks: Arc<DashMap<Uuid, TrackInfo>>,
     volumes: DashMap<GuildId, f32>,
     /// Duyuruların yapılacağı metin kanalı (son `/çal` kullanılan kanal).
-    text_channels: Arc<DashMap<GuildId, ChannelId>>,
-    settings: Arc<DashMap<GuildId, MusicSettings>>,
+    pub(crate) text_channels: Arc<DashMap<GuildId, ChannelId>>,
+    pub(crate) settings: Arc<DashMap<GuildId, MusicSettings>>,
+    pub(crate) session_started: Arc<DashMap<GuildId, std::time::Instant>>,
+    driver: Arc<dyn driver::AudioDriver>,
     /// Son çalınan YouTube video kimlikleri (otomatik çalma tekrar etmesin).
     history: DashMap<GuildId, VecDeque<String>>,
     /// Sunucudaki son "şimdi çalıyor" kartı; yenisi gelince eskisinin butonları kaldırılır.
     cards: DashMap<GuildId, (ChannelId, serenity::MessageId)>,
     /// Kartını canlı güncelleyen görevi çalışan sunucular (sunucu başına tek görev).
     card_tasks: dashmap::DashSet<GuildId>,
+    /// Otomatik çalma sorgusu çalışan sunucular (çift istek/çakışma engeli).
+    pub(crate) autoplay_tasks: Arc<dashmap::DashSet<GuildId>>,
+    /// Ses kanalında dinleyici kalmadığında geçen süreyi takip eder.
+    pub(crate) empty_channels: Arc<DashMap<GuildId, std::time::Instant>>,
     /// Çözümlenmiş kapak görselleri (adres → görsel; bulunamadıysa `None`).
     covers: DashMap<String, Option<Arc<image::RgbaImage>>>,
     /// Kartta yazan "isteyen" adları.
@@ -127,6 +165,17 @@ impl Shared {
         let mut args = self.ytdlp_args.clone();
         args.extend(client_args(preferred_client().as_deref()));
         args
+    }
+
+    /// Sunucu için geçerli ses seviyesini döner (ayarlanmış seviye veya sunucu varsayılanı).
+    pub fn volume_of(&self, guild_id: GuildId) -> f32 {
+        self.volumes.get(&guild_id).map_or_else(
+            || {
+                let def = self.settings.get(&guild_id).map(|s| s.default_volume).unwrap_or(60);
+                (f32::from(def)) / 100.0
+            },
+            |v| *v,
+        )
     }
 }
 
@@ -242,6 +291,7 @@ impl Music {
         }
         ytdlp_args.extend(server_ytdlp_args());
 
+        let driver = driver::resolve_driver(&http);
         Self(Arc::new(Shared {
             songbird,
             http,
@@ -251,9 +301,13 @@ impl Music {
             volumes: DashMap::new(),
             text_channels: Arc::new(DashMap::new()),
             settings: Arc::new(DashMap::new()),
+            session_started: Arc::new(DashMap::new()),
+            driver,
             history: DashMap::new(),
             cards: DashMap::new(),
             card_tasks: dashmap::DashSet::new(),
+            autoplay_tasks: Arc::new(dashmap::DashSet::new()),
+            empty_channels: Arc::new(DashMap::new()),
             covers: DashMap::new(),
             names: DashMap::new(),
             guild_names: DashMap::new(),
@@ -270,7 +324,53 @@ impl Music {
         }
     }
 
-    /// Kalıcı 7/24 ve otomatik çalma ayarlarını yükler.
+    /// Aktif ses sürücüsü (NativeSongbird veya Lavalink v4).
+    pub fn driver(&self) -> &dyn driver::AudioDriver {
+        self.driver.as_ref()
+    }
+
+    /// Müzik yönetim yetkisi denetimi:
+    /// - DJ rolü ayarlanmamışsa herkes yönetebilir.
+    /// - Sunucu sahibi veya Yönetici/Sunucuyu Yönet iznine sahip olanlar.
+    /// - DJ rolüne sahip üyeler.
+    /// - Çalan parçayı veya kuyruktaki ilgili parçayı ekleyen üye (requester).
+    /// - Kanalda bot dışında yalnızca 1 dinleyici varsa (baş başa kalındıysa).
+    pub fn can_manage(
+        &self,
+        cache: &serenity::Cache,
+        guild_id: GuildId,
+        user_id: UserId,
+        channel_id: ChannelId,
+        requester: Option<UserId>,
+    ) -> bool {
+        let settings = self.settings(guild_id);
+        let Some(dj_role) = settings.dj_role else {
+            return true;
+        };
+
+        if Some(user_id) == requester {
+            return true;
+        }
+
+        cache.guild(guild_id).is_none_or(|guild| {
+            let Some(member) = guild.members.get(&user_id) else {
+                return false;
+            };
+            let manages = guild.owner_id == user_id
+                || guild.member_permissions(member).intersects(
+                    serenity::Permissions::ADMINISTRATOR | serenity::Permissions::MANAGE_GUILD,
+                );
+            let listeners = guild
+                .voice_states
+                .values()
+                .filter(|v| v.channel_id == Some(channel_id) && guild.members.get(&v.user_id).is_some_and(|m| !m.user.bot))
+                .count();
+
+            manages || member.roles.iter().any(|r| r.get() == dj_role) || listeners <= 1
+        })
+    }
+
+    /// Kalıcı birleşik müzik ayarlarını yükler.
     pub async fn load_settings(&self, db: &PgPool) -> anyhow::Result<()> {
         let rows: Vec<(i64, bool, bool)> = sqlx::query_as(
             "SELECT guild_id, music_247, music_autoplay FROM guild_settings WHERE music_247 OR music_autoplay",
@@ -278,8 +378,39 @@ impl Music {
         .fetch_all(db)
         .await?;
         for (guild, always_on, autoplay) in rows {
-            if let Some(guild) = to_id(Some(guild)) {
-                self.settings.insert(GuildId::new(guild), MusicSettings { always_on, autoplay });
+            if let Some(guild_id) = to_id(Some(guild)).map(GuildId::new) {
+                self.settings.insert(
+                    guild_id,
+                    MusicSettings {
+                        always_on,
+                        autoplay,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+
+        let extras: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT guild_id, data FROM plugin_settings WHERE plugin = 'music'",
+        )
+        .fetch_all(db)
+        .await
+        .unwrap_or_default();
+
+        for (guild, data) in extras {
+            if let (Some(guild_id), Ok(cfg)) = (to_id(Some(guild)).map(GuildId::new), serde_json::from_str::<MusicSettings>(&data)) {
+                self.settings
+                    .entry(guild_id)
+                    .and_modify(|s| {
+                        s.dj_role = cfg.dj_role;
+                        s.idle_disconnect_secs = cfg.idle_disconnect_secs;
+                        s.max_session_mins = cfg.max_session_mins;
+                        s.default_volume = cfg.default_volume;
+                        s.max_length_secs = cfg.max_length_secs;
+                        if cfg.always_on { s.always_on = true; }
+                        if cfg.autoplay { s.autoplay = true; }
+                    })
+                    .or_insert(cfg);
             }
         }
         Ok(())
@@ -300,6 +431,18 @@ impl Music {
         .bind(settings.autoplay)
         .execute(db)
         .await?;
+
+        if let Ok(json) = serde_json::to_string(&settings) {
+            let _ = sqlx::query(
+                "INSERT INTO plugin_settings (guild_id, plugin, data) VALUES ($1, 'music', $2)
+                 ON CONFLICT (guild_id, plugin) DO UPDATE SET data = EXCLUDED.data",
+            )
+            .bind(snowflake(guild_id.get())?)
+            .bind(json)
+            .execute(db)
+            .await;
+        }
+
         self.settings.insert(guild_id, settings);
         Ok(())
     }
@@ -331,6 +474,7 @@ impl Music {
         let handle = queue.add_with_preload(Track::new(input).volume(volume), &mut handler, None);
         queue.modify_queue(|q| {
             if q.len() > 1 {
+                let _ = q.pop_front();
                 if let Some(track) = q.pop_back() {
                     q.push_front(track);
                 }
@@ -474,7 +618,7 @@ impl Music {
     }
 
     pub fn volume_of(&self, guild_id: GuildId) -> f32 {
-        self.volumes.get(&guild_id).map_or(DEFAULT_VOLUME, |v| *v)
+        self.0.volume_of(guild_id)
     }
 
     /// Ses seviyesini kaydeder ve çalan + sıradaki tüm şarkılara uygular.
@@ -800,20 +944,13 @@ impl Music {
         let mut handler = call.lock().await;
 
         if first_join {
+            self.session_started.insert(guild_id, std::time::Instant::now());
             if let Err(e) = handler.deafen(true).await {
                 warn!(guild = %guild_id, error = %e, "Bot kendini sağırlaştıramadı");
             }
             handler.add_global_event(
                 Event::Periodic(Duration::from_secs(60), None),
-                IdleLeaver::new(
-                    Arc::clone(&self.songbird),
-                    Arc::clone(&self.tracks),
-                    Arc::clone(&self.text_channels),
-                    Arc::clone(&self.settings),
-                    Arc::clone(&http),
-                    guild_id,
-                    IDLE_LEAVE_AFTER,
-                ),
+                IdleLeaver::new(Arc::downgrade(&self.0), Arc::clone(&http), guild_id),
             );
             info!(guild = %guild_id, channel = %voice_channel, "Ses kanalına katılındı");
         }
@@ -827,6 +964,10 @@ impl Music {
 
     /// Müziği durdurur, kuyruğu temizler ve kanaldan ayrılır.
     pub async fn stop_and_leave(&self, guild_id: GuildId) {
+        self.session_started.remove(&guild_id);
+        self.autoplay_tasks.remove(&guild_id);
+        self.empty_channels.remove(&guild_id);
+        self.card_tasks.remove(&guild_id);
         if let Some(call) = self.songbird.get(guild_id) {
             call.lock().await.queue().stop();
         }
@@ -865,13 +1006,21 @@ impl Music {
             return;
         }
         if humans_left == 0 {
-            info!(guild = %guild_id, "Ses kanalında kimse kalmadı, ayrılınıyor");
-            self.stop_and_leave(guild_id).await;
-            if let (Some(channel), true) = (self.text_channels.get(&guild_id).map(|c| *c), bot_channel.is_some()) {
-                let _ = channel
-                    .say(&ctx.http, "👋 Ses kanalında kimse kalmadı, ayrıldım.")
-                    .await;
+            let settings = self.settings(guild_id);
+            if settings.idle_disconnect_secs == 0 {
+                info!(guild = %guild_id, "Ses kanalında kimse kalmadı, anında ayrılınıyor");
+                self.stop_and_leave(guild_id).await;
+                if let (Some(channel), true) = (self.text_channels.get(&guild_id).map(|c| *c), bot_channel.is_some()) {
+                    let _ = channel
+                        .say(&ctx.http, "👋 Ses kanalında kimse kalmadı, ayrıldım.")
+                        .await;
+                }
+            } else {
+                self.empty_channels.entry(guild_id).or_insert_with(std::time::Instant::now);
+                info!(guild = %guild_id, wait = settings.idle_disconnect_secs, "Ses kanalında kimse kalmadı, boşta bekleme devrede");
             }
+        } else {
+            self.empty_channels.remove(&guild_id);
         }
     }
 }
@@ -1141,7 +1290,7 @@ impl Shared {
         let Some(guild_id) = items.first().map(|(_, info)| info.guild_id) else {
             return;
         };
-        let volume = this.volumes.get(&guild_id).map_or(DEFAULT_VOLUME, |v| *v);
+        let volume = this.volume_of(guild_id);
         for (input, mut info) in items {
             let input = filters::wrap(input, guild_id, &this.filters);
             // Sıraya eklenenler (veya otomatik çalınanlar) başlayınca duyurulur.
@@ -1183,6 +1332,17 @@ impl Shared {
     /// Kuyruk bittiyse son şarkıya benzer bir şarkıyı (YouTube Mix) sıraya ekler.
     async fn autoplay_after(this: Arc<Self>, http: Arc<Http>, finished: TrackInfo) {
         let guild_id = finished.guild_id;
+        if !this.autoplay_tasks.insert(guild_id) {
+            return;
+        }
+        struct AutoplayGuard<'a>(&'a dashmap::DashSet<GuildId>, GuildId);
+        impl Drop for AutoplayGuard<'_> {
+            fn drop(&mut self) {
+                self.0.remove(&self.1);
+            }
+        }
+        let _guard = AutoplayGuard(&this.autoplay_tasks, guild_id);
+
         // Bitişten hemen sonra sıradaki şarkı başlamış olabilir; kısa bekleyip bakılır.
         tokio::time::sleep(Duration::from_millis(800)).await;
         let Some(call) = this.songbird.get(guild_id) else {
@@ -1522,5 +1682,138 @@ mod live_tests {
         assert!(playable.is_playable(), "listedeki ilk şarkı çözülemedi");
         println!("ilk şarkı çalınabilir ({:.1} sn)", started.elapsed().as_secs_f64());
         Ok(())
+    }
+
+    #[test]
+    fn test_music_settings_default_values_and_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        let defaults = MusicSettings::default();
+        assert!(!defaults.always_on);
+        assert!(!defaults.autoplay);
+        assert_eq!(defaults.idle_disconnect_secs, 300);
+        assert_eq!(defaults.max_session_mins, 0);
+        assert_eq!(defaults.default_volume, 60);
+        assert_eq!(defaults.max_length_secs, 0);
+        assert_eq!(defaults.dj_role, None);
+
+        let custom = MusicSettings {
+            always_on: true,
+            autoplay: true,
+            idle_disconnect_secs: 120,
+            max_session_mins: 60,
+            default_volume: 80,
+            max_length_secs: 600,
+            dj_role: Some(999988887777),
+        };
+        let json = serde_json::to_string(&custom)?;
+        let parsed: MusicSettings = serde_json::from_str(&json)?;
+        assert_eq!(parsed, custom);
+        Ok(())
+    }
+
+    #[test]
+    fn test_music_settings_backward_compatibility_with_old_json() -> Result<(), Box<dyn std::error::Error>> {
+        let old_extras_json = r#"{"dj_role": 123456789}"#;
+        let parsed: MusicSettings = serde_json::from_str(old_extras_json)?;
+        assert_eq!(parsed.dj_role, Some(123456789));
+        assert_eq!(parsed.idle_disconnect_secs, 300);
+        assert_eq!(parsed.default_volume, 60);
+        assert!(!parsed.always_on);
+        assert!(!parsed.autoplay);
+
+        let old_bool_json = r#"{"always_on": true, "autoplay": false}"#;
+        let parsed2: MusicSettings = serde_json::from_str(old_bool_json)?;
+        assert!(parsed2.always_on);
+        assert!(!parsed2.autoplay);
+        assert_eq!(parsed2.idle_disconnect_secs, 300);
+        assert_eq!(parsed2.dj_role, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_can_manage_dj_rules() {
+        let music = Music::new(Songbird::serenity(), reqwest::Client::new());
+        let cache = serenity::Cache::new();
+        let guild_id = GuildId::new(100);
+        let user1 = UserId::new(1);
+        let user2 = UserId::new(2);
+        let channel = ChannelId::new(50);
+
+        // Default settings: dj_role is None -> everyone can manage
+        assert!(music.can_manage(&cache, guild_id, user1, channel, None));
+        assert!(music.can_manage(&cache, guild_id, user2, channel, Some(user1)));
+
+        // Set DJ role
+        let settings = MusicSettings {
+            dj_role: Some(999),
+            ..Default::default()
+        };
+        music.settings.insert(guild_id, settings);
+
+        // Requester can always manage their own song even if DJ role is set
+        assert!(music.can_manage(&cache, guild_id, user1, channel, Some(user1)));
+    }
+
+    #[test]
+    fn test_volume_of_and_default_volume() {
+        let music = Music::new(Songbird::serenity(), reqwest::Client::new());
+        let guild_id = GuildId::new(42);
+
+        // Varsayılan: 60 -> 0.60
+        let v0 = music.volume_of(guild_id);
+        assert!((v0 - 0.60).abs() < 0.001);
+
+        // Sunucu ayarlarında default_volume = 80 -> 0.80
+        music.settings.insert(guild_id, MusicSettings {
+            default_volume: 80,
+            ..Default::default()
+        });
+        let v1 = music.volume_of(guild_id);
+        assert!((v1 - 0.80).abs() < 0.001);
+
+        // Komutla özel ses seviyesi atanırsa (ör. %120 -> 1.20)
+        music.set_volume(guild_id, 1.20);
+        let v2 = music.volume_of(guild_id);
+        assert!((v2 - 1.20).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_filter_toggling_in_music() {
+        let music = Music::new(Songbird::serenity(), reqwest::Client::new());
+        let guild_id = GuildId::new(77);
+
+        assert!(music.filters.get(&guild_id).is_none());
+
+        music.set_filter(guild_id, filters::Filter::Nightcore);
+        assert_eq!(music.filters.get(&guild_id).map(|f| *f), Some(filters::Filter::Nightcore));
+
+        // Kapalı yapılınca haritadan tamamen silinmeli
+        music.set_filter(guild_id, filters::Filter::Off);
+        assert!(music.filters.get(&guild_id).is_none());
+    }
+
+    #[test]
+    fn test_autoplay_task_concurrency_lock() {
+        let music = Music::new(Songbird::serenity(), reqwest::Client::new());
+        let guild_id = GuildId::new(99);
+
+        assert!(music.autoplay_tasks.insert(guild_id));
+        // İkinci eşzamanlı ekleme başarısız olmalı (tekil çalışma garantisi)
+        assert!(!music.autoplay_tasks.insert(guild_id));
+
+        music.autoplay_tasks.remove(&guild_id);
+        assert!(music.autoplay_tasks.insert(guild_id));
+    }
+
+    #[test]
+    fn test_empty_channels_lifecycle() {
+        let music = Music::new(Songbird::serenity(), reqwest::Client::new());
+        let guild_id = GuildId::new(101);
+
+        assert!(music.empty_channels.get(&guild_id).is_none());
+        music.empty_channels.insert(guild_id, std::time::Instant::now());
+        assert!(music.empty_channels.get(&guild_id).is_some());
+
+        music.empty_channels.remove(&guild_id);
+        assert!(music.empty_channels.get(&guild_id).is_none());
     }
 }

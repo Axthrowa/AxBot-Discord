@@ -17,7 +17,7 @@ use crate::tickets::{self, ClaimOutcome, OpenTicket, TicketSettings};
     slash_command,
     guild_only,
     rename = "bilet",
-    subcommands("kur", "ustlen", "ekle", "cikar", "kapat", "yeniden_ac", "sil"),
+    subcommands("kur", "ustlen", "devret", "ekle", "cikar", "kapat", "yeniden_ac", "sil", "paneller"),
     subcommand_required,
     category = "Destek"
 )]
@@ -43,6 +43,9 @@ async fn kur(
     #[rename = "destek_rolü"]
     #[description = "Biletleri görebilecek destek ekibi rolü (opsiyonel)"]
     destek_rolu: Option<serenity::Role>,
+    #[rename = "başlık"]
+    #[description = "Panel başlığı (varsayılan: Destek Talebi)"]
+    baslik: Option<String>,
 ) -> Result<(), Error> {
     let guild_id = ctx
         .guild_id()
@@ -56,20 +59,36 @@ async fn kur(
     tickets::save_settings(&data.db, guild_id, &settings).await?;
 
     let extras = data.settings.get::<tickets::TicketExtras>(&data.db, guild_id).await?;
-    if let Err(e) = kanal.id.send_message(ctx.http(), tickets::panel_message(&extras)).await {
-        ctx.send(
-            CreateReply::default()
-                .content(format!(
-                    "❌ Ayarlar kaydedildi ama panel {} kanalına gönderilemedi: {e}",
-                    kanal.id.mention()
-                ))
-                .ephemeral(true),
-        )
-        .await?;
-        return Ok(());
-    }
+    let sent_msg = match kanal.id.send_message(ctx.http(), tickets::panel_message(&extras)).await {
+        Ok(msg) => msg,
+        Err(e) => {
+            ctx.send(
+                CreateReply::default()
+                    .content(format!(
+                        "❌ Ayarlar kaydedildi ama panel {} kanalına gönderilemedi: {e}",
+                        kanal.id.mention()
+                    ))
+                    .ephemeral(true),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    let panel_title = baslik.as_deref().unwrap_or("Destek Talebi");
+    let panel = tickets::TicketPanel {
+        id: 0,
+        guild_id,
+        channel_id: kanal.id,
+        message_id: Some(sent_msg.id),
+        title: panel_title.to_owned(),
+        category_id: kategori.as_ref().map(|c| c.id),
+        support_role_id: destek_rolu.as_ref().map(|r| r.id),
+    };
+    let _ = tickets::save_panel(&data.db, &panel).await;
 
     let mut summary = format!("✅ Bilet paneli {} kanalına gönderildi.", kanal.id.mention());
+    summary.push_str(&format!("\n• Başlık: **{}**", panel_title));
     match &kategori {
         Some(c) => summary.push_str(&format!("\n• Kategori: **{}**", c.name)),
         None => summary.push_str("\n• Kategori: _yok (biletler kategorisiz açılır)_"),
@@ -100,6 +119,44 @@ async fn ustlen(ctx: Context<'_>) -> Result<(), Error> {
         ClaimOutcome::NotATicket => "Bu komutu açık bir bilet kanalında kullanmalısın.".to_owned(),
     };
     reply_private(ctx, text).await
+}
+
+/// Açık bileti başka bir yetkiliye devreder (destek ekibi).
+#[poise::command(slash_command, guild_only, rename = "devret", required_bot_permissions = "MANAGE_ROLES")]
+async fn devret(
+    ctx: Context<'_>,
+    #[rename = "yetkili"]
+    #[description = "Biletin devredileceği destek yetkilisi"]
+    member: serenity::Member,
+) -> Result<(), Error> {
+    if !staff_check(ctx).await? {
+        return Ok(());
+    }
+    if member.user.bot {
+        return reply_private(ctx, "Biletler botlara devredilemez.").await;
+    }
+    let guild_id = ctx
+        .guild_id()
+        .ok_or_else(|| anyhow!("guild_only komut sunucu dışında çalıştı"))?;
+    if !tickets::is_staff(&ctx.data().db, guild_id, &member).await? {
+        return reply_private(ctx, "Bileti devredeceğin üye destek ekibinde olmalıdır.").await;
+    }
+    let Some(ticket) = current_ticket(ctx).await? else {
+        return Ok(());
+    };
+    let _ = tickets::add_member(ctx.http(), ctx.channel_id(), member.user.id).await;
+    match tickets::transfer(&ctx.data().db, ctx.channel_id(), member.user.id).await? {
+        Some(number) => {
+            ctx.say(format!(
+                "🔄 Bilet #{number:04} {} tarafından {} yetkilisine devredildi.",
+                ctx.author().id.mention(),
+                member.user.id.mention()
+            ))
+            .await?;
+            Ok(())
+        }
+        None => reply_private(ctx, format!("Bu komutu açık bir bilet kanalında (#{number:04}) kullanmalısın.", number = ticket.number)).await,
+    }
 }
 
 /// Bilete bir üye ekler (destek ekibi).
@@ -183,11 +240,16 @@ async fn current_ticket(ctx: Context<'_>) -> Result<Option<OpenTicket>, Error> {
 
 /// Bulunduğun destek biletini kapatır.
 #[poise::command(slash_command, guild_only)]
-async fn kapat(ctx: Context<'_>) -> Result<(), Error> {
+async fn kapat(
+    ctx: Context<'_>,
+    #[rename = "gerekçe"]
+    #[description = "Biletin kapanma gerekçesi (opsiyonel)"]
+    gerekce: Option<String>,
+) -> Result<(), Error> {
     let guild_id = ctx.guild_id().ok_or_else(|| anyhow!("guild_only komut sunucu dışında çalıştı"))?;
     let data = ctx.data();
     let member = ctx.author_member().await;
-    let closing = match tickets::begin_close(&data.db, guild_id, ctx.channel_id(), ctx.author().id, member.as_deref()).await? {
+    let closing = match tickets::begin_close(&data.db, guild_id, ctx.channel_id(), ctx.author().id, member.as_deref(), gerekce.as_deref()).await? {
         Ok(closing) => closing,
         Err(reason) => return reply_private(ctx, reason).await,
     };
@@ -226,4 +288,45 @@ async fn sil(ctx: Context<'_>) -> Result<(), Error> {
         Ok(()) => Ok(()),
         Err(reason) => reply_private(ctx, reason).await,
     }
+}
+
+/// Sunucuda kayıtlı bilet panellerini listeler.
+#[poise::command(
+    slash_command,
+    guild_only,
+    required_permissions = "MANAGE_GUILD"
+)]
+async fn paneller(ctx: Context<'_>) -> Result<(), Error> {
+    let guild_id = ctx
+        .guild_id()
+        .ok_or_else(|| anyhow!("guild_only komut sunucu dışında çalıştı"))?;
+    let panels = tickets::list_panels(&ctx.data().db, guild_id).await?;
+    if panels.is_empty() {
+        return reply_private(ctx, "Sunucuda kayıtlı bilet paneli bulunamadı. `/bilet kur` ile oluşturabilirsin.").await;
+    }
+    let mut desc = String::new();
+    for (i, p) in panels.iter().enumerate() {
+        let cat_str = match p.category_id {
+            Some(c) => format!("<#{c}>"),
+            None => "_Yok_".to_string(),
+        };
+        let sup_str = match p.support_role_id {
+            Some(r) => format!("<@&{r}>"),
+            None => "_Yok_".to_string(),
+        };
+        desc.push_str(&format!(
+            "**{}. {}** — <#{}>\n• Kategori: {}\n• Destek Rolü: {}\n\n",
+            i + 1,
+            p.title,
+            p.channel_id,
+            cat_str,
+            sup_str
+        ));
+    }
+    let embed = serenity::CreateEmbed::new()
+        .title("🎫 Kayıtlı Bilet Panelleri")
+        .colour(serenity::Colour::BLURPLE)
+        .description(desc);
+    ctx.send(CreateReply::default().embed(embed).ephemeral(true)).await?;
+    Ok(())
 }

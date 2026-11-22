@@ -86,7 +86,6 @@ pub async fn starboard_save(state: &WebState, guild_id: GuildId, input: &Input<'
 
 pub async fn music_fields(state: &WebState, guild_id: GuildId, options: &Options) -> anyhow::Result<(String, bool)> {
     let settings = state.music.settings(guild_id);
-    let extras = state.settings.get::<crate::music::playlists::MusicExtras>(&state.db, guild_id).await?;
     let now = match state.music.card_state(guild_id).await {
         Some((track, card)) => format!(
             "<p>▶️ <b>{}</b>{}<br><span class=\"note\">Sırada {} şarkı · ses %{:.0}{}</span></p>{}",
@@ -99,27 +98,61 @@ pub async fn music_fields(state: &WebState, guild_id: GuildId, options: &Options
         ),
         None => "<p class=\"note\">Şu an müzik çalmıyor. Bir ses kanalına girip Discord'da <code>/çal</code> yaz.</p>".to_owned(),
     };
+    let driver_name = state.music.driver().name();
     let out = section("Şu an", now)
         + &section(
-            "Ayarlar",
-            checkbox("always_on", settings.always_on, "7/24 modu: kanal boşalsa da sıra bitse de ses kanalından ayrılma")
+            "Müzik Ayarları",
+            format!("<p class=\"note\" style=\"margin-bottom:12px;\">Aktif Sürücü: <b>{}</b></p>", escape(driver_name))
+                + &checkbox("always_on", settings.always_on, "7/24 modu: kanal boşalsa da sıra bitse de ses kanalından ayrılma")
                 + &checkbox("autoplay", settings.autoplay, "Otomatik çalma: sıra bitince benzer şarkılarla devam et")
                 + &field(
                     "DJ rolü",
-                    &Options::select("dj_role", &options.all_roles, "@ ", extras.dj_role, "— Herkes yönetebilir —"),
+                    &Options::select("dj_role", &options.all_roles, "@ ", settings.dj_role, "— Herkes yönetebilir —"),
                     "Seçersen geç / durdur / ses gibi komutları yalnızca bu roldekiler, yöneticiler ve kanalda tek başına olan üye kullanır. Şarkı eklemek herkese açık kalır.",
+                )
+                + &field(
+                    "Boşta ayrılma süresi (saniye)",
+                    &format!("<input type=\"number\" name=\"idle_disconnect_secs\" value=\"{}\" min=\"0\" max=\"3600\">", settings.idle_disconnect_secs),
+                    "7/24 kapalıyken kanal boşalınca veya şarkı bitince ayrılmadan önce bekleme süresi (0 = hemen ayrıl, varsayılan 300 = 5 dakika)",
+                )
+                + &field(
+                    "Maksimum oturum süresi (dakika)",
+                    &format!("<input type=\"number\" name=\"max_session_mins\" value=\"{}\" min=\"0\" max=\"1440\">", settings.max_session_mins),
+                    "Tek bir oturumda botun ses kanalında kesintisiz kalabileceği süre (0 = sınırsız)",
+                )
+                + &field(
+                    "Varsayılan ses seviyesi (%)",
+                    &format!("<input type=\"number\" name=\"default_volume\" value=\"{}\" min=\"1\" max=\"100\">", settings.default_volume),
+                    "Yeni başlatılan müziklerde uygulanacak varsayılan ses yüzdesi (varsayılan 60)",
+                )
+                + &field(
+                    "Maksimum şarkı süresi (saniye)",
+                    &format!("<input type=\"number\" name=\"max_length_secs\" value=\"{}\" min=\"0\" max=\"86400\">", settings.max_length_secs),
+                    "Bu süreden daha uzun şarkıların sıraya eklenmesini engeller (0 = sınırsız)",
                 )
                 + "<p class=\"note\">Komutlar: <code>/çal · geç · durdur · duraklat · devam · sıra · ses · döngü · karıştır · ayrıl</code> ve \
                    <code>/müzik radyo · sözler · sar · sil · taşı · liste-kaydet · liste-çal · listelerim · liste-sil</code>. Müzik yarışması: <code>/oyun müzik-yarışması</code>. \
                    Şarkı kartındaki butonlarla da yönetilir.</p>",
         );
-    Ok((out, settings.always_on || settings.autoplay || extras.dj_role.is_some()))
+    Ok((out, settings.always_on || settings.autoplay || settings.dj_role.is_some()))
 }
 
 pub async fn music_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Result<(), &'static str> {
     let dj_role = input.id("dj_role", &input.options.all_roles, "rol")?;
-    let settings = MusicSettings { always_on: input.checked("always_on"), autoplay: input.checked("autoplay") };
-    state.settings.set(&state.db, guild_id, crate::music::playlists::MusicExtras { dj_role }).await.map_err(failed(guild_id, "DJ rolü"))?;
+    let idle_disconnect_secs = input.raw("idle_disconnect_secs").parse::<u32>().unwrap_or(300);
+    let max_session_mins = input.raw("max_session_mins").parse::<u32>().unwrap_or(0);
+    let default_volume = input.raw("default_volume").parse::<u16>().unwrap_or(60).clamp(1, 100);
+    let max_length_secs = input.raw("max_length_secs").parse::<u32>().unwrap_or(0);
+
+    let settings = MusicSettings {
+        always_on: input.checked("always_on"),
+        autoplay: input.checked("autoplay"),
+        dj_role,
+        idle_disconnect_secs,
+        max_session_mins,
+        default_volume,
+        max_length_secs,
+    };
     state.music.save_settings(&state.db, guild_id, settings).await.map_err(failed(guild_id, "müzik ayarı"))?;
     if input.checked("stop") {
         state.music.stop_and_leave(guild_id).await;

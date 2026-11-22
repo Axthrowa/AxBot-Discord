@@ -36,10 +36,16 @@ const USER_SQL: &[&str] = &[
     "DELETE FROM stock_holdings WHERE user_id = $1",
     "DELETE FROM suggestion_votes WHERE user_id = $1",
     "DELETE FROM user_playlists WHERE user_id = $1",
+    "DELETE FROM member_daily_stats WHERE user_id = $1",
+    "DELETE FROM member_voice_stats WHERE user_id = $1",
 ];
 
 /// Sunucunun bütün verisi. `$1` = sunucu kimliği. Sıra önemli: önce bağlı (alt) tablolar.
 const GUILD_SQL: &[&str] = &[
+    "DELETE FROM server_daily_stats WHERE guild_id = $1",
+    "DELETE FROM channel_daily_stats WHERE guild_id = $1",
+    "DELETE FROM member_daily_stats WHERE guild_id = $1",
+    "DELETE FROM member_voice_stats WHERE guild_id = $1",
     "DELETE FROM giveaway_entries WHERE giveaway_id IN (SELECT id FROM giveaways WHERE guild_id = $1)",
     "DELETE FROM suggestion_votes WHERE suggestion_id IN (SELECT id FROM suggestions WHERE guild_id = $1)",
     "DELETE FROM applications WHERE guild_id = $1",
@@ -186,6 +192,9 @@ pub fn spawn_purge(ctx: serenity::Context, db: PgPool, redis: ConnectionManager,
                     if let Err(e) = delete_guild(&db, &redis, &settings, guild).await {
                         warn!(guild = %guild, error = ?e, "Çıkarılan sunucunun verisi silinemedi");
                     }
+                }
+                if let Err(e) = crate::analytics::purge_old_stats(&db).await {
+                    warn!(error = ?e, "Eski analitik verileri temizlenemedi");
                 }
             })
             .await;

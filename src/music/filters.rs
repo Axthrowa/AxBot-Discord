@@ -33,14 +33,14 @@ pub enum Filter {
 }
 
 impl Filter {
-    /// ffmpeg `-af` zinciri. Hız değiştirenler önce 48 kHz'e çevirir, sonra örnek hızını oynatır.
+    /// ffmpeg `-af` zinciri. Hız/tempo değiştirenler önce zaman damgasını sabitler, sonra hızı uygular ve 48 kHz'e kilitler.
     pub fn chain(self) -> Option<&'static str> {
         match self {
             Self::Off => None,
-            Self::Bass => Some("bass=g=10:f=110:w=0.6"),
-            Self::Nightcore => Some("aresample=48000,asetrate=60000,aresample=48000"),
-            Self::Vaporwave => Some("aresample=48000,asetrate=38400,aresample=48000"),
-            Self::EightD => Some("apulsator=hz=0.125"),
+            Self::Bass => Some("asetpts=PTS-STARTPTS,bass=g=10:f=110:w=0.6,aresample=48000:async=1:first_pts=0"),
+            Self::Nightcore => Some("asetpts=PTS-STARTPTS,asetrate=60000,aresample=48000:async=1:first_pts=0"),
+            Self::Vaporwave => Some("asetpts=PTS-STARTPTS,asetrate=38400,aresample=48000:async=1:first_pts=0"),
+            Self::EightD => Some("asetpts=PTS-STARTPTS,apulsator=hz=0.125,aresample=48000:async=1:first_pts=0"),
         }
     }
 }
@@ -69,6 +69,18 @@ fn ytdlp() -> &'static str {
     YTDLP.get().map_or("yt-dlp", String::as_str)
 }
 
+/// Sabit örnekleme hızı ve kanal sayısı (Discord ses standardı: 48 kHz stereo)
+pub const TARGET_SAMPLE_RATE: u32 = 48_000;
+pub const TARGET_CHANNELS: u32 = 2;
+
+/// Kararlı zaman damgası normalizasyonu ve 48 kHz kilidi sağlayan temel resample filtresi.
+pub const BASE_RESAMPLE_AF: &str = "asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0";
+
+/// songbird'ün ham PCM başlığı (`RawAdapter`): imza + örnek hızı + kanal sayısı.
+const RAW_MAGIC: &[u8; 8] = b"SbirdRaw";
+const RAW_HEADER_LEN: usize = 16;
+pub const PCM_OUT: [&str; 7] = ["-f", "f32le", "-ac", "2", "-ar", "48000", "pipe:1"];
+
 /// yt-dlp ile ses akışını stdout'a indirip ffmpeg'e pipe eder; 48 kHz stereo f32le PCM verir.
 pub fn open_ytdlp_pipeline(
     target: &str,
@@ -77,9 +89,9 @@ pub fn open_ytdlp_pipeline(
 ) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
     let mut ytdl_cmd = Command::new(ytdlp());
     ytdl_cmd
-        .args(["-q", "--no-warnings", "--no-playlist", "--buffer-size", "16k"])
+        .args(["-q", "--no-warnings", "--no-playlist", "--buffer-size", "1024k"])
         .args(user_args)
-        .args(["-f", "ba/b", "-o", "-", target])
+        .args(["-f", "ba/b[acodec!=none]/ba/b", "-o", "-", target])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -95,8 +107,8 @@ pub fn open_ytdlp_pipeline(
 
     let mut ff_cmd = Command::new(ffmpeg());
     ff_cmd.args(["-hide_banner", "-loglevel", "error"]);
-    // Gecikmeyi milisaniyelere indirmek için probe ve analyze sürelerini minimize ediyoruz
-    ff_cmd.args(["-probesize", "32768", "-analyzeduration", "100000"]);
+    // Kararlı akış analizi için güvenli probe/analiz süreleri (1MB / 2 sn)
+    ff_cmd.args(["-probesize", "1048576", "-analyzeduration", "2000000"]);
     let seek_str;
     if let Some(seek) = seek {
         if seek.as_secs() > 0 {
@@ -105,6 +117,7 @@ pub fn open_ytdlp_pipeline(
         }
     }
     ff_cmd.args(["-i", "pipe:0", "-vn"]);
+    ff_cmd.args(["-af", BASE_RESAMPLE_AF]);
     ff_cmd.args(PCM_OUT);
     ff_cmd.stdin(Stdio::from(ytdl_stdout));
     ff_cmd.stdout(Stdio::piped());
@@ -121,14 +134,9 @@ pub fn open_ytdlp_pipeline(
     let container = ChildContainer::from(vec![ytdl_child, ff_child]);
     let pcm = ReadOnlySource::new(container);
     Ok(AudioStream {
-        input: Box::new(RawAdapter::new(pcm, 48_000, 2)) as Box<dyn MediaSource>,
+        input: Box::new(RawAdapter::new(pcm, TARGET_SAMPLE_RATE, TARGET_CHANNELS)) as Box<dyn MediaSource>,
     })
 }
-
-/// songbird'ün ham PCM başlığı (`RawAdapter`): imza + örnek hızı + kanal sayısı.
-const RAW_MAGIC: &[u8; 8] = b"SbirdRaw";
-const RAW_HEADER_LEN: usize = 16;
-const PCM_OUT: [&str; 7] = ["-f", "f32le", "-ac", "2", "-ar", "48000", "pipe:1"];
 
 fn spawn(args: &[&str], stdin: Stdio) -> Result<std::process::Child, AudioStreamError> {
     Command::new(ffmpeg())
@@ -155,6 +163,8 @@ pub fn open_url(url: &str, headers: &HashMap<String, String>) -> Result<AudioStr
 pub fn open_url_with_seek(url: &str, headers: &HashMap<String, String>, seek: Duration) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
     let headers: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
     let mut args = Vec::new();
+    // Kararlı akış analizi ve HLS/HTTP başlıklarının doğru zaman tabanıyla okunması için güvenli probe
+    args.extend(["-probesize", "1048576", "-analyzeduration", "2000000"]);
     if !headers.is_empty() {
         args.extend(["-headers", headers.as_str()]);
     }
@@ -164,6 +174,7 @@ pub fn open_url_with_seek(url: &str, headers: &HashMap<String, String>, seek: Du
         args.extend(["-ss", &seek_str]);
     }
     args.extend(["-i", url, "-vn"]);
+    args.extend(["-af", BASE_RESAMPLE_AF]);
     args.extend(PCM_OUT);
     Ok(pcm_stream(spawn(&args, Stdio::null())?))
 }
@@ -174,16 +185,39 @@ fn through_ffmpeg(chain: &str, source: Box<dyn MediaSource>, raw_pcm: bool) -> R
     if raw_pcm {
         args.extend(["-f", "f32le", "-ar", "48000", "-ac", "2"]);
     }
-    args.extend(["-i", "pipe:0", "-af", chain]);
+    let full_chain = if chain.contains("aresample=48000") {
+        if chain.contains("asetpts=PTS-STARTPTS") {
+            chain.to_owned()
+        } else {
+            format!("asetpts=PTS-STARTPTS,{chain}")
+        }
+    } else if chain.contains("asetpts=PTS-STARTPTS") {
+        format!("{chain},aresample=48000:async=1:first_pts=0")
+    } else {
+        format!("asetpts=PTS-STARTPTS,{chain},aresample=48000:async=1:first_pts=0")
+    };
+    args.extend(["-i", "pipe:0", "-af", &full_chain]);
     args.extend(PCM_OUT);
     let mut child = spawn(&args, Stdio::piped())?;
     let Some(mut stdin) = child.stdin.take() else {
         return Err(AudioStreamError::Fail("ffmpeg girişi açılamadı".into()));
     };
-    // Kaynak eşzamanlı okunur; ffmpeg kapanınca (şarkı bitti/atlandı) yazma hata verir ve iş parçacığı biter.
+    // Kaynak eşzamanlı okunur; 32KB tampon ile aktarılır, ffmpeg kapanınca (şarkı bitti/atlandı) yazma hata verir ve iş parçacığı biter.
     std::thread::spawn(move || {
         let mut source = source;
-        let _ = std::io::copy(&mut source, &mut stdin);
+        let mut buf = [0u8; 32768];
+        loop {
+            match source.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if stdin.write_all(&buf[..n]).is_err() {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
         let _ = stdin.flush();
     });
     Ok(pcm_stream(child))
@@ -361,5 +395,34 @@ mod tests {
             anyhow::ensure!(n >= 40, "{filter:?}: yalnızca {n} paket");
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_filter_chain_always_contains_48000_resample() {
+        assert_eq!(Filter::Off.chain(), None);
+        for filter in [Filter::Bass, Filter::Nightcore, Filter::Vaporwave, Filter::EightD] {
+            let chain = filter.chain().unwrap_or("");
+            assert!(
+                chain.contains("aresample=48000"),
+                "{filter:?} filtresi 48000 Hz resample içermiyor: {chain}"
+            );
+            assert!(
+                chain.contains("async=1"),
+                "{filter:?} filtresi kararlı async=1 kilidi içermiyor: {chain}"
+            );
+            assert!(
+                chain.contains("asetpts=PTS-STARTPTS"),
+                "{filter:?} filtresi kararlı PTS normalizasyonu içermiyor: {chain}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pcm_and_stream_target_constants() {
+        assert_eq!(TARGET_SAMPLE_RATE, 48_000);
+        assert_eq!(TARGET_CHANNELS, 2);
+        assert!(BASE_RESAMPLE_AF.contains("asetpts=PTS-STARTPTS"));
+        assert!(BASE_RESAMPLE_AF.contains("aresample=48000:async=1:first_pts=0"));
+        assert_eq!(PCM_OUT, ["-f", "f32le", "-ac", "2", "-ar", "48000", "pipe:1"]);
     }
 }

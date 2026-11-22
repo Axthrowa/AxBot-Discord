@@ -176,7 +176,20 @@ pub const BRIDGE_MISSING: &str = "X, Instagram ve TikTok herkese açık akış s
 fn resolve_with_bridge(kind: Kind, input: &str, bridge: Option<&str>) -> Result<(String, String), &'static str> {
     let input = input.trim();
     match kind {
-        Kind::X | Kind::Instagram | Kind::Tiktok => {
+        Kind::Tiktok => {
+            let name = input.trim_end_matches('/').rsplit('/').next().unwrap_or_default().trim_start_matches('@');
+            let valid = (1..=30).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+            if !valid {
+                return Err("Kullanıcı adını yaz (ör. `nasa`); harf, rakam, nokta ve alt çizgi içerebilir.");
+            }
+            if let Some(bridge) = bridge {
+                if let Some(path) = kind.bridge_path(name) {
+                    return Ok((format!("{bridge}{path}"), format!("@{name}")));
+                }
+            }
+            Ok((format!("https://www.tiktok.com/@{name}"), format!("@{name}")))
+        }
+        Kind::X | Kind::Instagram => {
             let name = input.trim_end_matches('/').rsplit('/').next().unwrap_or_default().trim_start_matches('@');
             let valid = (1..=30).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
             if !valid {
@@ -216,9 +229,228 @@ fn resolve_with_bridge(kind: Kind, input: &str, bridge: Option<&str>) -> Result<
     }
 }
 
+pub fn extract_reddit_sub(url: &str) -> Option<String> {
+    let lower = url.to_lowercase();
+    let idx = lower.find("reddit.com/r/")?;
+    let rest = &url[idx + "reddit.com/r/".len()..];
+    let sub = rest.split(['/', '?', '#']).next()?;
+    let sub = sub.trim_start_matches("r/");
+    if (2..=21).contains(&sub.len()) && sub.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        Some(sub.to_owned())
+    } else {
+        None
+    }
+}
+
+pub fn extract_bluesky_handle(url: &str) -> Option<String> {
+    let lower = url.to_lowercase();
+    let idx = lower.find("bsky.app/profile/")?;
+    let rest = &url[idx + "bsky.app/profile/".len()..];
+    let handle = rest.split(['/', '?', '#']).next()?;
+    let handle = handle.trim_start_matches('@');
+    if (3..=253).contains(&handle.len()) && handle.contains('.') {
+        Some(handle.to_owned())
+    } else {
+        None
+    }
+}
+
+pub fn extract_tiktok_user(url: &str) -> Option<String> {
+    let lower = url.to_lowercase();
+    let idx = lower.find("tiktok.com/@")?;
+    let rest = &url[idx + "tiktok.com/@".len()..];
+    let user = rest.split(['/', '?', '#']).next()?;
+    if (1..=30).contains(&user.len()) {
+        Some(user.to_owned())
+    } else {
+        None
+    }
+}
+
+fn hash_str(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub fn parse_reddit_json(json_str: &str) -> anyhow::Result<Parsed> {
+    let val: serde_json::Value = serde_json::from_str(json_str)?;
+    let children = val
+        .get("data")
+        .and_then(|d| d.get("children"))
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| anyhow::anyhow!("Geçersiz Reddit JSON formatı"))?;
+
+    let mut items = Vec::new();
+    for child in children {
+        let Some(data) = child.get("data") else { continue };
+        let id = data.get("id").and_then(|i| i.as_str()).unwrap_or_default();
+        let title = data.get("title").and_then(|t| t.as_str()).unwrap_or_default();
+        let permalink = data.get("permalink").and_then(|p| p.as_str()).unwrap_or_default();
+        let over_18 = data.get("over_18").and_then(|o| o.as_bool()).unwrap_or(false);
+        if id.is_empty() || permalink.is_empty() {
+            continue;
+        }
+        let full_id = format!("t3_{id}");
+        let title_with_nsfw = if over_18 {
+            format!("[NSFW] {title}")
+        } else {
+            title.to_owned()
+        };
+        let link = format!("https://www.reddit.com{permalink}");
+        items.push(Item {
+            id: full_id,
+            title: title_with_nsfw,
+            link,
+        });
+    }
+    Ok(Parsed {
+        title: None,
+        items,
+    })
+}
+
+pub async fn fetch_reddit_json(sub: &str) -> anyhow::Result<Parsed> {
+    let client = crate::net::fetch_client()?;
+    let url = format!("https://www.reddit.com/r/{sub}/new.json?limit=10");
+    let res = client
+        .get(&url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await?;
+    if !res.status().is_success() {
+        bail!("Reddit HTTP {}", res.status());
+    }
+    let text = res.text().await?;
+    parse_reddit_json(&text)
+}
+
+pub fn parse_bluesky_json(json_str: &str) -> anyhow::Result<Parsed> {
+    let val: serde_json::Value = serde_json::from_str(json_str)?;
+    let feed = val
+        .get("feed")
+        .and_then(|f| f.as_array())
+        .ok_or_else(|| anyhow::anyhow!("Geçersiz Bluesky JSON formatı"))?;
+
+    let mut items = Vec::new();
+    for item in feed {
+        if item.get("reply").is_some() {
+            continue;
+        }
+        let Some(post) = item.get("post") else { continue };
+        let uri = post.get("uri").and_then(|u| u.as_str()).unwrap_or_default();
+        let handle = post
+            .get("author")
+            .and_then(|a| a.get("handle"))
+            .and_then(|h| h.as_str())
+            .unwrap_or_default();
+        let rkey = uri.rsplit('/').next().unwrap_or("post");
+        let text = post
+            .get("record")
+            .and_then(|r| r.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or_default();
+
+        if uri.is_empty() || handle.is_empty() {
+            continue;
+        }
+        let id = post.get("cid").and_then(|c| c.as_str()).unwrap_or(uri).to_owned();
+        let link = format!("https://bsky.app/profile/{handle}/post/{rkey}");
+        let clean_text = clean(text);
+        let title = if clean_text.is_empty() {
+            "Yeni gönderi".to_owned()
+        } else {
+            clean_text.chars().take(200).collect()
+        };
+        items.push(Item { id, title, link });
+    }
+    Ok(Parsed {
+        title: None,
+        items,
+    })
+}
+
+pub async fn fetch_bluesky_feed(handle: &str) -> anyhow::Result<Parsed> {
+    let client = crate::net::fetch_client()?;
+    let url = format!("https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor={handle}&limit=10&filter=posts_no_replies");
+    let res = client
+        .get(&url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await?;
+    if !res.status().is_success() {
+        bail!("Bluesky HTTP {}", res.status());
+    }
+    let text = res.text().await?;
+    parse_bluesky_json(&text)
+}
+
+pub fn parse_tiktok_oembed(json_str: &str, user: &str) -> anyhow::Result<Parsed> {
+    let val: serde_json::Value = serde_json::from_str(json_str)?;
+    let title = val
+        .get("title")
+        .and_then(|t| t.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("Yeni TikTok videosu");
+    let author = val
+        .get("author_unique_id")
+        .or_else(|| val.get("author_name"))
+        .and_then(|a| a.as_str())
+        .unwrap_or(user);
+    let link = format!("https://www.tiktok.com/@{author}");
+    let id = format!("tiktok_{author}_{:x}", hash_str(title));
+    Ok(Parsed {
+        title: Some(format!("@{author}")),
+        items: vec![Item {
+            id,
+            title: title.to_owned(),
+            link,
+        }],
+    })
+}
+
+pub async fn fetch_tiktok_oembed(user: &str) -> anyhow::Result<Parsed> {
+    let client = crate::net::fetch_client()?;
+    let url = format!("https://www.tiktok.com/oembed?url=https://www.tiktok.com/@{user}");
+    let res = client
+        .get(&url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await?;
+    if !res.status().is_success() {
+        bail!("TikTok HTTP {}", res.status());
+    }
+    let text = res.text().await?;
+    parse_tiktok_oembed(&text, user)
+}
+
 /// Akışı indirir. Yönlendirmeler elle izlenir; her adım "herkese açık adres mi" diye denetlenir
 /// (kullanıcının verdiği adres botu iç ağdaki bir servise yönlendiremesin).
 pub async fn fetch(url: &str) -> anyhow::Result<Parsed> {
+    if let Some(sub) = extract_reddit_sub(url) {
+        if let Ok(parsed) = fetch_reddit_json(&sub).await {
+            if !parsed.items.is_empty() {
+                return Ok(parsed);
+            }
+        }
+    } else if let Some(handle) = extract_bluesky_handle(url) {
+        if let Ok(parsed) = fetch_bluesky_feed(&handle).await {
+            if !parsed.items.is_empty() {
+                return Ok(parsed);
+            }
+        }
+    } else if let Some(user) = extract_tiktok_user(url) {
+        if let Ok(parsed) = fetch_tiktok_oembed(&user).await {
+            if !parsed.items.is_empty() {
+                return Ok(parsed);
+            }
+        }
+    }
+
     parse(&fetch_text(url).await?)
 }
 
@@ -378,6 +610,7 @@ pub fn render(feed: &Feed, item: &Item) -> String {
 
 pub fn spawn_poller(ctx: serenity::Context, db: PgPool, settings: PluginSettings) {
     tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(10)).await;
         let mut ticker = tokio::time::interval(POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -623,6 +856,105 @@ mod tests {
             assert_eq!(Kind::parse(kind.as_str()), Some(kind));
         }
         assert_eq!(Kind::parse("faks"), None);
+    }
+
+    #[test]
+    fn extract_social_handles_and_subs() {
+        assert_eq!(extract_reddit_sub("https://www.reddit.com/r/rust/new/.rss"), Some("rust".to_owned()));
+        assert_eq!(extract_reddit_sub("https://reddit.com/r/turkey"), Some("turkey".to_owned()));
+        assert_eq!(extract_reddit_sub("https://other.com/r/test"), None);
+
+        assert_eq!(extract_bluesky_handle("https://bsky.app/profile/user.bsky.social/rss"), Some("user.bsky.social".to_owned()));
+        assert_eq!(extract_bluesky_handle("https://bsky.app/profile/handle.com"), Some("handle.com".to_owned()));
+        assert_eq!(extract_bluesky_handle("https://other.com/profile/test"), None);
+
+        assert_eq!(extract_tiktok_user("https://www.tiktok.com/@creator"), Some("creator".to_owned()));
+        assert_eq!(extract_tiktok_user("https://tiktok.com/@cool.dancer"), Some("cool.dancer".to_owned()));
+        assert_eq!(extract_tiktok_user("https://other.com/@creator"), None);
+    }
+
+    #[test]
+    fn parses_reddit_json_with_nsfw_and_permalink() -> anyhow::Result<()> {
+        let json = r#"{
+            "data": {
+                "children": [
+                    {
+                        "data": {
+                            "id": "post123",
+                            "title": "Clean Post",
+                            "permalink": "/r/rust/comments/post123/clean_post/",
+                            "over_18": false
+                        }
+                    },
+                    {
+                        "data": {
+                            "id": "post456",
+                            "title": "Spicy Post",
+                            "permalink": "/r/rust/comments/post456/spicy_post/",
+                            "over_18": true
+                        }
+                    }
+                ]
+            }
+        }"#;
+
+        let parsed = parse_reddit_json(json)?;
+        assert_eq!(parsed.items.len(), 2);
+        assert_eq!(parsed.items[0].id, "t3_post123");
+        assert_eq!(parsed.items[0].title, "Clean Post");
+        assert_eq!(parsed.items[0].link, "https://www.reddit.com/r/rust/comments/post123/clean_post/");
+
+        assert_eq!(parsed.items[1].id, "t3_post456");
+        assert_eq!(parsed.items[1].title, "[NSFW] Spicy Post");
+        Ok(())
+    }
+
+    #[test]
+    fn parses_bluesky_json_filters_replies() -> anyhow::Result<()> {
+        let json = r#"{
+            "feed": [
+                {
+                    "post": {
+                        "uri": "at://did:plc:123/app.bsky.feed.post/3abcdef",
+                        "cid": "bafyreicid1",
+                        "author": { "handle": "author.bsky.social" },
+                        "record": { "text": "First main post!", "createdAt": "2026-11-21T12:00:00Z" }
+                    }
+                },
+                {
+                    "post": {
+                        "uri": "at://did:plc:123/app.bsky.feed.post/3reply",
+                        "cid": "bafyreicid2",
+                        "author": { "handle": "author.bsky.social" },
+                        "record": { "text": "This is a reply", "createdAt": "2026-11-21T12:05:00Z" }
+                    },
+                    "reply": { "root": { "uri": "..." } }
+                }
+            ]
+        }"#;
+
+        let parsed = parse_bluesky_json(json)?;
+        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items[0].id, "bafyreicid1");
+        assert_eq!(parsed.items[0].title, "First main post!");
+        assert_eq!(parsed.items[0].link, "https://bsky.app/profile/author.bsky.social/post/3abcdef");
+        Ok(())
+    }
+
+    #[test]
+    fn parses_tiktok_oembed_feed() -> anyhow::Result<()> {
+        let json = r#"{
+            "title": "Fun dance video #trending",
+            "author_unique_id": "dancer",
+            "author_name": "Dancer Pro"
+        }"#;
+
+        let parsed = parse_tiktok_oembed(json, "dancer")?;
+        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items[0].title, "Fun dance video #trending");
+        assert_eq!(parsed.items[0].link, "https://www.tiktok.com/@dancer");
+        assert!(parsed.items[0].id.starts_with("tiktok_dancer_"));
+        Ok(())
     }
 
     /// `cargo test live_feeds -- --ignored --nocapture`

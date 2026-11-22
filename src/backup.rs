@@ -27,6 +27,13 @@ pub struct RoleSnap {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OverwriteSnap {
+    pub role_name: String,
+    pub allow: u64,
+    pub deny: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelSnap {
     pub name: String,
     /// `text`, `news`, `voice`, `stage`, `forum`, `category`
@@ -43,6 +50,8 @@ pub struct ChannelSnap {
     pub position: u16,
     #[serde(default)]
     pub user_limit: Option<u32>,
+    #[serde(default)]
+    pub overwrites: Vec<OverwriteSnap>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +107,28 @@ pub fn take(cache: &serenity::Cache, guild_id: GuildId) -> Option<Snapshot> {
         .values()
         .filter(|c| !is_hidden(c))
         .filter_map(|c| {
+            let overwrites: Vec<OverwriteSnap> = c
+                .permission_overwrites
+                .iter()
+                .filter_map(|ow| {
+                    let role_name = match ow.kind {
+                        serenity::PermissionOverwriteType::Role(role_id) => {
+                            if role_id == guild_id.everyone_role() {
+                                "@everyone".to_string()
+                            } else {
+                                guild.roles.get(&role_id).map(|r| r.name.clone())?
+                            }
+                        }
+                        _ => return None,
+                    };
+                    Some(OverwriteSnap {
+                        role_name,
+                        allow: ow.allow.bits(),
+                        deny: ow.deny.bits(),
+                    })
+                })
+                .collect();
+
             Some(ChannelSnap {
                 name: c.name.clone(),
                 kind: kind_code(c.kind)?.to_owned(),
@@ -107,6 +138,7 @@ pub fn take(cache: &serenity::Cache, guild_id: GuildId) -> Option<Snapshot> {
                 parent: c.parent_id.and_then(|p| guild.channels.get(&p)).map(|p| p.name.clone()),
                 position: c.position,
                 user_limit: c.user_limit,
+                overwrites,
             })
         })
         .collect();
@@ -280,6 +312,11 @@ pub async fn restore(http: &serenity::Http, cache: &serenity::Cache, guild_id: G
         .guild(guild_id)
         .map(|g| g.channels.values().filter(|c| c.kind == ChannelType::Category).map(|c| (c.name.clone(), c.id)).collect())
         .unwrap_or_default();
+    let role_map: HashMap<String, serenity::RoleId> = cache
+        .guild(guild_id)
+        .map(|g| g.roles.values().map(|r| (r.name.clone(), r.id)).collect())
+        .unwrap_or_default();
+
     let (cats, others): (Vec<&ChannelSnap>, Vec<&ChannelSnap>) = channels.iter().partition(|c| c.kind == "category");
     for channel in cats.into_iter().chain(others) {
         let Some(kind) = kind_from(&channel.kind) else {
@@ -299,6 +336,28 @@ pub async fn restore(http: &serenity::Http, cache: &serenity::Cache, guild_id: G
         if let (ChannelType::Voice, Some(limit)) = (kind, channel.user_limit) {
             builder = builder.user_limit(limit.min(99));
         }
+
+        // Kanal izin ezmelerini uygula
+        let discord_overwrites: Vec<serenity::PermissionOverwrite> = channel
+            .overwrites
+            .iter()
+            .filter_map(|ow| {
+                let role_id = if ow.role_name == "@everyone" {
+                    Some(guild_id.everyone_role())
+                } else {
+                    role_map.get(&ow.role_name).copied()
+                }?;
+                Some(serenity::PermissionOverwrite {
+                    allow: Permissions::from_bits_truncate(ow.allow) & bot_permissions,
+                    deny: Permissions::from_bits_truncate(ow.deny),
+                    kind: serenity::PermissionOverwriteType::Role(role_id),
+                })
+            })
+            .collect();
+        if !discord_overwrites.is_empty() {
+            builder = builder.permissions(discord_overwrites);
+        }
+
         match guild_id.create_channel(http, builder).await {
             Ok(created) => {
                 done.channels += 1;
@@ -313,6 +372,148 @@ pub async fn restore(http: &serenity::Http, cache: &serenity::Cache, guild_id: G
         }
     }
     Some(done)
+}
+
+// ---------------------------------------------------------------- Sunucu Şablonları (Xenon Tarzı)
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerTemplate {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default = "default_template_category")]
+    pub category: String,
+    pub snapshot: Snapshot,
+    #[serde(default)]
+    pub settings: Option<serde_json::Value>,
+}
+
+fn default_template_category() -> String {
+    "genel".to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TemplateSummary {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub category: String,
+    pub uses_count: i32,
+    pub roles_count: usize,
+    pub channels_count: usize,
+    pub created_unix: i64,
+}
+
+pub fn generate_template_id() -> String {
+    format!("{:08x}", crate::rand_util::random_u64() as u32)
+}
+
+pub async fn save_template(
+    db: &PgPool,
+    guild_id: Option<GuildId>,
+    creator_id: Option<serenity::UserId>,
+    template: &ServerTemplate,
+) -> anyhow::Result<String> {
+    let guild = guild_id.map(|g| snowflake(g.get())).transpose()?;
+    let creator = creator_id.map(|u| snowflake(u.get())).transpose()?;
+    let data = serde_json::to_string(template)?;
+
+    sqlx::query(
+        "INSERT INTO server_templates (id, guild_id, creator_id, name, description, category, data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description,
+                                        category = EXCLUDED.category, data = EXCLUDED.data",
+    )
+    .bind(&template.id)
+    .bind(guild)
+    .bind(creator)
+    .bind(&template.name)
+    .bind(&template.description)
+    .bind(&template.category)
+    .bind(&data)
+    .execute(db)
+    .await?;
+
+    Ok(template.id.clone())
+}
+
+pub async fn get_template(db: &PgPool, id: &str) -> anyhow::Result<Option<ServerTemplate>> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "UPDATE server_templates SET uses_count = uses_count + 1
+         WHERE id = $1
+         RETURNING data::text",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row.and_then(|(data,)| serde_json::from_str(&data).ok()))
+}
+
+pub async fn get_template_peek(db: &PgPool, id: &str) -> anyhow::Result<Option<ServerTemplate>> {
+    let data: Option<String> = sqlx::query_scalar(
+        "SELECT data::text FROM server_templates WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(data.and_then(|d| serde_json::from_str(&d).ok()))
+}
+
+type TemplateRow = (String, String, Option<String>, String, i32, i64, String);
+
+pub async fn list_templates(
+    db: &PgPool,
+    category: Option<&str>,
+    limit: i64,
+) -> anyhow::Result<Vec<TemplateSummary>> {
+    let rows: Vec<TemplateRow> = match category {
+        Some(cat) => {
+            sqlx::query_as(
+                "SELECT id, name, description, category, uses_count,
+                        EXTRACT(EPOCH FROM created_at)::BIGINT, data::text
+                 FROM server_templates
+                 WHERE category = $1
+                 ORDER BY uses_count DESC, created_at DESC LIMIT $2",
+            )
+            .bind(cat)
+            .bind(limit)
+            .fetch_all(db)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                "SELECT id, name, description, category, uses_count,
+                        EXTRACT(EPOCH FROM created_at)::BIGINT, data::text
+                 FROM server_templates
+                 ORDER BY uses_count DESC, created_at DESC LIMIT $1",
+            )
+            .bind(limit)
+            .fetch_all(db)
+            .await?
+        }
+    };
+
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, description, cat, uses_count, created_unix, data)| {
+            let (roles_count, channels_count) = serde_json::from_str::<ServerTemplate>(&data)
+                .map(|t| (t.snapshot.roles.len(), t.snapshot.channels.len()))
+                .unwrap_or((0, 0));
+            TemplateSummary {
+                id,
+                name,
+                description,
+                category: cat,
+                uses_count,
+                roles_count,
+                channels_count,
+                created_unix,
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -335,7 +536,88 @@ mod tests {
     }
 
     fn channel(name: &str, kind: &str) -> ChannelSnap {
-        ChannelSnap { name: name.to_owned(), kind: kind.to_owned(), topic: None, nsfw: false, slowmode: 0, parent: None, position: 0, user_limit: None }
+        ChannelSnap {
+            name: name.to_owned(),
+            kind: kind.to_owned(),
+            topic: None,
+            nsfw: false,
+            slowmode: 0,
+            parent: None,
+            position: 0,
+            user_limit: None,
+            overwrites: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn overwrites_serialization_and_backward_compatibility() -> anyhow::Result<()> {
+        let snap = ChannelSnap {
+            name: "yetkili-sohbet".to_owned(),
+            kind: "text".to_owned(),
+            topic: None,
+            nsfw: false,
+            slowmode: 0,
+            parent: None,
+            position: 1,
+            user_limit: None,
+            overwrites: vec![
+                OverwriteSnap {
+                    role_name: "@everyone".to_owned(),
+                    allow: 0,
+                    deny: 1024,
+                },
+                OverwriteSnap {
+                    role_name: "Yönetici".to_owned(),
+                    allow: 3072,
+                    deny: 0,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&snap)?;
+        let parsed: ChannelSnap = serde_json::from_str(&json)?;
+        assert_eq!(parsed.overwrites.len(), 2);
+        assert_eq!(parsed.overwrites[0].role_name, "@everyone");
+
+        // Eski JSON (overwrites alanı olmayan) geriye dönük uyumlu okunur
+        let legacy = r#"{"name":"genel","kind":"text","position":0}"#;
+        let legacy_parsed: ChannelSnap = serde_json::from_str(legacy)?;
+        assert!(legacy_parsed.overwrites.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn server_template_serialization_and_defaults() -> anyhow::Result<()> {
+        let tmpl = ServerTemplate {
+            id: "a1b2c3d4".to_owned(),
+            name: "Oyun Topluluğu".to_owned(),
+            description: Some("Oyun sunucuları için hazır şablon".to_owned()),
+            category: "oyun".to_owned(),
+            snapshot: Snapshot {
+                guild_name: "Gaming Hub".to_owned(),
+                roles: vec![role("Admin"), role("Oyuncu")],
+                channels: vec![channel("genel-sohbet", "text"), channel("ses-odasi", "voice")],
+            },
+            settings: Some(serde_json::json!({"leveling": {"rate": 1.5}})),
+        };
+        let json = serde_json::to_string(&tmpl)?;
+        let parsed: ServerTemplate = serde_json::from_str(&json)?;
+        assert_eq!(parsed.id, "a1b2c3d4");
+        assert_eq!(parsed.category, "oyun");
+        assert_eq!(parsed.snapshot.roles.len(), 2);
+
+        // Kategori ve ayarlar alanı olmayan minimal JSON varsayılanlarla açılır
+        let minimal_json = r#"{"id":"test1234","name":"Basit","snapshot":{"guild_name":"B","roles":[],"channels":[]}}"#;
+        let minimal_parsed: ServerTemplate = serde_json::from_str(minimal_json)?;
+        assert_eq!(minimal_parsed.category, "genel");
+        assert_eq!(minimal_parsed.settings, None);
+        Ok(())
+    }
+
+    #[test]
+    fn generate_template_id_format() {
+        let id = generate_template_id();
+        assert_eq!(id.len(), 8);
+        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]

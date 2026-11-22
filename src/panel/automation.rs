@@ -62,9 +62,15 @@ fn summary(a: &Automation, options: &Options) -> String {
     if a.delete_message {
         parts.push("mesajı siler".to_owned());
     }
+    if a.webhook_url.is_some() {
+        parts.push("webhook tetikler".to_owned());
+    }
     let mut conditions = Vec::new();
     if let Some(keyword) = &a.keyword {
         conditions.push(format!("\"{keyword}\" geçerse"));
+    }
+    if let Some(streamer) = &a.streamer {
+        conditions.push(format!("yayıncı/platform: \"{streamer}\""));
     }
     if let Some(channel) = a.channel {
         let name = options.channels.iter().find(|(id, _)| *id == channel).map_or("silinmiş kanal", |(_, name)| name.as_str());
@@ -88,22 +94,48 @@ pub async fn automation_fields(state: &WebState, guild_id: GuildId, options: &Op
     let settings = state.settings.get::<AutomationSettings>(&state.db, guild_id).await?;
     let mut list = String::new();
     if settings.automations.is_empty() {
-        list.push_str("<p class=\"note\">Henüz otomasyon yok.</p>");
+        list.push_str("<p class=\"note\">Henüz otomasyon kuralı oluşturulmadı. Aşağıdaki formdan yeni bir kural ekleyebilirsin.</p>");
     } else {
-        list.push_str("<table><tr><th>Açık</th><th>Ad</th><th>Ne zaman</th><th>Ne yapar</th><th>Sil</th></tr>");
+        list.push_str("<div class=\"auto-cards\" style=\"display:grid;gap:12px;margin-bottom:18px;\">");
         for a in &settings.automations {
+            let status_badge = if a.enabled {
+                "<span style=\"display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.75em;background:#23a55a;color:#fff;font-weight:600;\">Açık</span>"
+            } else {
+                "<span style=\"display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.75em;background:#80848e;color:#fff;font-weight:600;\">Kapalı</span>"
+            };
             let _ = write!(
                 list,
-                "<tr><td><input type=\"checkbox\" name=\"auto_on\" value=\"{id}\"{}></td><td>{}</td><td>{}</td><td>{}</td>\
-                 <td><input type=\"checkbox\" name=\"auto_del\" value=\"{id}\"></td></tr>",
-                if a.enabled { " checked" } else { "" },
+                "<div class=\"auto-card\" style=\"background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:12px 16px;\">\
+                   <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;\">\
+                     <div style=\"display:flex;align-items:center;gap:8px;\">\
+                       {status_badge}\
+                       <strong style=\"font-size:1.05em;\">{}</strong>\
+                     </div>\
+                     <div style=\"display:flex;gap:16px;align-items:center;\">\
+                       <label style=\"display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.9em;\">\
+                         <input type=\"checkbox\" name=\"auto_on\" value=\"{id}\"{}>\
+                         <span>Aktif</span>\
+                       </label>\
+                       <label style=\"display:flex;align-items:center;gap:6px;cursor:pointer;color:#ed4245;font-size:0.9em;\">\
+                         <input type=\"checkbox\" name=\"auto_del\" value=\"{id}\">\
+                         <span>Sil</span>\
+                       </label>\
+                     </div>\
+                   </div>\
+                   <div style=\"display:flex;flex-wrap:wrap;gap:6px;font-size:0.85em;color:#b5bac1;\">\
+                     <span style=\"background:rgba(88,101,242,0.2);color:#5865F2;padding:2px 8px;border-radius:4px;font-weight:600;\">⚡ {}</span>\
+                     <span>➔</span>\
+                     <span>{}</span>\
+                   </div>\
+                 </div>",
                 escape(&a.name),
+                if a.enabled { " checked" } else { "" },
                 a.trigger.label(),
                 escape(&summary(a, options)),
                 id = a.id
             );
         }
-        list.push_str("</table>");
+        list.push_str("</div>");
     }
     let mut out = section("Otomasyonlar", list);
 
@@ -125,16 +157,17 @@ pub async fn automation_fields(state: &WebState, guild_id: GuildId, options: &Op
                 "Mesaj ve tepkide: üyede bu rol olmalı. Rol verildiğinde/alındığında: verilen ya da alınan rol bu olmalı.",
             )
             + &field("Tepki emojisi", "<input type=\"text\" name=\"a_emoji\" maxlength=\"64\" placeholder=\"⭐\">", "Sadece \"Mesaja tepki eklendiğinde\" için.")
+            + &field("Yayıncı veya Platform", &text_input("a_streamer", "örn. elraenn veya twitch", 100), "Yayın açıldığında/kapandığında için yayıncı adı veya platform (twitch, kick). Boş bırakılırsa tüm yayınlar.")
             + "<h4>Eylemler (en az biri)</h4>"
             + &field(
                 "Mesaj gönder",
                 &textarea("a_message", None, "Hoş geldin {kullanıcı}!"),
-                "Değişkenler: <code>{kullanıcı}</code>, <code>{isim}</code>, <code>{sunucu}</code>, <code>{kanal}</code>, <code>{rol}</code>, <code>{mesaj}</code>.",
+                "Değişkenler: <code>{kullanıcı}</code>, <code>{isim}</code>, <code>{sunucu}</code>, <code>{kanal}</code>, <code>{rol}</code>, <code>{mesaj}</code>, <code>{yayinci}</code>, <code>{baslik}</code>.",
             )
             + &field(
                 "Mesajın gideceği kanal",
                 &Options::select("a_message_channel", &options.channels, "# ", None, "— Olayın olduğu kanal —"),
-                "Üye girişi/çıkışı ve rol olaylarında bir kanal seçmelisin.",
+                "Üye girişi/çıkışı, rol ve yayın olaylarında bir kanal seçmelisin.",
             )
             + &checkbox("a_ping", false, "Mesajdaki rol etiketleri bildirim göndersin")
             + &field("Üyeye özelden yaz", &textarea("a_dm", None, ""), "")
@@ -146,8 +179,13 @@ pub async fn automation_fields(state: &WebState, guild_id: GuildId, options: &Op
             + &field("Tepki ekle", "<input type=\"text\" name=\"a_react\" maxlength=\"64\" placeholder=\"👀\">", "")
             + &field("Alt başlık aç (başlık adı)", &text_input("a_thread", "{isim} sorusu", 100), "")
             + &checkbox("a_delete", false, "Mesajı sil")
+            + "<h4>Dış Ağ / Yerel Webhook Eylemi</h4>"
+            + &field("Webhook Hedef URL", &text_input("a_webhook_url", "https://api.ornek.com/webhook veya http://127.0.0.1:8080/hook", 300), "Tetiklendiğinde HTTP POST isteği gönderilecek hedef uç nokta.")
+            + &field("Webhook Gizli Anahtarı / Token", &text_input("a_webhook_secret", "opsiyonel token veya secret", 120), "Authorization: Bearer &lt;secret&gt; ve x-webhook-secret başlıklarına eklenir.")
+            + &field("Özel JSON Payload (Opsiyonel)", &textarea("a_webhook_payload", None, ""), "Boş bırakılırsa standart olay özeti JSON olarak gönderilir.")
+            + &checkbox("a_allow_localhost", false, "Yerel hedeflere (127.0.0.1 / localhost) izin ver (SSRF koruması istisnası)")
             + "<p class=\"note\">Örnekler: <b>Karşılayıcı</b> — \"Üye sunucuya katıldığında\" + mesaj. <b>Alt başlık</b> — \"Mesaj gönderildiğinde\" + kanal + \
-               \"Alt başlık aç\". <b>Rol duyurusu</b> — \"Üyeye rol verildiğinde\" + rol + mesaj.</p>",
+               \"Alt başlık aç\". <b>Rol duyurusu</b> — \"Üyeye rol verildiğinde\" + rol + mesaj. <b>Yayın Bildirimi / Webhook</b> — \"Yayın açıldığında\" + webhook veya mesaj.</p>",
     ));
     Ok((out, settings.automations.iter().any(|a| a.enabled)))
 }
@@ -158,6 +196,15 @@ fn parse_automation(input: &Input<'_>, id: u32) -> Result<Option<Automation>, &'
         return Ok(None);
     };
     let trigger = Trigger::from_code(input.raw("a_trigger")).ok_or("hata")?;
+    let allow_localhost = input.checked("a_allow_localhost");
+    let webhook_url = short(input, "a_webhook_url", 300)?;
+    if let Some(ref raw_url) = webhook_url {
+        automations::validate_webhook_url(raw_url, allow_localhost).map_err(|_| "webhook_url")?;
+    }
+    let webhook_secret = short(input, "a_webhook_secret", 120)?;
+    let webhook_payload = input.text("a_webhook_payload")?;
+    let streamer = short(input, "a_streamer", 100)?;
+
     let automation = Automation {
         id,
         name,
@@ -167,6 +214,7 @@ fn parse_automation(input: &Input<'_>, id: u32) -> Result<Option<Automation>, &'
         channel: input.channel("a_channel")?.map(ChannelId::get),
         role: pick(input, "a_role", &input.options.all_roles, "rol")?,
         emoji: emoji(input, "a_emoji")?,
+        streamer,
         message: input.text("a_message")?,
         message_channel: pick(input, "a_message_channel", &input.options.channels, "kanal")?,
         dm: input.text("a_dm")?,
@@ -176,6 +224,10 @@ fn parse_automation(input: &Input<'_>, id: u32) -> Result<Option<Automation>, &'
         delete_message: input.checked("a_delete"),
         thread_name: short(input, "a_thread", 100)?,
         ping_roles: input.checked("a_ping"),
+        webhook_url,
+        webhook_secret,
+        webhook_payload,
+        allow_localhost,
     };
     let has_action = automation.message.is_some()
         || automation.dm.is_some()
@@ -183,12 +235,21 @@ fn parse_automation(input: &Input<'_>, id: u32) -> Result<Option<Automation>, &'
         || !automation.remove_roles.is_empty()
         || automation.react.is_some()
         || automation.delete_message
-        || automation.thread_name.is_some();
+        || automation.thread_name.is_some()
+        || automation.webhook_url.is_some();
     if !has_action {
         return Err("bos");
     }
-    // Kanalsız olaylarda (giriş, çıkış, rol) mesajın gideceği kanal belli olmalı.
-    let channelless = matches!(trigger, Trigger::MemberJoin | Trigger::MemberLeave | Trigger::RoleAdded | Trigger::RoleRemoved);
+    // Kanalsız olaylarda (giriş, çıkış, rol, yayın) mesaj gönderilecekse hedef kanal belli olmalı.
+    let channelless = matches!(
+        trigger,
+        Trigger::MemberJoin
+            | Trigger::MemberLeave
+            | Trigger::RoleAdded
+            | Trigger::RoleRemoved
+            | Trigger::StreamWentLive
+            | Trigger::StreamWentOffline
+    );
     if channelless && automation.message.is_some() && automation.message_channel.is_none() {
         return Err("kanal");
     }
@@ -386,6 +447,31 @@ mod tests {
         assert_eq!(parse(&[("a_name", "x"), ("a_trigger", "message"), ("a_react", "yazı")]), Err("emoji"));
         assert_eq!(parse(&[("a_name", "x"), ("a_trigger", "bilinmeyen"), ("a_delete", "1")]), Err("hata"));
         assert!(parse(&[("a_name", "x"), ("a_trigger", "message"), ("a_react", "👀")]).is_ok_and(|a| a.is_some()));
+
+        let auto = Automation {
+            id: 1,
+            name: "Test".to_owned(),
+            enabled: true,
+            trigger: Trigger::Message,
+            keyword: Some("yardım".to_owned()),
+            channel: Some(10),
+            role: None,
+            emoji: None,
+            message: Some("Cevap".to_owned()),
+            message_channel: None,
+            dm: None,
+            add_roles: Vec::new(),
+            remove_roles: Vec::new(),
+            react: None,
+            delete_message: false,
+            thread_name: None,
+            ping_roles: false,
+            ..Automation::default()
+        };
+        let s = summary(&auto, &options);
+        assert!(s.contains("\"yardım\" geçerse"));
+        assert!(s.contains("#genel kanalında"));
+        assert!(s.contains("mesaj gönderir"));
     }
 
     #[test]

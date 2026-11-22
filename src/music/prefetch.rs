@@ -125,7 +125,9 @@ impl Compose for Prefetched {
     }
 
     async fn create_async(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+        let mut had_cached_result = false;
         if let Some((result, fetched_at)) = self.result.take() {
+            had_cached_result = true;
             if fetched_at.elapsed() < FRESH_FOR {
                 match self.open(&result).await {
                     Ok(stream) => return Ok(stream),
@@ -133,7 +135,9 @@ impl Compose for Prefetched {
                 }
             }
         }
-        if !self.target.is_empty() {
+        // Eğer önceden saklanan sonuç yoksa doğrudan hedef üzerinden tek sefer açmayı dene.
+        // Önceden saklanan sonuç open() tarafından denenmiş ve başarısız olmuşsa aynı hedefi çift açma.
+        if !had_cached_result && !self.target.is_empty() {
             let target = self.target.clone();
             let args = self.args.clone();
             let seek = self.seek_to;
@@ -168,5 +172,16 @@ impl Compose for Prefetched {
         } else {
             Ok(AuxMetadata::default())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prefetch_timeouts_and_constants() {
+        assert_eq!(FRESH_FOR, Duration::from_secs(2 * 60 * 60));
+        assert_eq!(QUERY_TIMEOUT, Duration::from_secs(45));
     }
 }

@@ -75,6 +75,18 @@ pub struct LevelSettings {
     pub role_boosts: Vec<RoleBoost>,
     /// Bu seviyeye ulaşan üye `/seviye prestij` ile XP'sini sıfırlayıp prestij kazanabilir (0 = kapalı).
     pub prestige_level: u32,
+    /// Ses kanalında bulunarak XP kazanma açık mı?
+    pub voice_xp_enabled: bool,
+    /// Ses kanalında geçen her dakika için taban XP.
+    pub voice_xp_per_minute: u16,
+    /// Ses XP'si kazanmak için kanalda olması gereken minimum üye sayısı.
+    pub voice_min_members: usize,
+    /// Kendini veya sunucu tarafından susturulmuş (mute) üyeler XP kazanamaz.
+    pub voice_ignore_muted: bool,
+    /// Kendini veya sunucu tarafından sağırlaştırılmış (deaf) üyeler XP kazanamaz.
+    pub voice_ignore_deafened: bool,
+    /// AFK kanalında olanlar XP kazanamaz.
+    pub voice_ignore_afk: bool,
 }
 
 impl Default for LevelSettings {
@@ -92,6 +104,12 @@ impl Default for LevelSettings {
             public_leaderboard: false,
             role_boosts: Vec::new(),
             prestige_level: 0,
+            voice_xp_enabled: true,
+            voice_xp_per_minute: 10,
+            voice_min_members: 2,
+            voice_ignore_muted: true,
+            voice_ignore_deafened: true,
+            voice_ignore_afk: true,
         }
     }
 }
@@ -207,6 +225,10 @@ mod tests {
         assert_eq!(settings.xp_rate, 200);
         assert!(settings.enabled && settings.stack_rewards);
         assert_eq!(settings.announce, Announce::Current);
+        assert!(settings.voice_xp_enabled);
+        assert_eq!(settings.voice_xp_per_minute, 10);
+        assert_eq!(settings.voice_min_members, 2);
+        assert!(settings.voice_ignore_muted && settings.voice_ignore_deafened && settings.voice_ignore_afk);
         assert_eq!(render_message(settings.template(), "<@1>", "Ali", 3, "S"), "🎉 <@1> **3. seviyeye** ulaştı!");
         assert_eq!(Announce::from_code(Announce::Dm.code()), Some(Announce::Dm));
         Ok(())

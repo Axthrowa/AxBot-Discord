@@ -142,6 +142,7 @@ async fn handle_inner(
                         crate::highlights::on_message(ctx, &data.db, guild_id, msg),
                         crate::ai::assist::on_ticket_message(ctx, data, guild_id, msg),
                         crate::achievements::bump(ctx, data, guild_id, &msg.author, crate::achievements::Kind::Messages, 1, Some(msg.channel_id)),
+                        crate::analytics::record_message(&data.redis, guild_id, msg.channel_id, msg.author.id),
                         async {
                             let facts = Facts { trigger: Trigger::Message, channel: Some(msg.channel_id.get()), content: &msg.content, member_roles: roles, ..Facts::default() };
                             automations::run(ctx, data, automations::Event { guild_id, user: &msg.author, facts, message: Some(msg) }).await;
@@ -315,6 +316,12 @@ async fn handle_inner(
             crate::community::on_join(ctx, data, new_member).await;
             crate::community::member_flow(&data.redis, new_member.guild_id, true).await;
             crate::community::track_member(&data.redis, new_member.guild_id, new_member.user.id, true).await;
+            crate::analytics::record_member_join(&data.redis, new_member.guild_id).await;
+            let _ = data.event_bus.send(crate::panel::RealtimeEvent::MemberFlow {
+                guild_id: new_member.guild_id.get(),
+                joined: true,
+                tag: new_member.user.tag(),
+            });
             let facts = Facts { trigger: Trigger::MemberJoin, ..Facts::default() };
             automations::run(ctx, data, automations::Event { guild_id: new_member.guild_id, user: &new_member.user, facts, message: None }).await;
         }
@@ -323,12 +330,18 @@ async fn handle_inner(
             user,
             member_data_if_available,
         } => {
-            if let Err(e) = crate::invites::on_leave(&data.db, *guild_id, user.id).await {
+            if let Err(e) = crate::invites::on_leave(&data.db, &data.settings, *guild_id, user.id).await {
                 warn!(guild = %guild_id, error = ?e, "Davet kaydı güncellenemedi");
             }
             crate::antinuke::record(ctx, data, *guild_id, crate::antinuke::Kind::Kick, Some(user.id)).await;
             crate::community::member_flow(&data.redis, *guild_id, false).await;
             crate::community::track_member(&data.redis, *guild_id, user.id, false).await;
+            crate::analytics::record_member_leave(&data.redis, *guild_id).await;
+            let _ = data.event_bus.send(crate::panel::RealtimeEvent::MemberFlow {
+                guild_id: guild_id.get(),
+                joined: false,
+                tag: user.tag(),
+            });
             if let Some(member) = member_data_if_available {
                 crate::community::on_leave(data, *guild_id, user.id, &member.roles).await;
             }

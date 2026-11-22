@@ -29,14 +29,19 @@ C | bilet kur | setup | Sends the ticket panel to a channel and saves the settin
 P | bilet kur | kanal | channel | Channel for the panel
 P | bilet kur | kategori | category | Category where tickets are opened (optional)
 P | bilet kur | destek_rolü | support_role | Support team role that can see tickets (optional)
+P | bilet kur | başlık | title | Panel title (default: Destek Talebi)
 C | bilet üstlen | claim | Claims this ticket (support team).
+C | bilet devret | transfer | Transfers the ticket to another staff member (support team).
+P | bilet devret | yetkili | staff | Support staff to transfer the ticket to
 C | bilet ekle | add | Adds a member to the ticket (support team).
 P | bilet ekle | üye | member | Member to add to the ticket
 C | bilet çıkar | remove | Removes a member from the ticket (support team).
 P | bilet çıkar | üye | member | Member to remove from the ticket
 C | bilet kapat | close | Closes the support ticket you are in.
+P | bilet kapat | gerekçe | reason | Reason for closing the ticket (optional)
 C | bilet yeniden-aç | reopen | Reopens a closed and kept ticket (support team).
 C | bilet sil | delete | Permanently deletes a closed and kept ticket (support team).
+C | bilet paneller | panels | Lists registered ticket panels in the server.
 C | ai | ai | AI chat settings.
 C | ai kanal-ekle | add-channel | Adds a channel where the bot answers every message with AI.
 P | ai kanal-ekle | kanal | channel | AI channel
@@ -91,6 +96,15 @@ P | yedek yükle | numara | number | Backup number (from the backup list)
 P | yedek yükle | onay | confirm | Choose True to really create them; empty only shows what would happen
 C | yedek sil | delete | Deletes a backup.
 P | yedek sil | numara | number | Backup number (from the backup list)
+C | yedek şablon-oluştur | template-create | Creates a shareable Xenon-style template code from the server structure.
+P | yedek şablon-oluştur | ad | name | Template name
+P | yedek şablon-oluştur | kategori | category | Category (e.g. general, gaming, community, dev)
+P | yedek şablon-oluştur | açıklama | description | Template description
+C | yedek şablon-yükle | template-apply | Applies a Xenon-style server template by code (creates missing roles and channels).
+P | yedek şablon-yükle | kod | code | Template code
+P | yedek şablon-yükle | onay | confirm | Choose True to really create them
+C | yedek şablon-bilgi | template-info | Shows information about a server template.
+P | yedek şablon-bilgi | kod | code | Template code
 C | cevir_mesaj | Translate message
 C | bildir | Report message
 C | ozetle | Summarize up to here
@@ -132,10 +146,13 @@ C | müzik şimdi | now-playing | Shows the current song and its progress.
 C | müzik sıra | queue | Shows the song queue.
 C | müzik ses | volume | Sets the volume (0-150%).
 P | müzik ses | seviye | level | Volume percent (0-150, default 60)
+P | müzik ses | varsayılan | make_default | Save this volume level as the default for the server
 C | müzik döngü | loop | Turns repeat of the current song on or off.
 C | müzik karıştır | shuffle | Shuffles the upcoming songs.
 C | müzik 7-24 | 24-7 | 24/7 mode: the bot stays even if the channel or queue is empty (needs Manage Server).
 P | müzik 7-24 | açık | enabled | On?
+P | müzik 7-24 | bekleme | idle_seconds | Idle disconnect timeout in seconds (default 300, 0 = immediate)
+P | müzik 7-24 | oturum | max_session_mins | Maximum voice session duration in minutes (0 = unlimited)
 C | müzik otomatik | autoplay | Autoplay: when the queue ends, continues with songs similar to the last one.
 P | müzik otomatik | açık | enabled | On?
 C | müzik radyo | radio | Listen to live radio (the queue is cleared).
@@ -167,6 +184,7 @@ P | müzik taşı | nereden | from | The song's current position
 P | müzik taşı | nereye | to | New position (1 = next)
 C | müzik dj-rol | dj-role | Sets the DJ role: if set, only that role can use skip, stop, volume and similar.
 P | müzik dj-rol | rol | role | DJ role (leave empty to remove the restriction)
+P | müzik dj-rol | maks_süre | max_duration | Maximum track duration in seconds (0 = unlimited)
 C | müzik liste-kaydet | save-playlist | Saves the current queue as your own playlist.
 P | müzik liste-kaydet | ad | name | Playlist name
 C | müzik liste-çal | play-playlist | Adds your saved playlist to the queue.
@@ -698,3 +716,28 @@ P | ekonomi-yönet al | üye | member | Member
 P | ekonomi-yönet al | miktar | amount | Amount
 C | ekonomi-yönet sıfırla | reset | Resets all of a member's money and inventory.
 P | ekonomi-yönet sıfırla | üye | member | Member
+C | istatistik | stats | Server activity, message, voice, and leaderboard statistics.
+C | istatistik genel | overview | Overview of server messages, voice time, member growth, and top channels.
+P | istatistik genel | gün | period | Statistics time window
+K | istatistik genel | gün | Son 7 gün | Last 7 days
+K | istatistik genel | gün | Son 14 gün | Last 14 days
+K | istatistik genel | gün | Son 30 gün | Last 30 days
+C | istatistik mesaj | messages | Message activity statistics for a member or the server.
+P | istatistik mesaj | kullanıcı | user | Target member (leave empty for server overview)
+P | istatistik mesaj | gün | period | Statistics time window
+K | istatistik mesaj | gün | Son 7 gün | Last 7 days
+K | istatistik mesaj | gün | Son 14 gün | Last 14 days
+K | istatistik mesaj | gün | Son 30 gün | Last 30 days
+C | istatistik ses | voice | Voice activity and voice XP statistics for a member or the server.
+P | istatistik ses | kullanıcı | user | Target member (leave empty for server overview)
+P | istatistik ses | gün | period | Statistics time window
+K | istatistik ses | gün | Son 7 gün | Last 7 days
+K | istatistik ses | gün | Son 14 gün | Last 14 days
+K | istatistik ses | gün | Son 30 gün | Last 30 days
+C | istatistik sıralama | leaderboard | Top 10 most active members by messages or voice time.
+P | istatistik sıralama | tür | type | Activity metric to rank by
+K | istatistik sıralama | tür | Mesaj | Messages
+K | istatistik sıralama | tür | Ses | Voice
+P | istatistik sıralama | gün | period | Leaderboard time window
+K | istatistik sıralama | gün | Son 7 gün | Last 7 days
+K | istatistik sıralama | gün | Son 30 gün | Last 30 days

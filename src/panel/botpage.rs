@@ -2,16 +2,16 @@
 
 use std::fmt::Write as _;
 
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Form;
-use poise::serenity_prelude::{ChannelId, ChannelType, GuildId};
+use poise::serenity_prelude::{ChannelId, GuildId};
 use tracing::{info, warn};
 
-use super::pages::{forbidden, layout, GuildNav, Nav, Page};
+use super::auth;
+use super::pages::forbidden;
 use super::plugins::{field, section, Input, Options};
-use super::{auth, can_manage};
 use crate::ai::characters::{self, AiSettings, Character};
 use crate::presence::{self, BotProfile, Presence, ProfileError};
 use crate::web::{escape, WebState};
@@ -334,181 +334,4 @@ pub async fn presence_save(State(state): State<WebState>, headers: HeaderMap, Fo
     }
     info!(user = %session.user, status = %new.status, activity = %new.activity, "Panelden bot durumu değiştirildi");
     back("kaydedildi")
-}
-
-// ---------------------------------------------------------------- İstatistikler
-
-/// Sunucuya ait kayıt sayıları. Sorgular sabittir; yalnızca sunucu kimliği bağlanır.
-const COUNTS: &[(&str, &str)] = &[
-    ("Moderasyon vakası", "SELECT COUNT(*) FROM mod_cases WHERE guild_id = $1"),
-    ("Açılan bilet", "SELECT COUNT(*) FROM tickets WHERE guild_id = $1"),
-    ("XP kazanan üye", "SELECT COUNT(*) FROM member_xp WHERE guild_id = $1"),
-    ("Kazanılan başarım", "SELECT COUNT(*) FROM member_achievements WHERE guild_id = $1"),
-    ("Çekiliş", "SELECT COUNT(*) FROM giveaways WHERE guild_id = $1"),
-    ("Öneri", "SELECT COUNT(*) FROM suggestions WHERE guild_id = $1"),
-    ("Starboard gönderisi", "SELECT COUNT(*) FROM starboard_posts WHERE guild_id = $1"),
-    ("Davetle katılım", "SELECT COUNT(*) FROM invite_joins WHERE guild_id = $1"),
-    ("Ekonomi hesabı", "SELECT COUNT(*) FROM economy_accounts WHERE guild_id = $1"),
-    ("Kayıtlı doğum günü", "SELECT COUNT(*) FROM birthdays WHERE guild_id = $1"),
-    ("Etiket", "SELECT COUNT(*) FROM tags WHERE guild_id = $1"),
-    ("Yakalanan hayvan", "SELECT COUNT(*) FROM animal_catches WHERE guild_id = $1"),
-];
-
-fn stat(label: &str, value: &str) -> String {
-    format!("<div class=\"pcard\"><div class=\"note\">{}</div><div class=\"ptitle\" style=\"font-size:22px\">{}</div></div>", escape(label), escape(value))
-}
-
-pub async fn stats(State(state): State<WebState>, headers: HeaderMap, Path(guild): Path<u64>) -> Response {
-    let Some(session) = auth::session(&state, &headers).await else {
-        return auth::login_required();
-    };
-    let Some(guild_id) = (guild != 0).then(|| GuildId::new(guild)) else {
-        return forbidden();
-    };
-    if !can_manage(&state, session.user, guild_id).await {
-        return forbidden();
-    }
-    // Önbellekten okunanlar (kilit hemen bırakılır).
-    let Some((name, cards)) = state.cache.guild(guild_id).map(|g| {
-        let bots = g.members.values().filter(|m| m.user.bot).count() as u64;
-        let kind = |k: ChannelType| g.channels.values().filter(|c| c.kind == k).count();
-        let in_voice = g.voice_states.values().filter(|v| v.channel_id.is_some()).count();
-        let cards = [
-            ("Üye", g.member_count.to_string()),
-            ("İnsan", g.member_count.saturating_sub(bots).to_string()),
-            ("Bot", bots.to_string()),
-            ("Seste", in_voice.to_string()),
-            ("Metin kanalı", (kind(ChannelType::Text) + kind(ChannelType::News)).to_string()),
-            ("Ses kanalı", (kind(ChannelType::Voice) + kind(ChannelType::Stage)).to_string()),
-            ("Rol", g.roles.len().saturating_sub(1).to_string()),
-            ("Emoji", g.emojis.len().to_string()),
-            ("Takviye", g.premium_subscription_count.unwrap_or(0).to_string()),
-        ]
-        .iter()
-        .map(|(label, value)| stat(label, value))
-        .collect::<String>();
-        (g.name.clone(), cards)
-    }) else {
-        return forbidden();
-    };
-
-    let mut records = String::new();
-    let Ok(id) = i64::try_from(guild_id.get()) else {
-        return forbidden();
-    };
-    for (label, sql) in COUNTS {
-        let value = match sqlx::query_scalar::<_, i64>(*sql).bind(id).fetch_one(&state.db).await {
-            Ok(count) => count.to_string(),
-            Err(e) => {
-                warn!(guild = %guild_id, error = %e, "Panel: istatistik okunamadı");
-                "—".to_owned()
-            }
-        };
-        records.push_str(&stat(label, &value));
-    }
-    let total_xp: Option<i64> = sqlx::query_scalar("SELECT COALESCE(SUM(xp), 0)::BIGINT FROM member_xp WHERE guild_id = $1")
-        .bind(id)
-        .fetch_one(&state.db)
-        .await
-        .ok();
-    if let Some(total) = total_xp {
-        records.push_str(&stat("Toplam XP", &total.to_string()));
-    }
-
-    // Son 14 günün mesaj etkinliği (Redis sayaçları).
-    let (daily, top_channels) = crate::community::activity(&state.redis, guild_id, 14).await;
-    let peak = daily.iter().map(|(_, n)| *n).max().unwrap_or(0).max(1);
-    let mut chart = String::from("<div class=\"chart\">");
-    for (day, count) in &daily {
-        // Gün damgası → "gg.aa" (UTC).
-        let date = chrono::DateTime::from_timestamp(day * 86_400, 0).map_or_else(String::new, |d| d.format("%d.%m").to_string());
-        let _ = write!(
-            chart,
-            "<div class=\"col\"><b>{count}</b><div class=\"bar\" style=\"height:{}%\"></div><small>{date}</small></div>",
-            (count * 100 / peak).min(100)
-        );
-    }
-    chart.push_str("</div>");
-    let mut channels = String::new();
-    if top_channels.is_empty() {
-        channels.push_str("<p class=\"note\">Henüz kayıt yok; sayım bu sürümle birlikte başladı.</p>");
-    } else {
-        // Kanal adları önbellekten; kilit hemen bırakılır.
-        let names: Vec<String> = {
-            let guild = state.cache.guild(guild_id);
-            top_channels
-                .iter()
-                .map(|(id, _)| guild.as_ref().and_then(|g| g.channels.get(&ChannelId::new((*id).max(1))).map(|c| c.name.clone())).unwrap_or_else(|| "silinmiş kanal".to_owned()))
-                .collect()
-        };
-        channels.push_str("<table><tr><th>Kanal</th><th>Mesaj (14 gün)</th></tr>");
-        for ((_, count), name) in top_channels.iter().zip(names) {
-            let _ = write!(channels, "<tr><td># {}</td><td>{count}</td></tr>", escape(&name));
-        }
-        channels.push_str("</table>");
-    }
-
-    // Üye giriş / çıkışı (son 14 gün).
-    let flow = crate::community::flow(&state.redis, guild_id, 14).await;
-    let flow_peak = flow.iter().map(|(_, joined, left)| (*joined).max(*left)).max().unwrap_or(0).max(1);
-    let (total_in, total_out) = flow.iter().fold((0, 0), |(a, b), (_, joined, left)| (a + joined, b + left));
-    let mut members_chart = String::from("<div class=\"chart\">");
-    for (day, joined, left) in &flow {
-        let date = chrono::DateTime::from_timestamp(day * 86_400, 0).map_or_else(String::new, |d| d.format("%d.%m").to_string());
-        let _ = write!(
-            members_chart,
-            "<div class=\"col\"><b>+{joined} / −{left}</b><div style=\"display:flex;gap:2px;align-items:flex-end;height:100%;width:100%;max-width:38px\">\
-             <div class=\"bar\" style=\"height:{}%;background:var(--ok)\"></div><div class=\"bar\" style=\"height:{}%;background:var(--err)\"></div></div><small>{date}</small></div>",
-            (joined * 100 / flow_peak).min(100),
-            (left * 100 / flow_peak).min(100)
-        );
-    }
-    let _ = write!(members_chart, "</div><p class=\"note\">Yeşil: katılan, kırmızı: ayrılan. 14 günde <b>+{total_in}</b> / <b>−{total_out}</b> (net {}).</p>", total_in as i64 - total_out as i64);
-
-    // Kalıcılık: 7-14 gün önce katılanların kaçı hâlâ sunucuda.
-    let (stayed, joined_then) = crate::community::retention(&state.redis, guild_id).await;
-    let _ = write!(
-        members_chart,
-        "<p class=\"note\">Kalıcılık: 7-14 gün önce katılan <b>{joined_then}</b> üyeden <b>{stayed}</b> tanesi hâlâ sunucuda{}.</p>",
-        (stayed * 100).checked_div(joined_then).map_or_else(|| " (henüz yeterli veri yok)".to_owned(), |percent| format!(" (%{percent})"))
-    );
-
-    // En aktif saatler (haftanın günü × saat, Türkiye saati).
-    let grid = crate::community::heatmap(&state.redis, guild_id).await;
-    let hottest = grid.iter().flatten().copied().max().unwrap_or(0).max(1);
-    let mut heat = String::from("<div class=\"heat\"><div></div>");
-    for hour in 0..24 {
-        let _ = write!(heat, "<small>{hour:02}</small>");
-    }
-    for (name, row) in ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"].iter().zip(grid.iter()) {
-        let _ = write!(heat, "<small>{name}</small>");
-        for count in row {
-            let _ = write!(heat, "<i title=\"{count} mesaj\" style=\"opacity:{:.2}\"></i>", 0.08 + 0.92 * (*count as f64 / hottest as f64));
-        }
-    }
-    heat.push_str("</div><p class=\"note\">Koyu kareler en çok mesaj yazılan saatlerdir (Türkiye saati). Sayım bu sürümle başladı; zamanla dolar.</p>");
-
-    let body = format!(
-        "<p><a href=\"/panel/sunucu/{guild_id}\">← {name}</a></p><h1>📊 İstatistikler</h1>\
-         <p class=\"sub\">Sunucunun şu anki durumu ve botun bu sunucuda tuttuğu kayıtlar</p>\
-         <h2>Sunucu</h2><div class=\"pcards\">{cards}</div><h2>Günlük mesaj sayısı (son 14 gün)</h2>{chart}\
-         <h2>En hareketli kanallar</h2>{channels}<h2>Üye giriş / çıkışı (son 14 gün)</h2>{members_chart}\
-         <h2>En aktif saatler</h2>{heat}<h2>Bot kayıtları</h2><div class=\"pcards\">{records}</div>\
-         <p class=\"note\">Sıralama için: <a href=\"/panel/sunucu/{guild_id}/siralama\">XP sıralaması</a>.</p>",
-        name = escape(&name),
-    );
-    let nav = GuildNav { id: guild_id, name: &name, active: "istatistik" };
-    Html(layout(&state, &session, Nav::Home, Some(nav), Page { title: "İstatistikler", body }).await).into_response()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn count_queries_are_scoped_to_one_guild() {
-        for (label, sql) in COUNTS {
-            assert!(sql.starts_with("SELECT COUNT(*) FROM ") && sql.ends_with(" WHERE guild_id = $1"), "{label}");
-        }
-    }
 }

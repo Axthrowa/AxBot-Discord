@@ -60,7 +60,7 @@ pub async fn on_join(ctx: &serenity::Context, data: &Data, member: &Member) -> a
     let cfg = data.guild_configs.get(&data.db, guild_id).await?;
     let age_days = (serenity::Timestamp::now().unix_timestamp() - member.user.created_at().unix_timestamp()) / 86_400;
     // Davet, koruma üyeyi atsa bile kaydedilir (kimin sahte hesap getirdiği görülsün).
-    let invite = data.invites.on_join(&ctx.http, &data.db, member, age_days).await;
+    let invite = data.invites.on_join(&ctx.http, &data.db, &data.settings, member, age_days).await;
 
     // 1) Hesap yaşı filtresi.
     let min_age = i64::from(cfg.min_account_age_days);

@@ -69,6 +69,23 @@ pub async fn cal(
         }
     };
 
+    let max_len = music.settings(guild_id).max_length_secs;
+    if max_len > 0 {
+        if let Some(d) = info.duration {
+            if d.as_secs() > u64::from(max_len) {
+                return private(
+                    ctx,
+                    &format!(
+                        "⏱️ Bu şarkı çok uzun ({}). Bu sunucuda en fazla {} saniyelik şarkılara izin veriliyor.",
+                        crate::music::format_duration(d),
+                        max_len
+                    ),
+                )
+                .await;
+            }
+        }
+    }
+
     let enqueued = match music
         .enqueue(
             Arc::clone(&ctx.serenity_context().http),
@@ -365,8 +382,10 @@ pub async fn devam(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(slash_command, guild_only, rename = "şimdi", category = "Müzik")]
 pub async fn simdi(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
+    let lang = crate::i18n::resolve_discord_lang(&ctx);
     if ctx.data().music.card_state(guild_id).await.is_none() {
-        return private(ctx, "Şu an müzik çalmıyor.").await;
+        let msg = crate::i18n::t(lang, "music.queue_empty", &[]);
+        return private(ctx, &msg).await;
     }
     send_card(ctx, guild_id).await
 }
@@ -375,12 +394,14 @@ pub async fn simdi(ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(slash_command, guild_only, rename = "sıra", category = "Müzik")]
 pub async fn sira(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
+    let lang = crate::i18n::resolve_discord_lang(&ctx);
+    let empty_msg = crate::i18n::t(lang, "music.queue_empty", &[]);
     let Some(call) = ctx.data().music.songbird().get(guild_id) else {
-        return private(ctx, "Kuyruk boş.").await;
+        return private(ctx, &empty_msg).await;
     };
     let handles = call.lock().await.queue().current_queue();
     if handles.is_empty() {
-        return private(ctx, "Kuyruk boş.").await;
+        return private(ctx, &empty_msg).await;
     }
 
     let music = &ctx.data().music;
@@ -423,22 +444,41 @@ pub async fn ses(
     #[description = "Ses seviyesi yüzdesi (0-150, varsayılan 60)"]
     #[min = 0]
     #[max = 150]
-    level: u8,
+    level: Option<u16>,
+    #[rename = "varsayılan"]
+    #[description = "Bu ses seviyesini sunucu için kalıcı varsayılan yap"]
+    varsayilan: Option<bool>,
 ) -> Result<(), Error> {
     let Some((guild_id, _)) = same_channel_call(ctx).await? else {
         return Ok(());
     };
-    let volume = f32::from(level) / 100.0;
-    // Çalan ve sıradaki tüm şarkılara uygulanır; kart da hemen güncellenir.
-    ctx.data().music.apply_volume(guild_id, volume).await;
-    ctx.data().music.refresh_card_now(&ctx.serenity_context().http, guild_id).await;
-    let icon = match level {
-        0 => "🔇",
-        1..=40 => "🔈",
-        41..=90 => "🔉",
-        _ => "🔊",
+    let data = ctx.data();
+    let Some(lvl) = level else {
+        let current = (data.music.volume_of(guild_id) * 100.0).round() as u16;
+        let def = data.music.settings(guild_id).default_volume;
+        return private(ctx, &format!("🔊 Şu anki ses seviyesi: **%{current}** (Sunucu varsayılanı: %{def})")).await;
     };
-    ctx.say(format!("{icon} Ses seviyesi **%{level}**")).await?;
+
+    let volume = f32::from(lvl) / 100.0;
+    // Çalan ve sıradaki tüm şarkılara uygulanır; kart da hemen güncellenir.
+    data.music.apply_volume(guild_id, volume).await;
+    data.music.refresh_card_now(&ctx.serenity_context().http, guild_id).await;
+
+    if varsayilan.unwrap_or(false) {
+        let mut settings = data.music.settings(guild_id);
+        settings.default_volume = lvl;
+        let _ = data.music.save_settings(&data.db, guild_id, settings).await;
+        let _ = data.settings.set(&data.db, guild_id, settings).await;
+        ctx.say(format!("🔊 Ses seviyesi **%{lvl}** olarak ayarlandı ve sunucu varsayılanı yapıldı.")).await?;
+    } else {
+        let icon = match lvl {
+            0 => "🔇",
+            1..=40 => "🔈",
+            41..=90 => "🔉",
+            _ => "🔊",
+        };
+        ctx.say(format!("{icon} Ses seviyesi **%{lvl}**")).await?;
+    }
     Ok(())
 }
 
@@ -506,16 +546,38 @@ async fn m_247(
     #[rename = "açık"]
     #[description = "Açık mı?"]
     on: bool,
+    #[rename = "bekleme"]
+    #[description = "Kanal boşalınca ayrılmadan önce bekleme süresi (saniye; varsayılan 300, 0 = anında)"]
+    bekleme: Option<u32>,
+    #[rename = "oturum"]
+    #[description = "Maksimum oturum süresi (dakika; 0 = sınırsız)"]
+    oturum: Option<u32>,
 ) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
     let data = ctx.data();
     let mut settings = data.music.settings(guild_id);
     settings.always_on = on;
+    if let Some(b) = bekleme {
+        settings.idle_disconnect_secs = b;
+    }
+    if let Some(o) = oturum {
+        settings.max_session_mins = o;
+    }
     data.music.save_settings(&data.db, guild_id, settings).await?;
+    let lang = crate::i18n::resolve_discord_lang(&ctx);
     let text = if on {
-        "🌙 **7/24 modu açık:** Kanal boşalsa ya da kuyruk bitse de ses kanalından ayrılmayacağım. (`/müzik ayrıl` ile çıkarabilirsin.)"
+        let base = crate::i18n::t(lang, "music.mode_247_on", &[]);
+        format!(
+            "🌙 **{base}** (Bekleme: {} sn, Oturum sınırı: {})",
+            settings.idle_disconnect_secs,
+            if settings.max_session_mins > 0 { format!("{} dk", settings.max_session_mins) } else { "sınırsız".to_owned() }
+        )
     } else {
-        "☀️ 7/24 modu kapalı: Kanal boşalınca veya 5 dakika müzik çalmazsa ayrılırım."
+        let base = crate::i18n::t(lang, "music.mode_247_off", &[]);
+        format!(
+            "☀️ {base} (Kanal boşalınca veya {} sn sonra ayrılırım.)",
+            settings.idle_disconnect_secs
+        )
     };
     ctx.say(text).await?;
     Ok(())
@@ -609,11 +671,14 @@ async fn m_sozler(
         }
     };
     ctx.defer().await?;
-    let found = crate::music::extra::lyrics(&ctx.data().http_client, &query).await;
+    let found = crate::music::lyrics::search_lyrics(&ctx.data().http_client, &query).await;
     let lyrics = match found {
         Ok(Some(l)) => l,
         Ok(None) => {
-            ctx.say(format!("🔍 **{query}** için şarkı sözü bulunamadı.")).await?;
+            ctx.say(format!(
+                "🔍 **{query}** için şarkı sözü bulunamadı. Şarkı ve sanatçı adını biraz daha sadeleştirerek (örneğin: `Sanatçı - Şarkı Adı`) tekrar deneyebilirsin."
+            ))
+            .await?;
             return Ok(());
         }
         Err(e) => {
@@ -827,24 +892,17 @@ async fn same_channel_call(ctx: Context<'_>) -> Result<Option<(GuildId, Arc<Mute
     }
 }
 
-/// DJ rolü ayarlıysa: rolü olanlar, sunucuyu yönetenler ve kanalda botla baş başa kalan üye müziği yönetebilir.
+/// DJ rolü ayarlıysa: rolü olanlar, sunucuyu yönetenler, şarkıyı ekleyen ve kanalda botla baş başa kalan üye müziği yönetebilir.
 async fn dj_allowed(ctx: Context<'_>, guild_id: GuildId, channel: ChannelId) -> bool {
-    let data = ctx.data();
-    let Some(dj_role) = data.settings.get::<crate::music::playlists::MusicExtras>(&data.db, guild_id).await.ok().and_then(|s| s.dj_role) else {
-        return true;
-    };
     let author = ctx.author().id;
-    // Önbellek kilidi `await`'ten önce bırakılır.
-    ctx.serenity_context().cache.guild(guild_id).is_none_or(|guild| {
-        let Some(member) = guild.members.get(&author) else { return false };
-        let manages = guild.owner_id == author || guild.member_permissions(member).intersects(serenity::Permissions::ADMINISTRATOR | serenity::Permissions::MANAGE_GUILD);
-        let listeners = guild
-            .voice_states
-            .values()
-            .filter(|v| v.channel_id == Some(channel) && guild.members.get(&v.user_id).is_some_and(|m| !m.user.bot))
-            .count();
-        manages || member.roles.iter().any(|r| r.get() == dj_role) || listeners <= 1
-    })
+    let requester = ctx.data().music.card_state(guild_id).await.map(|(t, _)| t.requester);
+    ctx.data().music.can_manage(
+        &ctx.serenity_context().cache,
+        guild_id,
+        author,
+        channel,
+        requester,
+    )
 }
 
 /// Yazdığını ses kanalında sesli okur (mikrofonu olmayanlar için).
@@ -888,14 +946,33 @@ async fn m_soyle(ctx: Context<'_>, #[description = "Okunacak metin (en fazla 200
 
 /// DJ rolünü ayarlar: ayarlıysa geç / durdur / ses gibi komutları yalnızca o roldekiler kullanır.
 #[poise::command(slash_command, guild_only, rename = "dj-rol", required_permissions = "MANAGE_GUILD")]
-async fn m_dj(ctx: Context<'_>, #[description = "DJ rolü (boş bırakırsan kısıtlama kalkar)"] rol: Option<serenity::Role>) -> Result<(), Error> {
+async fn m_dj(
+    ctx: Context<'_>,
+    #[description = "DJ rolü (boş bırakırsan kısıtlama kalkar)"] rol: Option<serenity::Role>,
+    #[rename = "maks_süre"]
+    #[description = "Maksimum şarkı süresi (saniye; 0 = sınırsız)"]
+    maks_sure: Option<u32>,
+) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
     let data = ctx.data();
+    let mut settings = data.music.settings(guild_id);
+    settings.dj_role = rol.as_ref().map(|r| r.id.get());
+    if let Some(m) = maks_sure {
+        settings.max_length_secs = m;
+    }
+    data.music.save_settings(&data.db, guild_id, settings).await?;
+    let _ = data.settings.set(&data.db, guild_id, settings).await;
     let text = match &rol {
-        Some(role) => format!("🎧 DJ rolü: **{}**. Müziği artık bu roldekiler, yöneticiler ve kanalda tek başına olan üye yönetebilir; şarkı eklemek herkese açık.", role.name),
-        None => "🎧 DJ kısıtlaması kaldırıldı; müziği kanaldaki herkes yönetebilir.".to_owned(),
+        Some(role) => format!(
+            "🎧 DJ rolü: **{}**. Müziği artık bu roldekiler, yöneticiler ve kanalda tek başına olan üye yönetebilir; şarkı eklemek herkese açık. (Maks süre: {})",
+            role.name,
+            if settings.max_length_secs > 0 { format!("{} sn", settings.max_length_secs) } else { "sınırsız".to_owned() }
+        ),
+        None => format!(
+            "🎧 DJ kısıtlaması kaldırıldı; müziği kanaldaki herkes yönetebilir. (Maks süre: {})",
+            if settings.max_length_secs > 0 { format!("{} sn", settings.max_length_secs) } else { "sınırsız".to_owned() }
+        ),
     };
-    data.settings.set(&data.db, guild_id, crate::music::playlists::MusicExtras { dj_role: rol.map(|r| r.id.get()) }).await?;
     private(ctx, &text).await
 }
 

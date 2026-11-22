@@ -77,7 +77,7 @@ imageproc = { version = "0.25", default-features = false }
 ab_glyph = "0.2"
 
 # Web sunucusu: yönetim paneli (/panel) ve ban itirazı formu (/itiraz)
-axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "form", "query", "json"] }
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "form", "query", "json", "ws"] }
 
 # Web panelinde botun bellek kullanımı (Windows + Linux)
 memory-stats = "1"

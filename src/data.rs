@@ -64,4 +64,6 @@ pub struct Data {
     /// Developer Portal'da "Server Members Intent" açık mı? Kapalıysa giriş/çıkış özellikleri çalışmaz.
     pub members_intent: bool,
     pub started_at: Instant,
+    #[allow(dead_code)]
+    pub event_bus: tokio::sync::broadcast::Sender<crate::panel::RealtimeEvent>,
 }

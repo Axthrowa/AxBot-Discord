@@ -122,6 +122,23 @@ pub async fn fields(state: &WebState, guild_id: GuildId, options: &Options) -> a
     rates.push_str("</select>");
     out.push_str(&section("TP oranı", field("Kazanılan XP çarpanı", &rates, "Seviye atlamayı zorlaştırmak ya da kolaylaştırmak için.")));
     out.push_str(&section(
+        "Ses XP Sistemi",
+        checkbox("voice_xp_enabled", settings.voice_xp_enabled, "Ses kanallarında bulunarak XP kazanımı açık")
+            + &field(
+                "Dakika başına Ses XP",
+                &format!("<input type=\"number\" name=\"voice_xp_per_minute\" value=\"{}\" min=\"1\" max=\"100\">", settings.voice_xp_per_minute),
+                "Her uygun dakika için verilecek temel XP miktarı (varsayılan: 10).",
+            )
+            + &field(
+                "Kanalda gereken en az üye sayısı",
+                &format!("<input type=\"number\" name=\"voice_min_members\" value=\"{}\" min=\"1\" max=\"50\">", settings.voice_min_members),
+                "Kanalda en az bu kadar üye varken XP kazanılır (yalnız oturarak XP kasmayı engeller; varsayılan: 2).",
+            )
+            + &checkbox("voice_ignore_muted", settings.voice_ignore_muted, "Susturulmuş (mute) üyeler XP kazanmasın")
+            + &checkbox("voice_ignore_deafened", settings.voice_ignore_deafened, "Sağırlaştırılmış (deaf) üyeler XP kazanmasın")
+            + &checkbox("voice_ignore_afk", settings.voice_ignore_afk, "AFK kanalındaki üyeler XP kazanmasın"),
+    ));
+    out.push_str(&section(
         "Prestij",
         field(
             "Prestij seviyesi",
@@ -240,6 +257,20 @@ pub async fn save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Res
         public_leaderboard: input.checked("public_leaderboard"),
         // Eski formlarda alan yoktur: kapalı sayılır.
         prestige_level: if input.raw("prestige_level").is_empty() { 0 } else { input.number("prestige_level", 0, 500)? },
+        voice_xp_enabled: input.checked("voice_xp_enabled"),
+        voice_xp_per_minute: if input.raw("voice_xp_per_minute").is_empty() {
+            current.voice_xp_per_minute
+        } else {
+            u16::try_from(input.number("voice_xp_per_minute", 1, 100)?).map_err(|_| "sayi")?
+        },
+        voice_min_members: if input.raw("voice_min_members").is_empty() {
+            current.voice_min_members
+        } else {
+            input.number("voice_min_members", 1, 50)? as usize
+        },
+        voice_ignore_muted: input.checked("voice_ignore_muted"),
+        voice_ignore_deafened: input.checked("voice_ignore_deafened"),
+        voice_ignore_afk: input.checked("voice_ignore_afk"),
     };
 
     let mut channel_items = input.options.channels.clone();

@@ -5,6 +5,7 @@ use poise::serenity_prelude::{self as serenity, CreateEmbed, CreateEmbedFooter, 
 use poise::CreateReply;
 
 use crate::data::Context;
+use crate::db::snowflake;
 use crate::error::Error;
 use crate::leveling::settings::{roles_on_level_loss, roles_on_level_up, LevelSettings};
 use crate::leveling::{formula, ExclusionKind};
@@ -48,13 +49,29 @@ pub async fn seviye(
     };
     let (avatar, backdrop) = tokio::join!(crate::members::avatar_image(&user), backdrop);
     let prestige = prestige_of(&data.db, guild_id, user.id).await.unwrap_or(0);
+    let voice_stats: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT total_voice_seconds, total_voice_xp FROM member_voice_stats WHERE guild_id = $1 AND user_id = $2",
+    )
+    .bind(snowflake(guild_id.get())?)
+    .bind(snowflake(user.id.get())?)
+    .fetch_optional(&data.db)
+    .await
+    .unwrap_or(None);
+    let voice_text = voice_stats.map(|(s, x)| format_voice_summary(s, x));
+
     let _permit = crate::cards::RENDER_SEMAPHORE.acquire().await.ok();
     let drawn = tokio::task::spawn_blocking(move || crate::cards::render_rank(&card, avatar.as_ref(), backdrop.as_ref())).await;
     if let Ok(Ok(bytes)) = drawn {
         let file = serenity::CreateAttachment::bytes(bytes, "seviye.jpg");
         let mut reply = CreateReply::default().attachment(file);
-        if prestige > 0 {
-            reply = reply.content(format!("⭐ Prestij {prestige}"));
+        let header = match (prestige > 0, voice_text.as_deref()) {
+            (true, Some(v)) => Some(format!("⭐ Prestij {prestige} • 🎙️ {v}")),
+            (true, None) => Some(format!("⭐ Prestij {prestige}")),
+            (false, Some(v)) => Some(format!("🎙️ {v}")),
+            (false, None) => None,
+        };
+        if let Some(content) = header {
+            reply = reply.content(content);
         }
         ctx.send(reply).await?;
         return Ok(());
@@ -63,21 +80,36 @@ pub async fn seviye(
     let position = rank
         .position
         .map_or_else(|| "—".to_owned(), |p| format!("#{p}"));
-    let embed = CreateEmbed::new()
+    let mut embed = CreateEmbed::new()
         .author(serenity::CreateEmbedAuthor::new(user.tag()).icon_url(user.face()))
         .colour(serenity::Colour::BLURPLE)
         .field("Seviye", format!("**{}**", progress.level), true)
         .field("Sıra", position, true)
         .field("Toplam XP", rank.total_xp.to_string(), true)
-        .field("Prestij", format!("⭐ {prestige}"), true)
-        .field(
-            format!("İlerleme ({} / {} XP)", progress.current, progress.needed),
-            formula::bar(progress, 16),
-            false,
-        );
+        .field("Prestij", format!("⭐ {prestige}"), true);
+    if let Some(ref v) = voice_text {
+        embed = embed.field("Ses İstatistiği", format!("🎙️ {v}"), true);
+    }
+    embed = embed.field(
+        format!("İlerleme ({} / {} XP)", progress.current, progress.needed),
+        formula::bar(progress, 16),
+        false,
+    );
 
     ctx.send(CreateReply::default().embed(embed)).await?;
     Ok(())
+}
+
+fn format_voice_summary(seconds: i64, xp: i64) -> String {
+    let secs = u64::try_from(seconds.max(0)).unwrap_or(0);
+    let hours = secs / 3600;
+    let mins = (secs % 3600) / 60;
+    let dur = if hours > 0 {
+        format!("{hours}s {mins}dk")
+    } else {
+        format!("{mins}dk")
+    };
+    format!("Ses: {dur} • {xp} XP")
 }
 
 

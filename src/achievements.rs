@@ -6,12 +6,12 @@
 //! için kazanılmış başarımları mesaj başına okumak gerekmez.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
-use std::time::Instant;
+use std::sync::Arc;
 
-use dashmap::DashMap;
 use poise::serenity_prelude::{self as serenity, ChannelId, CreateAllowedMentions, CreateMessage, GuildId, Mentionable, RoleId, User, UserId, VoiceState};
+use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use tracing::{debug, warn};
 
 use crate::data::Data;
@@ -136,12 +136,40 @@ fn counter_key(guild_id: GuildId, user: UserId) -> String {
     format!("ach:{guild_id}:{user}")
 }
 
+/// Başarım kontrolleri için gereken bağımlılıklar.
+pub struct AchievementContext<'a> {
+    pub ctx: &'a serenity::Context,
+    pub db: &'a PgPool,
+    pub redis: &'a ConnectionManager,
+    pub settings: &'a crate::settings::PluginSettings,
+    pub leveling: &'a crate::leveling::Leveling,
+}
+
 /// Sayacı artırır; bir eşik geçildiyse başarımı kazandırır. `channel`: olayın olduğu kanal (duyuru için).
 pub async fn bump(ctx: &serenity::Context, data: &Data, guild_id: GuildId, user: &User, kind: Kind, amount: u64, channel: Option<ChannelId>) {
+    let actx = AchievementContext {
+        ctx,
+        db: &data.db,
+        redis: &data.redis,
+        settings: &data.settings,
+        leveling: &data.leveling,
+    };
+    bump_with(actx, guild_id, user, kind, amount, channel).await;
+}
+
+/// Arka plan görevleri veya kısmi durumlar için `Data` referansı olmadan başarım sayacını artıran yardımcı.
+pub async fn bump_with(
+    actx: AchievementContext<'_>,
+    guild_id: GuildId,
+    user: &User,
+    kind: Kind,
+    amount: u64,
+    channel: Option<ChannelId>,
+) {
     if user.bot || amount == 0 {
         return;
     }
-    let settings: Arc<AchievementSettings> = match data.settings.get(&data.db, guild_id).await {
+    let settings: Arc<AchievementSettings> = match actx.settings.get(actx.db, guild_id).await {
         Ok(settings) => settings,
         Err(e) => {
             warn!(guild = %guild_id, error = ?e, "Başarım ayarları okunamadı");
@@ -151,7 +179,7 @@ pub async fn bump(ctx: &serenity::Context, data: &Data, guild_id: GuildId, user:
     if !settings.enabled {
         return;
     }
-    let mut conn = data.redis.clone();
+    let mut conn = actx.redis.clone();
     let new: redis::RedisResult<i64> = redis::cmd("HINCRBY")
         .arg(counter_key(guild_id, user.id))
         .arg(kind.code())
@@ -167,15 +195,14 @@ pub async fn bump(ctx: &serenity::Context, data: &Data, guild_id: GuildId, user:
     };
     let definitions = settings.definitions();
     for definition in crossed(&definitions, kind, new.saturating_sub(amount), new) {
-        if let Err(e) = unlock(ctx, data, guild_id, user, definition, &settings, channel).await {
+        if let Err(e) = unlock_with(&actx, guild_id, user, definition, &settings, channel).await {
             warn!(guild = %guild_id, user = %user.id, key = definition.key, error = ?e, "Başarım kaydedilemedi");
         }
     }
 }
 
-async fn unlock(
-    ctx: &serenity::Context,
-    data: &Data,
+async fn unlock_with(
+    actx: &AchievementContext<'_>,
     guild_id: GuildId,
     user: &User,
     definition: &Definition,
@@ -186,7 +213,7 @@ async fn unlock(
         .bind(snowflake(guild_id.get())?)
         .bind(snowflake(user.id.get())?)
         .bind(&definition.key)
-        .execute(&data.db)
+        .execute(actx.db)
         .await?
         .rows_affected();
     // Sayaç sıfırlanıp yeniden geçildiyse başarım ikinci kez verilmez.
@@ -196,14 +223,14 @@ async fn unlock(
 
     let mut rewards = Vec::new();
     if definition.reward_xp > 0 {
-        data.leveling.add_xp(&data.db, &data.redis, guild_id, user.id, i64::from(definition.reward_xp)).await?;
+        actx.leveling.add_xp(actx.db, actx.redis, guild_id, user.id, i64::from(definition.reward_xp)).await?;
         rewards.push(format!("+{} XP", definition.reward_xp));
     }
     if let Some(role_id) = definition.reward_role.filter(|id| *id != 0).map(RoleId::new) {
-        let role = ctx.cache.guild(guild_id).and_then(|g| g.roles.get(&role_id).cloned());
+        let role = actx.ctx.cache.guild(guild_id).and_then(|g| g.roles.get(&role_id).cloned());
         // Yetkili roller ödül olarak verilmez.
-        if role.is_some_and(|role| reaction_roles::check_role(ctx, guild_id, &role).is_ok()) {
-            match ctx.http.add_member_role(guild_id, user.id, role_id, Some("Başarım ödülü")).await {
+        if role.is_some_and(|role| reaction_roles::check_role(actx.ctx, guild_id, &role).is_ok()) {
+            match actx.ctx.http.add_member_role(guild_id, user.id, role_id, Some("Başarım ödülü")).await {
                 Ok(()) => rewards.push(role_id.mention().to_string()),
                 Err(e) => warn!(guild = %guild_id, role = %role_id, error = %e, "Başarım ödül rolü verilemedi"),
             }
@@ -223,7 +250,7 @@ async fn unlock(
             text.push_str(&format!(" Ödül: {}", rewards.join(", ")));
         }
         let message = CreateMessage::new().content(text).allowed_mentions(CreateAllowedMentions::new().users(vec![user.id]));
-        if let Err(e) = target.send_message(&ctx.http, message).await {
+        if let Err(e) = target.send_message(&actx.ctx.http, message).await {
             debug!(channel = %target, error = %e, "Başarım duyurusu gönderilemedi");
         }
     }
@@ -246,26 +273,9 @@ pub async fn progress(data: &Data, guild_id: GuildId, user: UserId) -> anyhow::R
     Ok((counters, unlocked))
 }
 
-/// Seste olan üyelerin giriş zamanı (bot yeniden başlarsa o anki oturum sayılmaz).
-static IN_VOICE: LazyLock<DashMap<(GuildId, UserId), Instant>> = LazyLock::new(DashMap::new);
-
-/// Ses kanalına giriş/çıkışı izler; çıkışta geçen dakikaları sayaca ekler.
-pub async fn on_voice(ctx: &serenity::Context, data: &Data, new: &VoiceState) {
-    let Some(guild_id) = new.guild_id else { return };
-    crate::community::refresh_voice_activity(&ctx.cache, guild_id);
-    let key = (guild_id, new.user_id);
-    if new.channel_id.is_some() {
-        IN_VOICE.entry(key).or_insert_with(Instant::now);
-        return;
-    }
-    let Some((_, joined)) = IN_VOICE.remove(&key) else { return };
-    let minutes = joined.elapsed().as_secs() / 60;
-    let Some(user) = new.member.as_ref().map(|m| m.user.clone()).or_else(|| ctx.cache.user(new.user_id).map(|u| u.clone())) else {
-        return;
-    };
-    crate::community::voice_session_xp(data, guild_id, new.user_id, minutes).await;
-    bump(ctx, data, guild_id, &user, Kind::Voice, minutes, None).await;
-}
+/// Ses kanalına giriş/çıkışı izler.
+/// Ses dakikaları ve ses XP'si `analytics::spawn_voice_tracker` tarafından periyodik sayılır.
+pub async fn on_voice(_ctx: &serenity::Context, _data: &Data, _new: &VoiceState) {}
 
 #[cfg(test)]
 mod tests {

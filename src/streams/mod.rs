@@ -223,7 +223,15 @@ pub async fn list(db: &PgPool, guild_id: GuildId) -> anyhow::Result<Vec<Subscrip
 }
 
 /// Bot açık kaldığı sürece yayınları periyodik kontrol eder.
-pub fn spawn_poller(http: Arc<Http>, db: PgPool, streams: Arc<Streams>, interval: Duration) {
+pub fn spawn_poller(
+    ctx: serenity::Context,
+    db: PgPool,
+    streams: Arc<Streams>,
+    settings: crate::settings::PluginSettings,
+    http_client: reqwest::Client,
+    event_bus: tokio::sync::broadcast::Sender<crate::panel::RealtimeEvent>,
+    interval: Duration,
+) {
     if streams.twitch.is_none() && streams.kick.is_none() {
         info!("Twitch/Kick anahtarları yok, yayın duyuruları kapalı");
         return;
@@ -234,7 +242,7 @@ pub fn spawn_poller(http: Arc<Http>, db: PgPool, streams: Arc<Streams>, interval
         loop {
             ticker.tick().await;
             crate::supervise::round("yayın duyuruları", std::time::Duration::from_secs(300), async {
-                if let Err(e) = poll_once(&http, &db, &streams).await {
+                if let Err(e) = poll_once(&ctx.http, &ctx.cache, &db, &streams, &settings, &http_client, &event_bus).await {
                     warn!(error = ?e, "Yayın kontrolü başarısız");
                 }
             })
@@ -246,6 +254,7 @@ pub fn spawn_poller(http: Arc<Http>, db: PgPool, streams: Arc<Streams>, interval
 #[derive(sqlx::FromRow)]
 struct DbRow {
     id: i64,
+    guild_id: i64,
     platform: String,
     login: String,
     channel_id: i64,
@@ -255,6 +264,7 @@ struct DbRow {
 
 struct Row {
     id: i64,
+    guild_id: GuildId,
     platform: Platform,
     login: String,
     channel_id: ChannelId,
@@ -262,9 +272,17 @@ struct Row {
     last_stream_id: Option<String>,
 }
 
-async fn poll_once(http: &Http, db: &PgPool, streams: &Streams) -> anyhow::Result<()> {
+async fn poll_once(
+    http: &Http,
+    cache: &serenity::Cache,
+    db: &PgPool,
+    streams: &Streams,
+    settings: &crate::settings::PluginSettings,
+    http_client: &reqwest::Client,
+    event_bus: &tokio::sync::broadcast::Sender<crate::panel::RealtimeEvent>,
+) -> anyhow::Result<()> {
     let raw: Vec<DbRow> = sqlx::query_as(
-        "SELECT id, platform, login, channel_id, role_id, last_stream_id FROM stream_subscriptions",
+        "SELECT id, guild_id, platform, login, channel_id, role_id, last_stream_id FROM stream_subscriptions",
     )
     .fetch_all(db)
     .await?;
@@ -273,6 +291,7 @@ async fn poll_once(http: &Http, db: &PgPool, streams: &Streams) -> anyhow::Resul
         .filter_map(|r| {
             Some(Row {
                 id: r.id,
+                guild_id: GuildId::new(to_id(r.guild_id)?),
                 platform: Platform::from_db(&r.platform)?,
                 login: r.login,
                 channel_id: ChannelId::new(to_id(r.channel_id)?),
@@ -307,18 +326,97 @@ async fn poll_once(http: &Http, db: &PgPool, streams: &Streams) -> anyhow::Resul
         debug!(platform = platform.label(), checked = logins.len(), live = live.len(), "Yayın kontrolü");
 
         for row in rows.iter().filter(|r| r.platform == platform) {
-            let Some(stream) = live.get(&row.login) else { continue };
-            if row.last_stream_id.as_deref() == Some(stream.stream_id.as_str()) {
-                continue;
-            }
+            match live.get(&row.login) {
+                Some(stream) => {
+                    // Yayın canlı
+                    if row.last_stream_id.as_deref() == Some(stream.stream_id.as_str()) {
+                        continue;
+                    }
 
-            // Önce kaydet: duyuru başarısız olsa bile her turda tekrar denenip kanal spamlanmasın.
-            sqlx::query("UPDATE stream_subscriptions SET last_stream_id = $1 WHERE id = $2")
-                .bind(&stream.stream_id)
-                .bind(row.id)
-                .execute(db)
-                .await?;
-            announce(http, platform, row, stream).await;
+                    // Yeni yayın tespit edildi: önce kaydet ki hata olsa bile tekrar tekrar spam yapmasın
+                    if let Err(e) = sqlx::query("UPDATE stream_subscriptions SET last_stream_id = $1 WHERE id = $2")
+                        .bind(&stream.stream_id)
+                        .bind(row.id)
+                        .execute(db)
+                        .await
+                    {
+                        warn!(row_id = row.id, error = ?e, "last_stream_id güncellenemedi");
+                    }
+                    announce(http, platform, row, stream).await;
+
+                    // Realtime event
+                    let _ = event_bus.send(crate::panel::RealtimeEvent::StreamStatus {
+                        guild_id: row.guild_id.get(),
+                        platform: platform.as_str().to_owned(),
+                        streamer: stream.display_name.clone(),
+                        live: true,
+                        title: Some(stream.title.clone()),
+                        game: stream.category.clone(),
+                        viewers: stream.viewers,
+                    });
+
+                    // Otomasyon tetikleyici
+                    crate::automations::run_stream(
+                        http,
+                        cache,
+                        db,
+                        settings,
+                        http_client,
+                        crate::automations::StreamEventContext {
+                            guild_id: row.guild_id,
+                            platform: platform.as_str(),
+                            streamer: &stream.display_name,
+                            live: true,
+                            title: Some(&stream.title),
+                            game: stream.category.as_deref(),
+                            viewers: stream.viewers,
+                        },
+                    )
+                    .await;
+                }
+                None => {
+                    // Yayın kapandı: eğer daha önce yayındaysa (last_stream_id doluysa)
+                    if row.last_stream_id.is_some() {
+                        if let Err(e) = sqlx::query("UPDATE stream_subscriptions SET last_stream_id = NULL WHERE id = $1")
+                            .bind(row.id)
+                            .execute(db)
+                            .await
+                        {
+                            warn!(row_id = row.id, error = ?e, "last_stream_id sıfırlanamadı");
+                        }
+
+                        // Realtime event
+                        let _ = event_bus.send(crate::panel::RealtimeEvent::StreamStatus {
+                            guild_id: row.guild_id.get(),
+                            platform: platform.as_str().to_owned(),
+                            streamer: row.login.clone(),
+                            live: false,
+                            title: None,
+                            game: None,
+                            viewers: None,
+                        });
+
+                        // Otomasyon tetikleyici
+                        crate::automations::run_stream(
+                            http,
+                            cache,
+                            db,
+                            settings,
+                            http_client,
+                            crate::automations::StreamEventContext {
+                                guild_id: row.guild_id,
+                                platform: platform.as_str(),
+                                streamer: &row.login,
+                                live: false,
+                                title: None,
+                                game: None,
+                                viewers: None,
+                            },
+                        )
+                        .await;
+                    }
+                }
+            }
         }
     }
     Ok(())

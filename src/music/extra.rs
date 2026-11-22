@@ -330,12 +330,6 @@ fn parse_spotify_embed(html: &str) -> anyhow::Result<SpotifyList> {
 
 // ===================== Şarkı sözleri =====================
 
-pub struct Lyrics {
-    pub title: String,
-    pub artist: String,
-    pub text: String,
-}
-
 /// "TARKAN - Şımarık (Official Music Video)" → "TARKAN - Şımarık"
 pub fn clean_title(title: &str) -> String {
     let brackets = Regex::new(r"[\(\[\{][^\)\]\}]*[\)\]\}]").map(|re| re.replace_all(title, "").into_owned()).unwrap_or_else(|_| title.to_owned());
@@ -348,30 +342,6 @@ pub fn clean_title(title: &str) -> String {
         }
     }
     cleaned.split('|').next().unwrap_or_default().split_whitespace().collect::<Vec<_>>().join(" ").trim_matches(['-', ' ']).to_owned()
-}
-
-/// lrclib.net (ücretsiz, anahtar gerektirmez) üzerinden şarkı sözü arar.
-pub async fn lyrics(client: &reqwest::Client, query: &str) -> anyhow::Result<Option<Lyrics>> {
-    let results: Vec<serde_json::Value> = get(|| {
-        client
-            .get("https://lrclib.net/api/search")
-            .query(&[("q", query)])
-            .header(reqwest::header::USER_AGENT, concat!("AxBot/", env!("CARGO_PKG_VERSION")))
-            .timeout(REQUEST_TIMEOUT)
-    })
-    .await
-    .context("Şarkı sözü servisine ulaşılamadı")?
-        .error_for_status()?
-        .json()
-        .await?;
-    Ok(results.iter().find_map(|r| {
-        let text = r.get("plainLyrics")?.as_str()?.trim();
-        (!text.is_empty()).then(|| Lyrics {
-            title: r.get("trackName").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(),
-            artist: r.get("artistName").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(),
-            text: text.to_owned(),
-        })
-    }))
 }
 
 // ===================== İleri sarma =====================
@@ -601,6 +571,7 @@ mod tests {
 #[cfg(test)]
 mod live_tests {
     use super::*;
+    use crate::music::lyrics::lyrics;
     use songbird::input::codecs::{get_codec_registry, get_probe};
     use songbird::input::{HttpRequest, Input};
 

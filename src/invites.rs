@@ -8,15 +8,51 @@ use std::collections::HashMap;
 
 use dashmap::DashMap;
 use poise::serenity_prelude::{self as serenity, GuildId, Member, UserId};
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 use crate::db::snowflake;
 use crate::guild_config::to_id;
+use crate::settings::{PluginConfig, PluginSettings};
 
-/// Bu yaştan genç hesaplarla gelen davetler "sahte" sayılır.
-pub const FAKE_ACCOUNT_DAYS: i64 = 7;
+/// Sunucu bazlı yapılandırılabilir davet koruma kuralları.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InviteSettings {
+    /// Bu günden yeni hesaplar sahte işaretlenir.
+    pub fake_account_days: u32,
+    /// Katıldıktan sonra bu dakika içinde ayrılanlar sahte işaretlenir.
+    pub quick_leave_mins: u32,
+}
+
+impl Default for InviteSettings {
+    fn default() -> Self {
+        Self {
+            fake_account_days: 7,
+            quick_leave_mins: 10,
+        }
+    }
+}
+
+impl PluginConfig for InviteSettings {
+    const KEY: &'static str = "invites";
+}
+
+impl InviteSettings {
+    #[must_use]
+    pub fn is_fake_age(&self, account_age_days: i64) -> bool {
+        account_age_days < i64::from(self.fake_account_days)
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn is_quick_leave(&self, joined_at_epoch: i64, left_at_epoch: i64) -> bool {
+        let diff_secs = left_at_epoch.saturating_sub(joined_at_epoch);
+        diff_secs < (i64::from(self.quick_leave_mins) * 60)
+    }
+}
 
 #[derive(Debug, Clone)]
 struct CachedInvite {
@@ -74,7 +110,14 @@ impl Invites {
     }
 
     /// Kullanılan daveti bulur ve kaydeder. Bulunamazsa (özel URL, izin yok) davet eden boş kalır.
-    pub async fn on_join(&self, http: &serenity::Http, db: &PgPool, member: &Member, account_age_days: i64) -> Option<UsedInvite> {
+    pub async fn on_join(
+        &self,
+        http: &serenity::Http,
+        db: &PgPool,
+        settings: &PluginSettings,
+        member: &Member,
+        account_age_days: i64,
+    ) -> Option<UsedInvite> {
         let guild_id = member.guild_id;
         let _guard = self.join_lock.lock().await;
 
@@ -95,7 +138,8 @@ impl Invites {
             }
         };
 
-        let fake = account_age_days < FAKE_ACCOUNT_DAYS;
+        let invite_settings = settings.get::<InviteSettings>(db, guild_id).await.unwrap_or_default();
+        let fake = invite_settings.is_fake_age(account_age_days);
         if let Err(e) = record_join(db, guild_id, member.user.id, used.as_ref(), fake).await {
             warn!(guild = %guild_id, error = ?e, "Davet kaydı yazılamadı");
         }
@@ -137,20 +181,33 @@ async fn record_join(db: &PgPool, guild_id: GuildId, user: UserId, used: Option<
     Ok(())
 }
 
-pub async fn on_leave(db: &PgPool, guild_id: GuildId, user: UserId) -> anyhow::Result<()> {
-    sqlx::query("UPDATE invite_joins SET left_at = now() WHERE guild_id = $1 AND user_id = $2")
-        .bind(snowflake(guild_id.get())?)
-        .bind(snowflake(user.get())?)
-        .execute(db)
-        .await?;
+pub async fn on_leave(
+    db: &PgPool,
+    settings: &PluginSettings,
+    guild_id: GuildId,
+    user: UserId,
+) -> anyhow::Result<()> {
+    let invite_settings = settings.get::<InviteSettings>(db, guild_id).await.unwrap_or_default();
+    let mins = i32::try_from(invite_settings.quick_leave_mins).unwrap_or(10);
+    sqlx::query(
+        "UPDATE invite_joins
+         SET left_at = now(),
+             fake = fake OR (now() - joined_at < make_interval(mins => $3))
+         WHERE guild_id = $1 AND user_id = $2",
+    )
+    .bind(snowflake(guild_id.get())?)
+    .bind(snowflake(user.get())?)
+    .bind(mins)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
 pub async fn stats(db: &PgPool, guild_id: GuildId, inviter: UserId) -> anyhow::Result<InviteStats> {
     let (active, left, fake): (i64, i64, i64) = sqlx::query_as(
         "SELECT COUNT(*) FILTER (WHERE left_at IS NULL AND NOT fake),
-                COUNT(*) FILTER (WHERE left_at IS NOT NULL),
-                COUNT(*) FILTER (WHERE fake AND left_at IS NULL)
+                COUNT(*) FILTER (WHERE left_at IS NOT NULL AND NOT fake),
+                COUNT(*) FILTER (WHERE fake)
          FROM invite_joins WHERE guild_id = $1 AND inviter_id = $2",
     )
     .bind(snowflake(guild_id.get())?)
@@ -171,12 +228,18 @@ pub async fn invited_by(db: &PgPool, guild_id: GuildId, user: UserId) -> anyhow:
     Ok(row.map(|(inviter, code)| (to_id(inviter).map(UserId::new), code)))
 }
 
-/// En çok aktif daveti olan üyeler.
-pub async fn leaderboard(db: &PgPool, guild_id: GuildId, limit: i64) -> anyhow::Result<Vec<(UserId, i64)>> {
-    let rows: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT inviter_id, COUNT(*) AS active FROM invite_joins
-         WHERE guild_id = $1 AND inviter_id IS NOT NULL AND left_at IS NULL AND NOT fake
-         GROUP BY inviter_id ORDER BY active DESC LIMIT $2",
+/// En çok aktif daveti olan üyeler ve davet istatistikleri.
+pub async fn leaderboard(db: &PgPool, guild_id: GuildId, limit: i64) -> anyhow::Result<Vec<(UserId, InviteStats)>> {
+    let rows: Vec<(i64, i64, i64, i64)> = sqlx::query_as(
+        "SELECT inviter_id,
+                COUNT(*) FILTER (WHERE left_at IS NULL AND NOT fake) AS active,
+                COUNT(*) FILTER (WHERE left_at IS NOT NULL AND NOT fake) AS left_count,
+                COUNT(*) FILTER (WHERE fake) AS fake_count
+         FROM invite_joins
+         WHERE guild_id = $1 AND inviter_id IS NOT NULL
+         GROUP BY inviter_id
+         ORDER BY active DESC, fake_count ASC
+         LIMIT $2",
     )
     .bind(snowflake(guild_id.get())?)
     .bind(limit)
@@ -184,13 +247,57 @@ pub async fn leaderboard(db: &PgPool, guild_id: GuildId, limit: i64) -> anyhow::
     .await?;
     Ok(rows
         .into_iter()
-        .filter_map(|(id, n)| to_id(Some(id)).map(|id| (UserId::new(id), n)))
+        .filter_map(|(id, active, left, fake)| {
+            to_id(Some(id)).map(|id| (UserId::new(id), InviteStats { active, left, fake }))
+        })
         .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invite_settings_default_and_json_compatibility() {
+        let def = InviteSettings::default();
+        assert_eq!(def.fake_account_days, 7);
+        assert_eq!(def.quick_leave_mins, 10);
+
+        // Boş JSON nesnesi tüm varsayılanları korumalı
+        let parsed: Result<InviteSettings, _> = serde_json::from_str("{}");
+        assert_eq!(parsed.ok(), Some(InviteSettings::default()));
+
+        // Kısmi JSON nesnesi
+        let partial: Result<InviteSettings, _> = serde_json::from_str("{\"fake_account_days\": 3}");
+        assert_eq!(
+            partial.ok(),
+            Some(InviteSettings {
+                fake_account_days: 3,
+                quick_leave_mins: 10,
+            })
+        );
+    }
+
+    #[test]
+    fn invite_fake_age_and_quick_leave_calculations() {
+        let settings = InviteSettings {
+            fake_account_days: 7,
+            quick_leave_mins: 10,
+        };
+
+        // Hesap yaşı kontrolü
+        assert!(settings.is_fake_age(0));
+        assert!(settings.is_fake_age(6));
+        assert!(!settings.is_fake_age(7));
+        assert!(!settings.is_fake_age(30));
+
+        // Hızlı çıkış kontrolü (10 dakika = 600 saniye)
+        let joined = 1_000_000;
+        assert!(settings.is_quick_leave(joined, joined + 60)); // 1 dk sonra çıkış -> sahte
+        assert!(settings.is_quick_leave(joined, joined + 599)); // 9 dk 59 sn -> sahte
+        assert!(!settings.is_quick_leave(joined, joined + 600)); // 10 dk tam -> normal
+        assert!(!settings.is_quick_leave(joined, joined + 3600)); // 1 saat sonra -> normal
+    }
 
     fn map(items: &[(&str, u64)]) -> HashMap<String, CachedInvite> {
         items

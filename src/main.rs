@@ -2,6 +2,7 @@
 //! ve Discord gateway'ine bağlanır.
 
 mod achievements;
+mod analytics;
 mod privacy;
 mod ai;
 mod alerts;
@@ -34,6 +35,7 @@ mod giveaway;
 mod greetings;
 mod guild_config;
 mod help;
+pub mod i18n;
 mod highlights;
 mod lockdown;
 mod integrations;
@@ -182,6 +184,7 @@ async fn run() -> anyhow::Result<()> {
     let db_for_shutdown = db.clone();
     let redis_for_shutdown = redis.clone();
     leveling::spawn_flusher(db.clone(), redis.clone());
+    analytics::spawn_flusher(db.clone(), redis.clone());
     let automod = Arc::new(AutoMod::new()?);
 
     // Discord, yapay zekâ ve yayın API'leri aynı HTTP istemcisini (DNS önbelleği + bağlantı havuzu) paylaşır.
@@ -345,14 +348,18 @@ async fn run() -> anyhow::Result<()> {
                 if let Some(saved) = presence::load(&redis).await {
                     ctx.set_presence(saved.activity_data(), saved.online_status());
                 }
+                let (event_bus, _) = tokio::sync::broadcast::channel(256);
                 // Açılışta PgPool ve ağ yükünü dağıtmak için arka plan görevleri kademeli (staggered: 5-65 sn) başlar.
                 tokio::spawn({
-                    let http = Arc::clone(&ctx.http);
+                    let ctx = ctx.clone();
                     let db = db.clone();
                     let streams = Arc::clone(&streams);
+                    let settings = plugin_settings.clone();
+                    let http_client = http_client.clone();
+                    let event_bus = event_bus.clone();
                     async move {
                         tokio::time::sleep(Duration::from_secs(5)).await;
-                        streams::spawn_poller(http, db, streams, stream_poll);
+                        streams::spawn_poller(ctx, db, streams, settings, http_client, event_bus, stream_poll);
                     }
                 });
                 tokio::spawn({
@@ -477,6 +484,17 @@ async fn run() -> anyhow::Result<()> {
                         community::spawn_seasons(ctx, db, redis, settings, leveling);
                     }
                 });
+                tokio::spawn({
+                    let ctx = ctx.clone();
+                    let db = db.clone();
+                    let redis = redis.clone();
+                    let settings = plugin_settings.clone();
+                    let leveling = Arc::clone(&leveling);
+                    async move {
+                        tokio::time::sleep(Duration::from_secs(70)).await;
+                        analytics::spawn_voice_tracker(ctx, db, redis, settings, leveling);
+                    }
+                });
                 let autoresponder = Arc::new(autoresponder::AutoResponder::default());
                 let tags = Arc::new(tags::Tags::default());
                 web::spawn(
@@ -499,6 +517,7 @@ async fn run() -> anyhow::Result<()> {
                         tags: Arc::clone(&tags),
                         scheduler: Arc::clone(&scheduler),
                         music: music.clone(),
+                        event_bus: event_bus.clone(),
                     },
                 );
                 if let Some(metrics) = &web_config.tunnel_metrics {
@@ -532,6 +551,7 @@ async fn run() -> anyhow::Result<()> {
                     http_client,
                     members_intent,
                     started_at: std::time::Instant::now(),
+                    event_bus,
                 })
             })
         })
@@ -568,6 +588,11 @@ async fn run() -> anyhow::Result<()> {
     match leveling::flush(&db_for_shutdown, &redis_for_shutdown).await {
         Ok(n) => info!(records = n, "Bekleyen XP kaydedildi"),
         Err(e) => error!(error = ?e, "Kapanışta XP kaydedilemedi (Redis'te duruyor, sonraki açılışta yazılır)"),
+    }
+
+    match analytics::flush(&db_for_shutdown, &redis_for_shutdown).await {
+        Ok(n) => info!(records = n, "Bekleyen analitik verileri kaydedildi"),
+        Err(e) => error!(error = ?e, "Kapanışta analitik verileri kaydedilemedi (Redis'te duruyor, sonraki açılışta yazılır)"),
     }
 
     // Hata olsa bile açık PostgreSQL bağlantılarını düzgünce kapat.

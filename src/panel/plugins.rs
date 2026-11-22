@@ -911,7 +911,7 @@ pub async fn save(
         "ayarlar" => Some(super::community::settings_save(&state, guild_id, &input).await),
         "yayinlar" => Some(super::community::stream_save(&state, guild_id, &input).await),
         "otocevap" => Some(super::community::reply_save(&state, guild_id, &input).await),
-        "davetler" => Some(Ok(())),
+        "davetler" => Some(super::community::invite_save(&state, guild_id, &input).await),
         "modmail" => Some(super::manage::modmail_save(&state, guild_id, &input).await),
         "yikim-korumasi" => Some(super::manage::antinuke_save(&state, guild_id, &input).await),
         "discord-automod" => Some(super::moderation::native_save(&state, guild_id, &input).await),

@@ -11,9 +11,11 @@ pub struct Header<'a> {
     pub opener: Option<&'a User>,
     pub closed_by: &'a User,
     pub opened_unix: i64,
+    pub close_reason: Option<&'a str>,
 }
 
-pub async fn build(ctx: &serenity::Context, channel_id: ChannelId, header: &Header<'_>) -> anyhow::Result<String> {
+/// Kanaldaki mesajları en eskiden en yeniye doğru çeker.
+pub async fn fetch_messages(ctx: &serenity::Context, channel_id: ChannelId) -> anyhow::Result<Vec<Message>> {
     let mut messages: Vec<Message> = Vec::new();
     let mut before = None;
 
@@ -31,15 +33,22 @@ pub async fn build(ctx: &serenity::Context, channel_id: ChannelId, header: &Head
             break;
         }
     }
-    // Discord en yeniden eskiye döndürür.
+    // Discord en yeniden eskiye döndürür; kronolojik sıralama için ters çevir.
     messages.reverse();
+    Ok(messages)
+}
 
+/// Mesajları düz metin (.txt) transkript formatında üretir.
+pub fn render_plain_text(messages: &[Message], header: &Header<'_>) -> String {
     let mut out = String::new();
     out.push_str(&format!("Destek Bileti #{:04} — {}\n", header.number, header.guild_name));
     if let Some(opener) = header.opener {
         out.push_str(&format!("Açan     : {} ({})\n", opener.tag(), opener.id));
     }
     out.push_str(&format!("Kapatan  : {} ({})\n", header.closed_by.tag(), header.closed_by.id));
+    if let Some(reason) = header.close_reason {
+        out.push_str(&format!("Gerekçe  : {reason}\n"));
+    }
     out.push_str(&format!(
         "Açılış   : {}\nKapanış  : {}\nMesaj    : {}\n",
         format_unix(header.opened_unix),
@@ -49,7 +58,7 @@ pub async fn build(ctx: &serenity::Context, channel_id: ChannelId, header: &Head
     out.push_str(&"=".repeat(60));
     out.push('\n');
 
-    for msg in &messages {
+    for msg in messages {
         out.push_str(&format!(
             "[{}] {}: {}\n",
             format_unix(msg.timestamp.unix_timestamp()),
@@ -66,7 +75,26 @@ pub async fn build(ctx: &serenity::Context, channel_id: ChannelId, header: &Head
         }
     }
 
-    Ok(out)
+    out
+}
+
+#[allow(dead_code)]
+pub async fn build(ctx: &serenity::Context, channel_id: ChannelId, header: &Header<'_>) -> anyhow::Result<String> {
+    let messages = fetch_messages(ctx, channel_id).await?;
+    Ok(render_plain_text(&messages, header))
+}
+
+pub async fn build_both(
+    ctx: &serenity::Context,
+    channel_id: ChannelId,
+    header: &Header<'_>,
+    topic: Option<&str>,
+    rating: Option<i16>,
+) -> anyhow::Result<(String, String)> {
+    let messages = fetch_messages(ctx, channel_id).await?;
+    let plain = render_plain_text(&messages, header);
+    let html = super::html_transcript::render_html(&messages, header, topic, rating);
+    Ok((plain, html))
 }
 
 /// UTC "YYYY-MM-DD HH:MM:SS".

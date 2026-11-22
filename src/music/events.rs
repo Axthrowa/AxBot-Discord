@@ -9,13 +9,11 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use dashmap::DashMap;
 use poise::serenity_prelude::{ChannelId, CreateMessage, GuildId, Http};
-use songbird::{Event, EventContext, EventHandler, Songbird};
+use songbird::{Event, EventContext, EventHandler};
 use tracing::{debug, info, warn};
-use uuid::Uuid;
 
-use super::{extra, format_duration, MusicSettings, Shared, TrackInfo};
+use super::{extra, format_duration, Shared, TrackInfo};
 
 #[derive(Debug, Clone, Copy)]
 pub enum TrackNotice {
@@ -104,34 +102,18 @@ impl TrackNotifier {
 
 /// Kuyruk belirli bir süre boş kalırsa kanaldan ayrılır.
 pub struct IdleLeaver {
-    songbird: Arc<Songbird>,
-    tracks: Arc<DashMap<Uuid, TrackInfo>>,
-    text_channels: Arc<DashMap<GuildId, ChannelId>>,
-    settings: Arc<DashMap<GuildId, MusicSettings>>,
-    http: Arc<Http>,
-    guild_id: GuildId,
-    leave_after: Duration,
-    idle_secs: AtomicU64,
+    pub music: Weak<Shared>,
+    pub http: Arc<Http>,
+    pub guild_id: GuildId,
+    pub idle_secs: AtomicU64,
 }
 
 impl IdleLeaver {
-    pub fn new(
-        songbird: Arc<Songbird>,
-        tracks: Arc<DashMap<Uuid, TrackInfo>>,
-        text_channels: Arc<DashMap<GuildId, ChannelId>>,
-        settings: Arc<DashMap<GuildId, MusicSettings>>,
-        http: Arc<Http>,
-        guild_id: GuildId,
-        leave_after: Duration,
-    ) -> Self {
+    pub fn new(music: Weak<Shared>, http: Arc<Http>, guild_id: GuildId) -> Self {
         Self {
-            songbird,
-            tracks,
-            text_channels,
-            settings,
+            music,
             http,
             guild_id,
-            leave_after,
             idle_secs: AtomicU64::new(0),
         }
     }
@@ -140,24 +122,87 @@ impl IdleLeaver {
 #[async_trait]
 impl EventHandler for IdleLeaver {
     async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
-        let busy = self.tracks.iter().any(|t| t.guild_id == self.guild_id);
-        let always_on = self.settings.get(&self.guild_id).is_some_and(|s| s.always_on);
+        let Some(music) = self.music.upgrade() else {
+            return Some(Event::Cancel);
+        };
+        let settings = music.settings.get(&self.guild_id).map(|s| *s).unwrap_or_default();
+
+        // 1. Maksimum oturum süresi kontrolü (max_session_mins > 0)
+        if settings.max_session_mins > 0 {
+            if let Some(started) = music.session_started.get(&self.guild_id) {
+                if started.elapsed() >= Duration::from_secs(u64::from(settings.max_session_mins) * 60) {
+                    info!(guild = %self.guild_id, mins = settings.max_session_mins, "Maksimum oturum süresi doldu, ses kanalından ayrılınıyor");
+                    music.session_started.remove(&self.guild_id);
+                    music.empty_channels.remove(&self.guild_id);
+                    let songbird = Arc::clone(&music.songbird);
+                    let http = Arc::clone(&self.http);
+                    let guild_id = self.guild_id;
+                    let channel = music.text_channels.get(&guild_id).map(|c| *c);
+                    tokio::spawn(async move {
+                        if let Err(e) = songbird.remove(guild_id).await {
+                            warn!(guild = %guild_id, error = %e, "Ses kanalından ayrılırken hata");
+                        }
+                        if let Some(channel) = channel {
+                            let _ = channel
+                                .say(&http, "⏳ Maksimum oturum süresi dolduğu için ses kanalından ayrıldım.")
+                                .await;
+                        }
+                    });
+                    return Some(Event::Cancel);
+                }
+            }
+        }
+
+        let always_on = settings.always_on;
+        let idle_target = u64::from(settings.idle_disconnect_secs);
+
+        // 2. Ses kanalında kimse kalmama kontrolü (always_on kapalıyken)
+        if !always_on && idle_target > 0 {
+            if let Some(empty_since) = music.empty_channels.get(&self.guild_id) {
+                if empty_since.elapsed() >= Duration::from_secs(idle_target) {
+                    info!(guild = %self.guild_id, "Ses kanalında kimse kalmadı (süre doldu), ayrılınıyor");
+                    music.session_started.remove(&self.guild_id);
+                    music.empty_channels.remove(&self.guild_id);
+                    let songbird = Arc::clone(&music.songbird);
+                    let http = Arc::clone(&self.http);
+                    let guild_id = self.guild_id;
+                    let channel = music.text_channels.get(&guild_id).map(|c| *c);
+                    tokio::spawn(async move {
+                        if let Err(e) = songbird.remove(guild_id).await {
+                            warn!(guild = %guild_id, error = %e, "Ses kanalından ayrılırken hata");
+                        }
+                        if let Some(channel) = channel {
+                            let _ = channel
+                                .say(&http, "👋 Ses kanalında kimse kalmadığı için ayrıldım.")
+                                .await;
+                        }
+                    });
+                    return Some(Event::Cancel);
+                }
+            }
+        }
+
+        // 3. Boşta kalma (kuyruk boş) kontrolü
+        let is_autoplay_busy = music.autoplay_tasks.contains(&self.guild_id);
+        let busy = music.tracks.iter().any(|t| t.guild_id == self.guild_id) || is_autoplay_busy;
         if busy || always_on {
             self.idle_secs.store(0, Ordering::Relaxed);
             return None;
         }
 
         let idle = self.idle_secs.fetch_add(60, Ordering::Relaxed) + 60;
-        if idle < self.leave_after.as_secs() {
+        if idle_target > 0 && idle < idle_target {
             return None;
         }
 
         info!(guild = %self.guild_id, "Kuyruk boş kaldı, ses kanalından ayrılınıyor");
+        music.session_started.remove(&self.guild_id);
+        music.empty_channels.remove(&self.guild_id);
         // Ayrılma sürücünün kendisini kapatır; olay görevinin içinden değil, ayrı görevde yapılır.
-        let songbird = Arc::clone(&self.songbird);
+        let songbird = Arc::clone(&music.songbird);
         let http = Arc::clone(&self.http);
         let guild_id = self.guild_id;
-        let channel = self.text_channels.get(&guild_id).map(|c| *c);
+        let channel = music.text_channels.get(&guild_id).map(|c| *c);
         tokio::spawn(async move {
             if let Err(e) = songbird.remove(guild_id).await {
                 warn!(guild = %guild_id, error = %e, "Ses kanalından ayrılırken hata");
@@ -183,4 +228,42 @@ pub fn track_line(info: &TrackInfo) -> String {
         line.push_str(&format!(" `{}`", format_duration(d)));
     }
     line
+}
+
+#[cfg(test)]
+mod tests {
+    use songbird::Songbird;
+
+    use super::*;
+
+    #[test]
+    fn test_track_line_formatting() {
+        let info = TrackInfo {
+            guild_id: GuildId::new(1),
+            title: "Test Track".to_owned(),
+            url: Some("https://example.com/audio".to_owned()),
+            duration: Some(Duration::from_secs(125)),
+            thumbnail: None,
+            requester: poise::serenity_prelude::UserId::new(1),
+            announce: false,
+            spotify_url: None,
+        };
+        let line = track_line(&info);
+        assert!(line.contains("[Test Track](https://example.com/audio)"));
+        assert!(line.contains("2:05"));
+    }
+
+    #[test]
+    fn test_idle_leaver_initialization() {
+        let music = crate::music::Music::new(Songbird::serenity(), reqwest::Client::new());
+        let http = Arc::new(Http::new(""));
+
+        let leaver = IdleLeaver::new(
+            Arc::downgrade(&music.0),
+            http,
+            GuildId::new(42),
+        );
+        assert_eq!(leaver.guild_id, GuildId::new(42));
+        assert_eq!(leaver.idle_secs.load(Ordering::Relaxed), 0);
+    }
 }

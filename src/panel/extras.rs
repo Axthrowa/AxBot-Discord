@@ -486,15 +486,58 @@ pub async fn embed_fields(state: &WebState, guild_id: GuildId, options: &Options
         ),
         None => field("Kanal", &options.channel_select("embed_channel", None), "Boş bırakırsan yeni mesaj gönderilmez."),
     };
+
+    let mut fields_html = String::from("<h4>Ek Alanlar (Fields)</h4><div style=\"display:grid;gap:8px;margin-bottom:12px;\">");
+    for i in 0..3 {
+        let f_name = shown.fields.get(i).map(|f| f.name.as_str()).unwrap_or_default();
+        let f_val = shown.fields.get(i).map(|f| f.value.as_str()).unwrap_or_default();
+        let f_inline = shown.fields.get(i).is_some_and(|f| f.inline);
+        let _ = write!(
+            fields_html,
+            "<div style=\"display:flex;gap:8px;align-items:center;background:rgba(255,255,255,0.03);padding:8px;border-radius:4px;\">\
+             <input type=\"text\" name=\"embed_fn_{i}\" value=\"{}\" placeholder=\"Alan Başlığı {}\" style=\"flex:1;\">\
+             <input type=\"text\" name=\"embed_fv_{i}\" value=\"{}\" placeholder=\"Alan Değeri {}\" style=\"flex:2;\">\
+             <label style=\"display:flex;align-items:center;gap:4px;font-size:0.85em;cursor:pointer;\"><input type=\"checkbox\" name=\"embed_fi_{i}\"{}> Yan yana</label>\
+             </div>",
+            escape(f_name), i + 1,
+            escape(f_val), i + 1,
+            if f_inline { " checked" } else { "" }
+        );
+    }
+    fields_html.push_str("</div>");
+
+    let preview_html = format!(
+        "<div class=\"embed-preview-wrapper\" style=\"margin-top:20px;\">\
+         <h4>Canlı Önizleme (Discord Görünümü)</h4>\
+         <div id=\"embed-preview\" style=\"border-left: 4px solid {colour}; background: #2b2d31; padding: 14px 16px; border-radius: 4px; max-width: 520px; font-family: sans-serif;\">\
+           <div id=\"prev-author\" style=\"font-size:0.85em; font-weight:600; color:#dbdee1; margin-bottom:4px; display:{author_display};\">{}</div>\
+           <div id=\"prev-title\" style=\"font-weight:700; font-size:1.05em; color:#fff; margin-bottom:6px;\">{}</div>\
+           <div id=\"prev-desc\" style=\"font-size:0.9em; color:#dbdee1; line-height:1.4; white-space:pre-wrap;\">{}</div>\
+           <div id=\"prev-footer\" style=\"font-size:0.75em; color:#949ba4; margin-top:8px; display:{footer_display};\">{}</div>\
+         </div>\
+         </div>",
+        escape(shown.author.as_deref().unwrap_or_default()),
+        escape(if shown.title.is_empty() { "Gömülü Mesaj Başlığı" } else { &shown.title }),
+        escape(if shown.description.is_empty() { "Mesaj açıklaması burada görünecektir." } else { &shown.description }),
+        escape(shown.footer.as_deref().unwrap_or_default()),
+        author_display = if shown.author.as_deref().unwrap_or_default().is_empty() { "none" } else { "block" },
+        footer_display = if shown.footer.as_deref().unwrap_or_default().is_empty() { "none" } else { "block" }
+    );
+
     out.push_str(&section(
         if editing.is_some() { "Mesajı düzenle" } else { "Yeni gömülü mesaj" },
         target
-            + &field("Başlık", &text_input("embed_title", &shown.title, "Sunucu kuralları", 256), "")
-            + &field("Metin", &big_textarea("embed_description", &shown.description, 4000, 8, "Discord biçimlendirmesi (**kalın**, _eğik_, bağlantılar) kullanılabilir"), "")
+            + &field("Yazar (Author)", &text_input("embed_author", shown.author.as_deref().unwrap_or_default(), "Yazar adı veya başlığı", 256), "")
+            + &field("Başlık (Title)", &text_input("embed_title", &shown.title, "Sunucu kuralları", 256), "")
+            + &field("Başlık Bağlantısı (URL)", &text_input("embed_url", shown.url.as_deref().unwrap_or_default(), "https://...", 300), "")
+            + &field("Metin (Description)", &big_textarea("embed_description", &shown.description, 4000, 8, "Discord biçimlendirmesi (**kalın**, _eğik_, bağlantılar) kullanılabilir"), "")
             + &field("Renk", &format!("<input type=\"color\" name=\"embed_colour\" value=\"{colour}\">"), "")
             + &field("Büyük resim (https bağlantısı)", &text_input("embed_image", shown.image.as_deref().unwrap_or_default(), "https://…", 300), "")
             + &field("Küçük resim (https bağlantısı)", &text_input("embed_thumbnail", shown.thumbnail.as_deref().unwrap_or_default(), "https://…", 300), "")
-            + &field("Alt yazı", &text_input("embed_footer", shown.footer.as_deref().unwrap_or_default(), "", 200), ""),
+            + &fields_html
+            + &field("Alt yazı (Footer)", &text_input("embed_footer", shown.footer.as_deref().unwrap_or_default(), "", 200), "")
+            + &checkbox("embed_timestamp", shown.timestamp, "Şu anki zaman damgasını ekle (Timestamp)")
+            + &preview_html,
     ));
     Ok((out, !settings.embeds.is_empty()))
 }
@@ -516,6 +559,20 @@ fn parse_embed(input: &Input<'_>) -> Result<Option<SavedEmbed>, &'static str> {
         return Ok(None);
     }
     let [r, g, b] = crate::cards::parse_hex(input.raw("embed_colour")).ok_or("renk")?;
+    let author = short(input, "embed_author", 256)?;
+    let url = https_url(input, "embed_url")?;
+    let timestamp = input.checked("embed_timestamp");
+
+    let mut fields = Vec::new();
+    for i in 0..5 {
+        let name = short(input, &format!("embed_fn_{i}"), 256)?.unwrap_or_default();
+        let value = short(input, &format!("embed_fv_{i}"), 1024)?.unwrap_or_default();
+        let inline = input.checked(&format!("embed_fi_{i}"));
+        if !name.is_empty() && !value.is_empty() {
+            fields.push(crate::embeds::EmbedField { name, value, inline });
+        }
+    }
+
     Ok(Some(SavedEmbed {
         message_id: 0,
         channel_id: 0,
@@ -525,6 +582,10 @@ fn parse_embed(input: &Input<'_>) -> Result<Option<SavedEmbed>, &'static str> {
         image: https_url(input, "embed_image")?,
         thumbnail: https_url(input, "embed_thumbnail")?,
         footer: short(input, "embed_footer", 200)?,
+        author,
+        url,
+        timestamp,
+        fields,
     }))
 }
 
@@ -739,7 +800,16 @@ pub async fn ticket_fields(state: &WebState, guild_id: GuildId, options: &Option
                 ),
                 "Bu kadar saat kimse yazmazsa bilet kendiliğinden kapanır; bir saat önce kanalda uyarılır. 0 = kapalı.",
             )
+            + &field(
+                "SLA yanıt gecikmesi alarmı (dakika)",
+                &format!(
+                    "<input type=\"number\" name=\"sla_warn_minutes\" value=\"{}\" min=\"0\" max=\"1440\">",
+                    extras.sla_warn_minutes
+                ),
+                "Bilet açıldıktan sonra bu kadar dakika içinde yetkili yanıt vermezse destek ekibi kanalda uyarılır. 0 = kapalı.",
+            )
             + &checkbox("rating", extras.rating, "Kapatılınca bileti açana 1-5 yıldızlı memnuniyet sorusu gönder (puanlar bilet log kanalına düşer)")
+            + &checkbox("html_transcript", extras.html_transcript, "Kapatıldığında Discord koyu temalı HTML konuşma kaydı oluştur ve web panelde sakla")
             + &rating_note,
     ));
     out.push_str(&section(
@@ -748,7 +818,7 @@ pub async fn ticket_fields(state: &WebState, guild_id: GuildId, options: &Option
             "Paneli bu kanala gönder",
             &options.channel_select("panel_channel", None),
             "Üyelerin bilet açtığı mesaj. Konuları değiştirdiysen paneli yeniden gönder (eski mesajı elle silebilirsin). Boş bırakırsan gönderilmez.",
-        ) + "<p class=\"note\">Komutlar: <code>/bilet üstlen · ekle · çıkar · kapat · yeniden-aç · sil</code>.</p>",
+        ) + "<p class=\"note\">Komutlar: <code>/bilet kur · üstlen · devret · ekle · çıkar · kapat · yeniden-aç · sil · paneller</code>.</p>",
     ));
     Ok((out, settings.is_some()))
 }
@@ -773,6 +843,8 @@ pub async fn ticket_save(state: &WebState, guild_id: GuildId, input: &Input<'_>)
         },
         auto_close_hours: if input.raw("auto_close_hours").is_empty() { 0 } else { input.number("auto_close_hours", 0, tickets::MAX_AUTO_CLOSE_HOURS)? },
         rating: input.checked("rating"),
+        sla_warn_minutes: if input.raw("sla_warn_minutes").is_empty() { 0 } else { input.number("sla_warn_minutes", 0, 1440)? },
+        html_transcript: input.checked("html_transcript"),
     };
     let panel_channel = input.channel("panel_channel")?;
 
@@ -784,10 +856,20 @@ pub async fn ticket_save(state: &WebState, guild_id: GuildId, input: &Input<'_>)
     let message = tickets::panel_message(&extras);
     state.settings.set(&state.db, guild_id, extras).await.map_err(&failed)?;
     if let Some(channel) = panel_channel {
-        channel.send_message(&state.http, message).await.map_err(|e| {
+        let sent = channel.send_message(&state.http, message).await.map_err(|e| {
             warn!(guild = %guild_id, error = %e, "Panel: bilet paneli gönderilemedi");
             "gonder"
         })?;
+        let panel = tickets::TicketPanel {
+            id: 0,
+            guild_id,
+            channel_id: channel,
+            message_id: Some(sent.id),
+            title: "Destek Talebi".to_owned(),
+            category_id: settings.category_id,
+            support_role_id: settings.support_role_id,
+        };
+        let _ = tickets::save_panel(&state.db, &panel).await;
     }
     Ok(())
 }

@@ -9,6 +9,7 @@
 //! - Panel adresi: `WEB_PUBLIC_URL` verildiyse o; yoksa Cloudflare hızlı tüneli (sunucuda, hesapsız,
 //!   port açmadan `https://….trycloudflare.com`); o da yoksa sadece bu bilgisayar (`http://127.0.0.1`).
 
+mod analytics;
 mod auth;
 mod automation;
 mod botpage;
@@ -22,8 +23,11 @@ mod moderation;
 mod pages;
 mod plugins;
 mod welcome;
-mod transfer;
+mod templates;
+mod transcripts;
+pub mod transfer;
 mod wizard;
+pub mod ws;
 
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -37,6 +41,7 @@ use serde::Deserialize;
 use tracing::{debug, info};
 
 pub use auth::create_login;
+pub use ws::RealtimeEvent;
 
 use crate::web::WebState;
 
@@ -186,11 +191,17 @@ pub fn router() -> Router<WebState> {
         .route("/panel/sistem", get(pages::system))
         .route("/panel/sistem/yeniden-baslat", post(pages::restart))
         .route("/panel/sistem/durum", post(botpage::presence_save))
-        .route("/panel/sunucu/{guild}/istatistik", get(botpage::stats))
+        .route("/panel/sunucu/{guild}/istatistik", get(analytics::page))
+        .route("/panel/sunucu/{guild}/transkriptler", get(transcripts::list_page))
+        .route("/panel/sunucu/{guild}/transkript/{number}", get(transcripts::view_html))
+        .route("/panel/sunucu/{guild}/sablonlar", get(templates::list_page))
+        .route("/panel/sunucu/{guild}/sablon-olustur", post(templates::create_template))
+        .route("/panel/sunucu/{guild}/sablon-disa-aktar", get(templates::export_json))
         .route("/panel/sunucu/{guild}/saglik", get(health::page))
         .route("/panel/sunucu/{guild}/kurulum", get(wizard::page))
         .route("/panel/sunucu/{guild}/ayarlar-disa-aktar", get(transfer::export))
         .route("/panel/panel.js", get(pages::script))
+        .route("/panel/ws", get(ws::ws_handler))
 }
 
 #[derive(Deserialize)]

@@ -7,23 +7,13 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::db::snowflake;
-use crate::settings::PluginConfig;
 
 pub const MAX_LISTS: i64 = 10;
 pub const MAX_TRACKS: usize = 50;
 pub const MAX_NAME: usize = 40;
 
-/// Müzik eklentisinin ek ayarları (7/24 ve otomatik çalma `guild_settings` tablosundadır).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct MusicExtras {
-    /// Doluysa geç / durdur / ses gibi kontrol komutlarını yalnızca bu roldekiler (ve yöneticiler) kullanır.
-    pub dj_role: Option<u64>,
-}
-
-impl PluginConfig for MusicExtras {
-    const KEY: &'static str = "music";
-}
+/// Müzik eklentisinin birleşik ayarları (`plugin_settings` tablosunda "music" anahtarında tutulur).
+pub use crate::music::MusicSettings as MusicExtras;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedTrack {

@@ -590,7 +590,7 @@ fn excluded(list: &Exclusions, channels: &[ChannelId], roles: &[RoleId], channel
 }
 
 /// TP oranını uygular; en az 1 XP.
-fn scaled_xp(amount: u64, rate_percent: u16) -> u64 {
+pub(crate) fn scaled_xp(amount: u64, rate_percent: u16) -> u64 {
     (amount * u64::from(rate_percent) / 100).max(1)
 }
 

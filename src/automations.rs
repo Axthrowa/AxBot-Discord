@@ -6,6 +6,7 @@
 //! Güvenlik: roller her seferinde `rolepanel::check_role` ile denetlenir; bir üye için kısa sürede
 //! çalışabilecek otomasyon sayısı sınırlıdır (birbirini tetikleyen kurallar sonsuz döngüye giremez).
 
+use std::net::IpAddr;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
@@ -16,6 +17,8 @@ use poise::serenity_prelude::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
+
+use sqlx::PgPool;
 
 use crate::data::Data;
 use crate::reaction_roles;
@@ -37,10 +40,12 @@ pub enum Trigger {
     RoleRemoved,
     Reaction,
     ThreadCreated,
+    StreamWentLive,
+    StreamWentOffline,
 }
 
 impl Trigger {
-    pub const ALL: [(Self, &'static str, &'static str); 7] = [
+    pub const ALL: [(Self, &'static str, &'static str); 9] = [
         (Self::Message, "message", "Mesaj gönderildiğinde"),
         (Self::MemberJoin, "member_join", "Üye sunucuya katıldığında"),
         (Self::MemberLeave, "member_leave", "Üye sunucudan ayrıldığında"),
@@ -48,6 +53,8 @@ impl Trigger {
         (Self::RoleRemoved, "role_removed", "Üyeden rol alındığında"),
         (Self::Reaction, "reaction", "Mesaja tepki eklendiğinde"),
         (Self::ThreadCreated, "thread_created", "Alt başlık açıldığında"),
+        (Self::StreamWentLive, "stream_went_live", "Yayın açıldığında"),
+        (Self::StreamWentOffline, "stream_went_offline", "Yayın kapandığında"),
     ];
 
     pub fn from_code(code: &str) -> Option<Self> {
@@ -75,6 +82,8 @@ pub struct Automation {
     pub role: Option<u64>,
     /// Tepki tetikleyicisi: eklenen emoji bu olmalı.
     pub emoji: Option<String>,
+    /// Yayın tetikleyicisi: yayıncı adı/login ("elraenn") veya platform ("twitch", "kick").
+    pub streamer: Option<String>,
     // --- Eylemler
     pub message: Option<String>,
     /// Mesajın gideceği kanal; boşsa olayın olduğu kanal.
@@ -89,6 +98,15 @@ pub struct Automation {
     pub thread_name: Option<String>,
     /// Gönderilen mesajdaki rol etiketleri bildirim göndersin.
     pub ping_roles: bool,
+    // --- Webhook / Yerel Tetikleyici Eylemi
+    /// Tetiklendiğinde HTTP POST isteği gönderilecek hedef URL.
+    pub webhook_url: Option<String>,
+    /// İsteğe bağlı Authorization veya x-api-key başlığı / gizli anahtar.
+    pub webhook_secret: Option<String>,
+    /// Gönderilecek özel JSON payload şablonu (boşsa varsayılan olay JSON'u gider).
+    pub webhook_payload: Option<String>,
+    /// `127.0.0.1` ve `localhost` adreslerine istek atılmasına açıkça izin verilsin mi?
+    pub allow_localhost: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +136,8 @@ pub struct Facts<'a> {
     /// `reactionroles::emoji_key` biçiminde.
     pub emoji: Option<&'a str>,
     pub member_roles: &'a [RoleId],
+    pub streamer: Option<&'a str>,
+    pub platform: Option<&'a str>,
 }
 
 /// Büyük/küçük harf ve Türkçe noktalı-noktasız i farkını yok sayan karşılaştırma biçimi:
@@ -155,11 +175,21 @@ pub fn matches(automation: &Automation, facts: &Facts<'_>) -> bool {
             let wanted = automation.emoji.as_deref().and_then(crate::reaction_roles::emoji_key);
             automation.emoji.is_none() || (wanted.is_some() && wanted.as_deref() == facts.emoji)
         }
+        Trigger::StreamWentLive | Trigger::StreamWentOffline => {
+            if let Some(wanted) = automation.streamer.as_deref().filter(|s| !s.trim().is_empty()) {
+                let ws = fold(wanted.trim());
+                let streamer_match = facts.streamer.map(|s| fold(s) == ws).unwrap_or(false);
+                let platform_match = facts.platform.map(|p| fold(p) == ws).unwrap_or(false);
+                streamer_match || platform_match
+            } else {
+                true
+            }
+        }
         _ => true,
     }
 }
 
-/// Şablon: `{kullanıcı}` (etiket), `{isim}`, `{sunucu}`, `{kanal}`, `{rol}`, `{mesaj}`.
+/// Şablon: `{kullanıcı}` (etiket), `{isim}`, `{sunucu}`, `{kanal}`, `{rol}`, `{mesaj}`, `{yayinci}`, `{baslik}`.
 pub fn render(template: &str, user: &User, guild: &str, channel: Option<u64>, role: Option<u64>, content: &str) -> String {
     let name = user.global_name.clone().unwrap_or_else(|| user.name.clone());
     let quoted: String = content.chars().take(300).collect();
@@ -171,6 +201,235 @@ pub fn render(template: &str, user: &User, guild: &str, channel: Option<u64>, ro
         .replace("{kanal}", &channel.map(|c| format!("<#{c}>")).unwrap_or_default())
         .replace("{rol}", &role.map(|r| format!("<@&{r}>")).unwrap_or_default())
         .replace("{mesaj}", &quoted)
+        .replace("{yayinci}", &quoted)
+        .replace("{yayıncı}", &quoted)
+        .replace("{baslik}", &quoted)
+        .replace("{başlık}", &quoted)
+}
+
+/// Yayın bildirimleri için şablon: `{sunucu}`, `{kanal}`, `{yayinci}`, `{platform}`, `{baslik}`.
+pub fn render_stream(template: &str, guild: &str, channel: Option<u64>, streamer: &str, platform: &str, title: &str) -> String {
+    template
+        .replace("{sunucu}", guild)
+        .replace("{kanal}", &channel.map(|c| format!("<#{c}>")).unwrap_or_default())
+        .replace("{yayinci}", streamer)
+        .replace("{yayıncı}", streamer)
+        .replace("{platform}", platform)
+        .replace("{baslik}", title)
+        .replace("{başlık}", title)
+        .replace("{mesaj}", title)
+}
+
+fn is_private_or_restricted_ip(ip: IpAddr, allow_localhost: bool) -> Result<(), &'static str> {
+    match ip {
+        IpAddr::V4(ipv4) => {
+            if ipv4.is_loopback() {
+                if allow_localhost {
+                    return Ok(());
+                }
+                return Err("Yerel loopback (127.0.0.1) adresi için yerel izin verilmelidir");
+            }
+            if ipv4.is_unspecified() || ipv4.is_broadcast() {
+                return Err("Geçersiz veya broadcast IP adresi");
+            }
+            let octets = ipv4.octets();
+            // 10.0.0.0/8
+            if octets[0] == 10 {
+                return Err("Özel IP adresi (RFC 1918 10.0.0.0/8) engellendi");
+            }
+            // 172.16.0.0/12 -> 172.16.0.0 - 172.31.255.255
+            if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+                return Err("Özel IP adresi (RFC 1918 172.16.0.0/12) engellendi");
+            }
+            // 192.168.0.0/16
+            if octets[0] == 192 && octets[1] == 168 {
+                return Err("Özel IP adresi (RFC 1918 192.168.0.0/16) engellendi");
+            }
+            // 169.254.0.0/16 (link-local, cloud metadata 169.254.169.254)
+            if octets[0] == 169 && octets[1] == 254 {
+                return Err("Link-local/metadata IP adresi engellendi");
+            }
+            // 100.64.0.0/10 (CGNAT)
+            if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+                return Err("CGNAT IP adresi engellendi");
+            }
+            // 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 (TEST-NET)
+            if (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
+                || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
+                || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
+            {
+                return Err("Test/dokümantasyon IP adresi engellendi");
+            }
+            Ok(())
+        }
+        IpAddr::V6(ipv6) => {
+            if ipv6.is_loopback() {
+                if allow_localhost {
+                    return Ok(());
+                }
+                return Err("Yerel loopback (::1) adresi için yerel izin verilmelidir");
+            }
+            if ipv6.is_unspecified() {
+                return Err("Geçersiz IPv6 adresi");
+            }
+            let segments = ipv6.segments();
+            // fc00::/7 (ULA)
+            if (segments[0] & 0xfe00) == 0xfc00 {
+                return Err("Özel IPv6 adresi engellendi");
+            }
+            // fe80::/10 (Link-local)
+            if (segments[0] & 0xffc0) == 0xfe80 {
+                return Err("Link-local IPv6 adresi engellendi");
+            }
+            Ok(())
+        }
+    }
+}
+
+pub fn validate_webhook_url(raw_url: &str, allow_localhost: bool) -> Result<url::Url, &'static str> {
+    let parsed = url::Url::parse(raw_url).map_err(|_| "Geçersiz URL biçimi")?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err("Yalnızca http veya https şeması desteklenir");
+    }
+    let host = parsed.host().ok_or("URL bir ana makine (host) içermelidir")?;
+    match host {
+        url::Host::Ipv4(ipv4) => {
+            is_private_or_restricted_ip(IpAddr::V4(ipv4), allow_localhost)?;
+        }
+        url::Host::Ipv6(ipv6) => {
+            is_private_or_restricted_ip(IpAddr::V6(ipv6), allow_localhost)?;
+        }
+        url::Host::Domain(domain) => {
+            let d = domain.to_lowercase();
+            if (d == "localhost" || d.ends_with(".localhost")) && !allow_localhost {
+                return Err("localhost hedefi için 'Yerel hedeflere izin ver' seçeneği işaretlenmelidir");
+            }
+        }
+    }
+    Ok(parsed)
+}
+
+pub async fn send_webhook(
+    client: &reqwest::Client,
+    automation: &Automation,
+    default_payload: &serde_json::Value,
+) {
+    let Some(raw_url) = automation.webhook_url.as_deref().filter(|u| !u.trim().is_empty()) else {
+        return;
+    };
+    let target_url = match validate_webhook_url(raw_url, automation.allow_localhost) {
+        Ok(u) => u,
+        Err(err) => {
+            warn!(automation_id = automation.id, url = raw_url, error = err, "Otomasyon webhook URL doğrulaması başarısız");
+            return;
+        }
+    };
+
+    let mut req = client
+        .post(target_url.as_str())
+        .timeout(Duration::from_secs(5));
+
+    if let Some(secret) = automation.webhook_secret.as_deref().filter(|s| !s.trim().is_empty()) {
+        req = req.header("x-webhook-secret", secret)
+            .header("Authorization", format!("Bearer {secret}"));
+    }
+
+    let req = if let Some(custom) = automation.webhook_payload.as_deref().filter(|p| !p.trim().is_empty()) {
+        req.header("content-type", "application/json").body(custom.to_owned())
+    } else {
+        req.json(default_payload)
+    };
+
+    match req.send().await {
+        Ok(resp) => {
+            debug!(automation_id = automation.id, status = %resp.status(), "Otomasyon webhook başarıyla gönderildi");
+        }
+        Err(err) => {
+            warn!(automation_id = automation.id, error = %err, "Otomasyon webhook gönderilemedi");
+        }
+    }
+}
+
+pub struct StreamEventContext<'a> {
+    pub guild_id: GuildId,
+    pub platform: &'a str,
+    pub streamer: &'a str,
+    pub live: bool,
+    pub title: Option<&'a str>,
+    pub game: Option<&'a str>,
+    pub viewers: Option<u64>,
+}
+
+pub async fn run_stream(
+    http: &serenity::all::Http,
+    cache: &serenity::all::Cache,
+    db: &PgPool,
+    settings_cache: &crate::settings::PluginSettings,
+    http_client: &reqwest::Client,
+    stream_ctx: StreamEventContext<'_>,
+) {
+    let settings: Arc<AutomationSettings> = match settings_cache.get(db, stream_ctx.guild_id).await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(guild = %stream_ctx.guild_id, error = ?e, "Yayın otomasyon ayarları okunamadı");
+            return;
+        }
+    };
+
+    let facts = Facts {
+        trigger: if stream_ctx.live {
+            Trigger::StreamWentLive
+        } else {
+            Trigger::StreamWentOffline
+        },
+        channel: None,
+        content: stream_ctx.title.unwrap_or_default(),
+        role: None,
+        emoji: None,
+        member_roles: &[],
+        streamer: Some(stream_ctx.streamer),
+        platform: Some(stream_ctx.platform),
+    };
+
+    let guild_name = cache.guild(stream_ctx.guild_id).map(|g| g.name.clone()).unwrap_or_default();
+
+    for automation in settings.automations.iter().filter(|a| matches(a, &facts)) {
+        // 1. Mesaj gönderimi
+        if let Some(template) = automation.message.as_deref().filter(|m| !m.trim().is_empty()) {
+            if let Some(channel_id) = automation.message_channel.filter(|c| *c != 0) {
+                let text = render_stream(
+                    template,
+                    &guild_name,
+                    Some(channel_id),
+                    stream_ctx.streamer,
+                    stream_ctx.platform,
+                    stream_ctx.title.unwrap_or_default(),
+                );
+                let mentions = CreateAllowedMentions::new().all_roles(automation.ping_roles);
+                let msg = CreateMessage::new().content(text).allowed_mentions(mentions);
+                if let Err(e) = ChannelId::new(channel_id).send_message(http, msg).await {
+                    warn!(guild = %stream_ctx.guild_id, automation = automation.id, error = %e, "Yayın otomasyon mesajı gönderilemedi");
+                }
+            }
+        }
+
+        // 2. Webhook tetikleyici
+        if automation.webhook_url.is_some() {
+            let default_payload = serde_json::json!({
+                "event": if stream_ctx.live { "stream_went_live" } else { "stream_went_offline" },
+                "trigger": if stream_ctx.live { "stream_went_live" } else { "stream_went_offline" },
+                "guild_id": stream_ctx.guild_id.get(),
+                "platform": stream_ctx.platform,
+                "streamer": stream_ctx.streamer,
+                "live": stream_ctx.live,
+                "title": stream_ctx.title,
+                "game": stream_ctx.game,
+                "viewers": stream_ctx.viewers,
+            });
+            send_webhook(http_client, automation, &default_payload).await;
+        }
+    }
 }
 
 static RECENT: LazyLock<DashMap<(GuildId, UserId), (Instant, u8)>> = LazyLock::new(DashMap::new);
@@ -222,11 +481,17 @@ pub async fn run_with_target(ctx: &serenity::Context, data: &Data, event: Event<
             debug!(guild = %event.guild_id, user = %event.user.id, "Otomasyon sınırı aşıldı, atlandı");
             return;
         }
-        execute(ctx, &event, automation, target).await;
+        execute(ctx, data, &event, automation, target).await;
     }
 }
 
-async fn execute(ctx: &serenity::Context, event: &Event<'_>, automation: &Automation, target: Option<ChannelId>) {
+async fn execute(
+    ctx: &serenity::Context,
+    data: &Data,
+    event: &Event<'_>,
+    automation: &Automation,
+    target: Option<ChannelId>,
+) {
     let guild = ctx.cache.guild(event.guild_id).map(|g| g.name.clone()).unwrap_or_default();
     let fill = |template: &str| render(template, event.user, &guild, event.facts.channel, event.facts.role, event.facts.content);
     let failed = |what: &str, e: serenity::Error| {
@@ -264,6 +529,19 @@ async fn execute(ctx: &serenity::Context, event: &Event<'_>, automation: &Automa
                 failed("rol", e);
             }
         }
+    }
+    if automation.webhook_url.is_some() {
+        let default_payload = serde_json::json!({
+            "event": automation.trigger.label(),
+            "trigger": automation.trigger,
+            "guild_id": event.guild_id.get(),
+            "user_id": event.user.id.get(),
+            "user_name": event.user.name,
+            "channel_id": event.facts.channel,
+            "content": event.facts.content,
+            "role_id": event.facts.role,
+        });
+        send_webhook(&data.http_client, automation, &default_payload).await;
     }
     let Some(message) = event.message else { return };
     if let Some(emoji) = automation.react.as_deref().and_then(|raw| ReactionType::try_from(raw.trim()).ok()) {
@@ -343,9 +621,162 @@ mod tests {
         let settings: AutomationSettings = serde_json::from_str("{\"automations\":[{\"id\":2,\"trigger\":\"member_join\"}]}")?;
         assert_eq!(settings.automations[0].trigger, Trigger::MemberJoin);
         assert_eq!(settings.next_id(), 3);
+        assert_eq!(settings.automations[0].streamer, None);
+        assert_eq!(settings.automations[0].webhook_url, None);
+        assert!(!settings.automations[0].allow_localhost);
         for (trigger, code, _) in Trigger::ALL {
             assert_eq!(Trigger::from_code(code), Some(trigger));
         }
         Ok(())
+    }
+
+    #[test]
+    fn webhook_ssrf_validation() {
+        // Geçersiz şema
+        assert!(validate_webhook_url("ftp://example.com", false).is_err());
+        assert!(validate_webhook_url("javascript:alert(1)", false).is_err());
+
+        // Kamu / genel internet hedefleri izinli
+        assert!(validate_webhook_url("https://hooks.slack.com/services/xxx", false).is_ok());
+        assert!(validate_webhook_url("http://api.example.com:8080/webhook", false).is_ok());
+
+        // Localhost ve loopback koruması
+        assert!(validate_webhook_url("http://localhost:5000/hook", false).is_err());
+        assert!(validate_webhook_url("http://127.0.0.1:8080/hook", false).is_err());
+        assert!(validate_webhook_url("http://[::1]:8080/hook", false).is_err());
+
+        // allow_localhost = true iken loopback serbest
+        assert!(validate_webhook_url("http://localhost:5000/hook", true).is_ok());
+        assert!(validate_webhook_url("http://127.0.0.1:8080/hook", true).is_ok());
+        assert!(validate_webhook_url("http://[::1]:8080/hook", true).is_ok());
+
+        // Özel ve bulut metadata IP'leri her zaman engellenir
+        assert!(validate_webhook_url("http://10.0.0.5/api", true).is_err());
+        assert!(validate_webhook_url("http://192.168.1.1/admin", true).is_err());
+        assert!(validate_webhook_url("http://172.16.0.1/status", true).is_err());
+        assert!(validate_webhook_url("http://169.254.169.254/latest/meta-data", true).is_err());
+        assert!(validate_webhook_url("http://0.0.0.0:80/hook", true).is_err());
+    }
+
+    #[test]
+    fn stream_trigger_conditions() {
+        let live_facts = Facts {
+            trigger: Trigger::StreamWentLive,
+            content: "Yeni yayın başladı!",
+            streamer: Some("elraenn"),
+            platform: Some("twitch"),
+            ..Facts::default()
+        };
+
+        // Koşulsuz yayın kuralı her yayında çalışır
+        assert!(matches(&rule(Trigger::StreamWentLive), &live_facts));
+
+        // Yayıncı adına göre filtre
+        let specific_streamer = Automation {
+            streamer: Some("Elraenn".to_owned()),
+            ..rule(Trigger::StreamWentLive)
+        };
+        assert!(matches(&specific_streamer, &live_facts));
+
+        // Farklı yayıncı eşleşmez
+        let other_streamer = Automation {
+            streamer: Some("wtcn".to_owned()),
+            ..rule(Trigger::StreamWentLive)
+        };
+        assert!(!matches(&other_streamer, &live_facts));
+
+        // Platform adına göre filtre
+        let twitch_rule = Automation {
+            streamer: Some("twitch".to_owned()),
+            ..rule(Trigger::StreamWentLive)
+        };
+        assert!(matches(&twitch_rule, &live_facts));
+
+        let kick_rule = Automation {
+            streamer: Some("kick".to_owned()),
+            ..rule(Trigger::StreamWentLive)
+        };
+        assert!(!matches(&kick_rule, &live_facts));
+
+        // Offline tetikleyicisi
+        let offline_facts = Facts {
+            trigger: Trigger::StreamWentOffline,
+            streamer: Some("elraenn"),
+            platform: Some("twitch"),
+            ..Facts::default()
+        };
+        assert!(matches(&rule(Trigger::StreamWentOffline), &offline_facts));
+        assert!(!matches(&rule(Trigger::StreamWentLive), &offline_facts));
+    }
+
+    #[test]
+    fn stream_template_rendering() {
+        let template = "{sunucu} | {yayinci} ({platform}) yayında: {baslik}! Mesaj: {mesaj}";
+        let rendered = render_stream(template, "Oyun Sunucusu", Some(12345), "Elraenn", "twitch", "Valorant Yayını");
+        assert_eq!(rendered, "Oyun Sunucusu | Elraenn (twitch) yayında: Valorant Yayını! Mesaj: Valorant Yayını");
+
+        let tr_template = "🔴 {yayıncı} açtı! Kanal: {kanal}, Başlık: {başlık}";
+        let tr_rendered = render_stream(tr_template, "Oyun Sunucusu", Some(12345), "wtcN", "kick", "Dereceli Maç");
+        assert_eq!(tr_rendered, "🔴 wtcN açtı! Kanal: <#12345>, Başlık: Dereceli Maç");
+    }
+
+    #[tokio::test]
+    async fn webhook_live_dispatch_and_isolation() {
+        let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:0").await else {
+            return;
+        };
+        let Ok(addr) = listener.local_addr() else {
+            return;
+        };
+        let url = format!("http://127.0.0.1:{}/test-webhook", addr.port());
+
+        let client = reqwest::Client::new();
+        let automation = Automation {
+            id: 42,
+            name: "Local Webhook".to_owned(),
+            enabled: true,
+            trigger: Trigger::StreamWentLive,
+            webhook_url: Some(url),
+            webhook_secret: Some("secret-token-xyz".to_owned()),
+            allow_localhost: true,
+            ..Automation::default()
+        };
+
+        let server_task = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 2048];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let req_str = String::from_utf8_lossy(&buf[..n]);
+                let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+                let _ = stream.write_all(response.as_bytes()).await;
+                req_str.to_string()
+            } else {
+                String::new()
+            }
+        });
+
+        let payload = serde_json::json!({
+            "event": "stream_went_live",
+            "streamer": "elraenn",
+            "platform": "twitch",
+            "live": true
+        });
+
+        send_webhook(&client, &automation, &payload).await;
+        let received_req = server_task.await.unwrap_or_default();
+        assert!(received_req.contains("POST /test-webhook"));
+        assert!(received_req.to_lowercase().contains("authorization: bearer secret-token-xyz"));
+        assert!(received_req.to_lowercase().contains("x-webhook-secret: secret-token-xyz"));
+        assert!(received_req.contains("\"streamer\":\"elraenn\""));
+
+        // Hata yalıtımı: kapalı porta gönderildiğinde çökmez, güvenle döner
+        let closed_automation = Automation {
+            id: 43,
+            webhook_url: Some("http://127.0.0.1:59998/closed".to_owned()),
+            allow_localhost: true,
+            ..Automation::default()
+        };
+        send_webhook(&client, &closed_automation, &payload).await;
     }
 }

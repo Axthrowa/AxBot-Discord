@@ -1,0 +1,59 @@
+{
+  "common": {
+    "error": "An error occurred",
+    "success": "Success",
+    "yes": "Yes",
+    "no": "No",
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
+  "music": {
+    "now_playing": "Now playing: {title}",
+    "queue_empty": "Queue is empty.",
+    "not_in_voice": "I am not in a voice channel right now.",
+    "join_voice_first": "Join a voice channel first.",
+    "dj_only": "Only members with the DJ role can manage music.",
+    "mode_247_on": "24/7 mode enabled: I will remain in the channel even if empty.",
+    "mode_247_off": "24/7 mode disabled.",
+    "session_limit_reached": "Maximum session duration reached ({limit} mins), leaving voice channel.",
+    "lyrics_not_found": "Lyrics not found.",
+    "volume_set": "Volume set to %{level}."
+  },
+  "tickets": {
+    "created": "Ticket channel created: {channel}",
+    "closed": "Ticket closed.",
+    "claimed": "Ticket claimed by {user}.",
+    "rated": "Ticket rated: {rating}/5"
+  },
+  "analytics": {
+    "overview_title": "Server Analytics",
+    "messages_count": "Total Messages: {count}",
+    "voice_hours": "Total Voice: {hours} hours",
+    "net_growth": "Net Member Growth: {count}"
+  },
+  "feeds": {
+    "new_post": "**{source}** shared a new post:\n{link}",
+    "reddit_post": "New post in **{source}**: **{title}**\n{link}"
+  },
+  "panel": {
+    "overview": "Overview",
+    "logs": "Logs",
+    "system": "System",
+    "stats": "Statistics",
+    "transcripts": "Ticket Transcripts",
+    "templates": "Server Templates",
+    "health": "Health Check",
+    "plugins": "Plugins",
+    "wizard": "Setup Wizard",
+    "logout": "Logout",
+    "live": "Live",
+    "connecting": "Connecting",
+    "save": "Save",
+    "saved": "Changes saved."
+  },
+  "automations": {
+    "stream_live": "{yayinci} is live on {platform}: {baslik}",
+    "stream_offline": "{yayinci} went offline.",
+    "webhook_sent": "Webhook triggered: {url}"
+  }
+}

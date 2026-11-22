@@ -42,6 +42,7 @@ pub struct WebState {
     pub tags: Arc<crate::tags::Tags>,
     pub scheduler: Arc<crate::scheduler::Scheduler>,
     pub music: crate::music::Music,
+    pub event_bus: tokio::sync::broadcast::Sender<crate::panel::RealtimeEvent>,
 }
 
 pub fn router(state: WebState) -> Router {
@@ -281,6 +282,7 @@ mod live_tests {
             None,
             false,
         ));
+        let (event_bus, _) = tokio::sync::broadcast::channel(16);
         let state = WebState {
             http,
             cache: Arc::new(Cache::new()),
@@ -299,6 +301,7 @@ mod live_tests {
             tags: Arc::new(crate::tags::Tags::default()),
             scheduler: crate::scheduler::Scheduler::new(db.clone()),
             music: crate::music::Music::new(songbird::Songbird::serenity(), reqwest::Client::new()),
+            event_bus,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;

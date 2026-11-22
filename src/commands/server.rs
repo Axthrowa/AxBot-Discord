@@ -25,11 +25,13 @@ pub async fn davetler(
     let user = user.unwrap_or_else(|| ctx.author().clone());
     let db = &ctx.data().db;
     let stats = invites::stats(db, guild_id, user.id).await?;
+    let total = stats.active + stats.left + stats.fake;
+    let name = user.global_name.as_deref().unwrap_or(&user.name);
     let mut embed = CreateEmbed::new()
         .author(serenity::CreateEmbedAuthor::new(user.tag()).icon_url(user.face()))
-        .title(format!("📨 {} davet", stats.active))
+        .title(format!("📨 {name} — Toplam {total} Davet"))
         .description(format!(
-            "✅ Sunucuda olan: **{}**\n🚪 Ayrılan: **{}**\n⚠️ Sahte (7 günden yeni hesap): **{}**",
+            "🟢 **Geçerli (Aktif):** {}\n🚪 **Ayrılan:** {}\n⚠️ **Sahte/Hızlı Çıkış:** {}",
             stats.active, stats.left, stats.fake
         ))
         .colour(serenity::Colour::BLURPLE);
@@ -55,9 +57,9 @@ pub async fn davet_siralama(ctx: Context<'_>) -> Result<(), Error> {
     } else {
         top.iter()
             .enumerate()
-            .map(|(i, (user, n))| {
+            .map(|(i, (user, stats))| {
                 let medal = ["🥇", "🥈", "🥉"].get(i).map_or_else(|| format!("`#{}`", i + 1), |m| (*m).to_owned());
-                format!("{medal} {} — **{n}** davet", user.mention())
+                format!("{medal} {} — **{}** aktif (🚪 {} • ⚠️ {})", user.mention(), stats.active, stats.left, stats.fake)
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -66,7 +68,7 @@ pub async fn davet_siralama(ctx: Context<'_>) -> Result<(), Error> {
         .title("📨 Davet sıralaması")
         .description(description)
         .colour(serenity::Colour::GOLD)
-        .footer(serenity::CreateEmbedFooter::new("Sadece sunucuda olan ve sahte olmayan davetler sayılır."));
+        .footer(serenity::CreateEmbedFooter::new("🟢 Geçerli (Aktif) • 🚪 Ayrılan • ⚠️ Sahte/Hızlı Çıkış"));
     ctx.send(CreateReply::default().embed(embed)).await?;
     Ok(())
 }

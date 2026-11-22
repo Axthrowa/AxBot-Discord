@@ -7,7 +7,8 @@
 //! - Üstlen butonu (`ticket:claim`) / `/bilet üstlen` → bileti bir yetkili sahiplenir.
 //! - `/bilet ekle` / `/bilet çıkar` → bilete başka üye eklenir veya çıkarılır.
 
-mod transcript;
+pub mod html_transcript;
+pub mod transcript;
 
 use std::time::Duration;
 
@@ -36,8 +37,8 @@ pub const DELETE_BUTTON: &str = "ticket:delete";
 /// Memnuniyet butonları: `ticket:rate:<sunucu>:<numara>:<puan>`.
 pub const RATE_PREFIX: &str = "ticket:rate:";
 pub const MAX_AUTO_CLOSE_HOURS: u32 = 720;
-/// Otomatik kapatma döngüsü bu aralıkla bakar.
-const AUTO_CLOSE_EVERY: Duration = Duration::from_secs(10 * 60);
+/// Otomatik kapatma ve SLA kontrol döngüsü bu aralıkla bakar.
+const AUTO_CLOSE_EVERY: Duration = Duration::from_secs(60);
 pub const MAX_TOPICS: usize = 10;
 pub const MAX_TOPIC_LEN: usize = 50;
 
@@ -61,6 +62,15 @@ pub struct TicketExtras {
     pub auto_close_hours: u32,
     /// Kapatılınca açana 1-5 yıldızlı memnuniyet sorusu gönderilir.
     pub rating: bool,
+    /// İlk yanıt bu kadar dakika gecikirse kanalda SLA uyarısı gönderilir (0 = kapalı).
+    pub sla_warn_minutes: u32,
+    /// Kapatılınca HTML formatında koyu temalı görsel transkript üretilir ve web panelde saklanır.
+    #[serde(default = "default_html_transcript")]
+    pub html_transcript: bool,
+}
+
+fn default_html_transcript() -> bool {
+    true
 }
 
 impl Default for TicketExtras {
@@ -74,6 +84,8 @@ impl Default for TicketExtras {
             faq: None,
             auto_close_hours: 0,
             rating: false,
+            sla_warn_minutes: 0,
+            html_transcript: true,
         }
     }
 }
@@ -167,6 +179,63 @@ pub async fn load_settings(db: &PgPool, guild_id: GuildId) -> anyhow::Result<Opt
     });
     SETTINGS_CACHE.insert(guild_id, settings.clone());
     Ok(settings)
+}
+
+#[derive(Debug, Clone)]
+pub struct TicketPanel {
+    #[allow(dead_code)]
+    pub id: i64,
+    pub guild_id: GuildId,
+    pub channel_id: ChannelId,
+    pub message_id: Option<serenity::MessageId>,
+    pub title: String,
+    pub category_id: Option<ChannelId>,
+    pub support_role_id: Option<RoleId>,
+}
+
+pub async fn save_panel(db: &PgPool, panel: &TicketPanel) -> anyhow::Result<i64> {
+    Ok(sqlx::query_scalar(
+        "INSERT INTO ticket_panels (guild_id, channel_id, message_id, title, category_id, support_role_id)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id",
+    )
+    .bind(snowflake(panel.guild_id.get())?)
+    .bind(snowflake(panel.channel_id.get())?)
+    .bind(panel.message_id.map(|m| snowflake(m.get())).transpose()?)
+    .bind(&panel.title)
+    .bind(panel.category_id.map(|c| snowflake(c.get())).transpose()?)
+    .bind(panel.support_role_id.map(|r| snowflake(r.get())).transpose()?)
+    .fetch_one(db)
+    .await?)
+}
+
+type PanelRow = (i64, i64, i64, Option<i64>, String, Option<i64>, Option<i64>);
+
+pub async fn list_panels(db: &PgPool, guild_id: GuildId) -> anyhow::Result<Vec<TicketPanel>> {
+    let rows: Vec<PanelRow> = sqlx::query_as(
+        "SELECT id, guild_id, channel_id, message_id, title, category_id, support_role_id
+         FROM ticket_panels WHERE guild_id = $1 ORDER BY id ASC",
+    )
+    .bind(snowflake(guild_id.get())?)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id, gid, cid, mid, title, cat, sup)| {
+            let guild_id = to_id(Some(gid)).map(GuildId::new)?;
+            let channel_id = to_id(Some(cid)).map(ChannelId::new)?;
+            Some(TicketPanel {
+                id,
+                guild_id,
+                channel_id,
+                message_id: to_id(mid).map(serenity::MessageId::new),
+                title,
+                category_id: to_id(cat).map(ChannelId::new),
+                support_role_id: to_id(sup).map(RoleId::new),
+            })
+        })
+        .collect())
 }
 
 /// Panel kanalına gönderilecek mesaj: konu tanımlıysa açılır menü, değilse tek buton.
@@ -303,7 +372,7 @@ async fn open_inner(
         if still_exists {
             alive.push(existing);
         } else {
-            mark_closed(db, existing, None).await?;
+            mark_closed(db, existing, None, Some("Kanal silindi")).await?;
         }
     }
     if let (true, Some(first)) = (alive.len() >= usize::from(extras.max_open.max(1)), alive.first().copied()) {
@@ -362,11 +431,12 @@ async fn open_inner(
         .await
         .context("bilet kanalı oluşturulamadı")?;
 
-    sqlx::query("INSERT INTO tickets (guild_id, number, channel_id, opener_id) VALUES ($1, $2, $3, $4)")
+    sqlx::query("INSERT INTO tickets (guild_id, number, channel_id, opener_id, topic) VALUES ($1, $2, $3, $4, $5)")
         .bind(snowflake(guild_id.get())?)
         .bind(number)
         .bind(snowflake(channel.id.get())?)
         .bind(snowflake(user.id.get())?)
+        .bind(topic)
         .execute(db)
         .await?;
 
@@ -416,11 +486,15 @@ async fn open_inner(
 
 /// Kapatılacak biletin bilgileri (kapatma iki adımdır: önce işaretle ve haber ver, sonra kaydı çıkar).
 pub struct Closing {
-    number: i32,
-    opener: Option<UserId>,
-    opened_unix: i64,
-    claimed_by: Option<i64>,
+    pub number: i32,
+    pub opener: Option<UserId>,
+    pub opened_unix: i64,
+    pub claimed_by: Option<i64>,
+    pub reason: Option<String>,
+    pub topic: Option<String>,
 }
+
+type ClosingRow = (i32, i64, i64, Option<i64>, Option<String>);
 
 /// Bileti kapatılmış olarak işaretler. Kapatılamıyorsa kullanıcıya gösterilecek sebep döner.
 pub async fn begin_close(
@@ -429,15 +503,16 @@ pub async fn begin_close(
     channel_id: ChannelId,
     user: UserId,
     member: Option<&serenity::Member>,
+    reason: Option<&str>,
 ) -> anyhow::Result<Result<Closing, &'static str>> {
-    let row: Option<(i32, i64, i64, Option<i64>)> = sqlx::query_as(
-        "SELECT number, opener_id, EXTRACT(EPOCH FROM created_at)::BIGINT, claimed_by
+    let row: Option<ClosingRow> = sqlx::query_as(
+        "SELECT number, opener_id, EXTRACT(EPOCH FROM created_at)::BIGINT, claimed_by, topic
          FROM tickets WHERE channel_id = $1 AND status = 'open'",
     )
     .bind(snowflake(channel_id.get())?)
     .fetch_optional(db)
     .await?;
-    let Some((number, opener_id, opened_unix, claimed_by)) = row else {
+    let Some((number, opener_id, opened_unix, claimed_by, topic)) = row else {
         return Ok(Err("Bu kanal açık bir destek bileti değil."));
     };
     let opener = to_id(Some(opener_id)).map(UserId::new);
@@ -451,10 +526,17 @@ pub async fn begin_close(
         return Ok(Err("Bu bileti sadece açan kişi veya destek ekibi kapatabilir."));
     }
     // Aynı anda iki kişi kapatırsa sadece biri devam eder.
-    if !mark_closed(db, channel_id, Some(user)).await? {
+    if !mark_closed(db, channel_id, Some(user), reason).await? {
         return Ok(Err("Bu bilet zaten kapatılıyor."));
     }
-    Ok(Ok(Closing { number, opener, opened_unix, claimed_by }))
+    Ok(Ok(Closing {
+        number,
+        opener,
+        opened_unix,
+        claimed_by,
+        reason: reason.map(ToOwned::to_owned),
+        topic,
+    }))
 }
 
 /// Kapatılırken kanalda gösterilen duyuru.
@@ -482,7 +564,7 @@ pub async fn finish_close(
     closer: &serenity::User,
     extras: &TicketExtras,
 ) {
-    let Closing { number, opener, opened_unix, claimed_by } = closing;
+    let Closing { number, opener, opened_unix, claimed_by, reason, topic } = closing;
     let guild_name = ctx
         .cache
         .guild(guild_id)
@@ -499,15 +581,27 @@ pub async fn finish_close(
         opener: opener_user.as_ref(),
         closed_by: closer,
         opened_unix,
+        close_reason: reason.as_deref(),
     };
-    let text = match transcript::build(ctx, channel_id, &header).await {
-        Ok(text) => text,
+    let (text, html) = match transcript::build_both(ctx, channel_id, &header, topic.as_deref(), None).await {
+        Ok((txt, htm)) => (txt, htm),
         Err(e) => {
             warn!(channel = %channel_id, error = ?e, "Konuşma kaydı oluşturulamadı");
-            format!("Konuşma kaydı oluşturulamadı: {e}")
+            let err_text = format!("Konuşma kaydı oluşturulamadı: {e}");
+            (err_text.clone(), format!("<p>{}</p>", html_transcript::escape_html(&err_text)))
         }
     };
-    let filename = format!("ticket-{number:04}.txt");
+    let txt_filename = format!("ticket-{number:04}.txt");
+    let html_filename = format!("ticket-{number:04}.html");
+
+    // HTML transkripti web panelden görüntülenebilmesi için DB'ye kaydet
+    if let Ok(chan_snow) = snowflake(channel_id.get()) {
+        let _ = sqlx::query("UPDATE tickets SET html_transcript = $1 WHERE channel_id = $2")
+            .bind(&html)
+            .bind(chan_snow)
+            .execute(db)
+            .await;
+    }
 
     let mut summary = CreateEmbed::new()
         .title(format!("🎫 Bilet #{number:04} kapatıldı"))
@@ -518,29 +612,47 @@ pub async fn finish_close(
     if let Some(opener) = &opener_user {
         summary = summary.field("Açan", user_line(opener), true);
     }
+    if let Some(topic_str) = &topic {
+        summary = summary.field("Konu", topic_str, true);
+    }
     if let Some(staff) = to_id(claimed_by) {
         summary = summary.field("Üstlenen", format!("<@{staff}>"), true);
     }
+    if let Some(reason_str) = &reason {
+        summary = summary.field("Gerekçe", reason_str, false);
+    }
 
+    // Modlog kanalına hem .txt hem .html dosyalarını gönder
+    let attachments = vec![
+        CreateAttachment::bytes(text.clone().into_bytes(), txt_filename.clone()),
+        CreateAttachment::bytes(html.clone().into_bytes(), html_filename.clone()),
+    ];
     modlog
-        .ticket_closed(
+        .ticket_closed_with_files(
             &ctx.http,
             db,
             guild_id,
             summary,
-            CreateAttachment::bytes(text.clone().into_bytes(), filename.clone()),
+            attachments,
         )
         .await;
 
     if let Some(opener) = &opener_user {
-        let dm = CreateMessage::new()
+        let reason_text = match &reason {
+            Some(r) => format!("\n**Gerekçe:** {r}"),
+            None => String::new(),
+        };
+        let mut dm = CreateMessage::new()
             .content(format!(
-                "🎫 **{guild_name}** sunucusundaki **#{number:04}** numaralı destek biletin kapatıldı. \
-                 Konuşma kaydı ektedir.{}",
+                "🎫 **{guild_name}** sunucusundaki **#{number:04}** numaralı destek biletin kapatıldı.{reason_text} \
+                 Konuşma kaydı ektedir (TXT ve HTML).{}",
                 if extras.rating { "\n\n**Destekten ne kadar memnun kaldın?**" } else { "" }
             ))
-            .add_file(CreateAttachment::bytes(text.into_bytes(), filename));
-        let dm = if extras.rating { dm.components(vec![rating_row(guild_id, number)]) } else { dm };
+            .add_file(CreateAttachment::bytes(text.into_bytes(), txt_filename))
+            .add_file(CreateAttachment::bytes(html.into_bytes(), html_filename));
+        if extras.rating {
+            dm = dm.components(vec![rating_row(guild_id, number)]);
+        }
         if let Err(e) = opener.direct_message(ctx, dm).await {
             debug!(user = %opener.id, error = %e, "Bilet kaydı DM ile gönderilemedi");
         }
@@ -594,7 +706,7 @@ async fn close(ctx: &serenity::Context, data: &Data, interaction: &ComponentInte
         return Ok(());
     };
     let channel_id = interaction.channel_id;
-    let closing = match begin_close(&data.db, guild_id, channel_id, interaction.user.id, interaction.member.as_ref()).await? {
+    let closing = match begin_close(&data.db, guild_id, channel_id, interaction.user.id, interaction.member.as_ref(), None).await? {
         Ok(closing) => closing,
         Err(reason) => return ephemeral(ctx, interaction, reason).await,
     };
@@ -733,16 +845,50 @@ async fn auto_close_round(
     settings: &crate::settings::PluginSettings,
     modlog: &crate::modlog::ModLog,
 ) -> anyhow::Result<()> {
-    let open: Vec<(i64, i64, i64)> =
-        sqlx::query_as("SELECT guild_id, channel_id, EXTRACT(EPOCH FROM created_at)::BIGINT FROM tickets WHERE status = 'open'")
-            .fetch_all(db)
-            .await?;
+    let open: Vec<(i64, i64, i32, i64, i64, bool, bool)> = sqlx::query_as(
+        "SELECT guild_id, channel_id, number, opener_id, EXTRACT(EPOCH FROM created_at)::BIGINT,
+                (first_response_at IS NOT NULL) AS has_first_response,
+                (sla_warned_at IS NOT NULL) AS has_sla_warned
+         FROM tickets WHERE status = 'open'",
+    )
+    .fetch_all(db)
+    .await?;
     let now = serenity::Timestamp::now().unix_timestamp();
-    for (guild, channel, created) in open {
+    for (guild, channel, number, opener_id, created, has_first_response, has_sla_warned) in open {
         let (Some(guild_id), Some(channel_id)) = (to_id(Some(guild)).map(GuildId::new), to_id(Some(channel)).map(ChannelId::new)) else {
             continue;
         };
         let extras = settings.get::<TicketExtras>(db, guild_id).await?;
+
+        // SLA Gecikme Uyarısı: İlk yanıt henüz verilmemiş ve SLA süresi aşılmışsa tek sefer uyar
+        if extras.sla_warn_minutes > 0 && !has_first_response && !has_sla_warned {
+            let elapsed_mins = (now - created).max(0) / 60;
+            if elapsed_mins >= i64::from(extras.sla_warn_minutes) {
+                let updated = sqlx::query(
+                    "UPDATE tickets SET sla_warned_at = now()
+                     WHERE channel_id = $1 AND sla_warned_at IS NULL AND first_response_at IS NULL",
+                )
+                .bind(snowflake(channel_id.get())?)
+                .execute(db)
+                .await?;
+                if updated.rows_affected() > 0 {
+                    let ticket_settings = load_settings(db, guild_id).await.ok().flatten();
+                    let mention = match ticket_settings.and_then(|s| s.support_role_id) {
+                        Some(role) => role.mention().to_string(),
+                        None => "@Destek Ekibi".to_string(),
+                    };
+                    let alert = format!(
+                        "⚠️ {} Bu bilet **{} dakikadır** ilk yanıtı bekliyor!",
+                        mention, extras.sla_warn_minutes
+                    );
+                    let _ = channel_id
+                        .send_message(&ctx.http, CreateMessage::new().content(alert))
+                        .await;
+                    info!(guild = %guild_id, ticket = number, "Destek bileti için SLA yanıt gecikmesi uyarısı gönderildi");
+                }
+            }
+        }
+
         if extras.auto_close_hours == 0 {
             continue;
         }
@@ -763,18 +909,27 @@ async fn auto_close_round(
                 }
             }
             Idle::Close => {
-                let row: Option<(i32, i64, Option<i64>)> = sqlx::query_as(
-                    "SELECT number, opener_id, claimed_by FROM tickets WHERE channel_id = $1 AND status = 'open'",
+                let row: Option<(Option<i64>, Option<String>)> = sqlx::query_as(
+                    "SELECT claimed_by, topic FROM tickets WHERE channel_id = $1 AND status = 'open'",
                 )
                 .bind(channel)
                 .fetch_optional(db)
                 .await?;
-                let Some((number, opener_id, claimed_by)) = row else { continue };
+                let (claimed_by, topic) = row.unwrap_or((None, None));
+
                 let bot = ctx.cache.current_user().id;
-                if !mark_closed(db, channel_id, Some(bot)).await? {
+                let auto_close_reason = "Hareketsizlik nedeniyle otomatik kapatıldı";
+                if !mark_closed(db, channel_id, Some(bot), Some(auto_close_reason)).await? {
                     continue;
                 }
-                let closing = Closing { number, opener: to_id(Some(opener_id)).map(UserId::new), opened_unix: created, claimed_by };
+                let closing = Closing {
+                    number,
+                    opener: to_id(Some(opener_id)).map(UserId::new),
+                    opened_unix: created,
+                    claimed_by,
+                    reason: Some(auto_close_reason.to_string()),
+                    topic,
+                };
                 let notice = format!(
                     "⏰ Bu bilette {} saattir kimse yazmadığı için otomatik kapatılıyor. Kayıt oluşturuluyor…",
                     extras.auto_close_hours
@@ -958,6 +1113,20 @@ pub async fn claim(db: &PgPool, channel_id: ChannelId, staff: UserId) -> anyhow:
     })
 }
 
+/// Açık bileti başka bir yetkiliye devreder (`claimed_by` güncellenir).
+pub async fn transfer(db: &PgPool, channel_id: ChannelId, new_staff: UserId) -> anyhow::Result<Option<i32>> {
+    let number: Option<i32> = sqlx::query_scalar(
+        "UPDATE tickets SET claimed_by = $2
+         WHERE channel_id = $1 AND status = 'open'
+         RETURNING number",
+    )
+    .bind(snowflake(channel_id.get())?)
+    .bind(snowflake(new_staff.get())?)
+    .fetch_optional(db)
+    .await?;
+    Ok(number)
+}
+
 /// Bilet kanalına üye ekler.
 pub async fn add_member(http: &serenity::Http, channel_id: ChannelId, user: UserId) -> anyhow::Result<()> {
     let overwrite = PermissionOverwrite {
@@ -1011,7 +1180,7 @@ async fn claim_button(ctx: &serenity::Context, data: &Data, interaction: &Compon
 
 /// Kanal elle silindiğinde açık bilet kaydını kapatır.
 pub async fn on_channel_deleted(db: &PgPool, channel_id: ChannelId) -> anyhow::Result<()> {
-    if mark_closed(db, channel_id, None).await? {
+    if mark_closed(db, channel_id, None, Some("Kanal silindi")).await? {
         info!(channel = %channel_id, "Elle silinen bilet kanalı kapatıldı olarak işaretlendi");
     }
     Ok(())
@@ -1036,13 +1205,19 @@ async fn open_count(db: &PgPool, guild_id: GuildId, user_id: UserId) -> anyhow::
 }
 
 /// Açık bileti kapatır; zaten kapalıysa `false`.
-async fn mark_closed(db: &PgPool, channel_id: ChannelId, closed_by: Option<UserId>) -> anyhow::Result<bool> {
+async fn mark_closed(
+    db: &PgPool,
+    channel_id: ChannelId,
+    closed_by: Option<UserId>,
+    reason: Option<&str>,
+) -> anyhow::Result<bool> {
     let result = sqlx::query(
-        "UPDATE tickets SET status = 'closed', closed_at = now(), closed_by = $2
+        "UPDATE tickets SET status = 'closed', closed_at = now(), closed_by = $2, close_reason = $3
          WHERE channel_id = $1 AND status = 'open'",
     )
     .bind(snowflake(channel_id.get())?)
     .bind(closed_by.map(|u| snowflake(u.get())).transpose()?)
+    .bind(reason)
     .execute(db)
     .await?;
     Ok(result.rows_affected() > 0)
@@ -1214,9 +1389,109 @@ pub fn human_secs(secs: f64) -> String {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TranscriptEntry {
+    pub number: i32,
+    pub opener_id: i64,
+    pub closed_by: Option<i64>,
+    #[allow(dead_code)]
+    pub opened_at_unix: i64,
+    pub closed_at_unix: Option<i64>,
+    pub topic: Option<String>,
+    pub close_reason: Option<String>,
+    pub has_html: bool,
+}
+
+type TranscriptRow = (
+    i32,
+    i64,
+    Option<i64>,
+    i64,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    bool,
+);
+
+pub async fn list_transcripts(
+    db: &PgPool,
+    guild_id: GuildId,
+    search: Option<&str>,
+    limit: i64,
+) -> anyhow::Result<Vec<TranscriptEntry>> {
+    let guild = snowflake(guild_id.get())?;
+    let search_pattern = search.and_then(|s| {
+        let trimmed = s.trim();
+        (!trimmed.is_empty()).then(|| format!("%{trimmed}%"))
+    });
+
+    let rows: Vec<TranscriptRow> = match search_pattern {
+        Some(query) => {
+            sqlx::query_as(
+                "SELECT number, opener_id, closed_by, EXTRACT(EPOCH FROM created_at)::BIGINT,
+                        EXTRACT(EPOCH FROM closed_at)::BIGINT, topic, close_reason,
+                        (html_transcript IS NOT NULL) AS has_html
+                 FROM tickets
+                 WHERE guild_id = $1 AND status <> 'open'
+                   AND (topic ILIKE $2 OR close_reason ILIKE $2 OR number::text ILIKE $2)
+                 ORDER BY closed_at DESC NULLS LAST, number DESC LIMIT $3",
+            )
+            .bind(guild)
+            .bind(query)
+            .bind(limit)
+            .fetch_all(db)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                "SELECT number, opener_id, closed_by, EXTRACT(EPOCH FROM created_at)::BIGINT,
+                        EXTRACT(EPOCH FROM closed_at)::BIGINT, topic, close_reason,
+                        (html_transcript IS NOT NULL) AS has_html
+                 FROM tickets
+                 WHERE guild_id = $1 AND status <> 'open'
+                 ORDER BY closed_at DESC NULLS LAST, number DESC LIMIT $2",
+            )
+            .bind(guild)
+            .bind(limit)
+            .fetch_all(db)
+            .await?
+        }
+    };
+
+    Ok(rows
+        .into_iter()
+        .map(|(number, opener_id, closed_by, opened_at_unix, closed_at_unix, topic, close_reason, has_html)| {
+            TranscriptEntry {
+                number,
+                opener_id,
+                closed_by,
+                opened_at_unix,
+                closed_at_unix,
+                topic,
+                close_reason,
+                has_html,
+            }
+        })
+        .collect())
+}
+
+pub async fn get_html_transcript(db: &PgPool, guild_id: GuildId, number: i32) -> anyhow::Result<Option<String>> {
+    let html: Option<String> = sqlx::query_scalar(
+        "SELECT html_transcript FROM tickets WHERE guild_id = $1 AND number = $2",
+    )
+    .bind(snowflake(guild_id.get())?)
+    .bind(number)
+    .fetch_optional(db)
+    .await?;
+    Ok(html)
+}
+
 #[cfg(test)]
 mod stats_tests {
-    use super::human_secs;
+    use super::{
+        human_secs, CLAIM_BUTTON, CLOSE_BUTTON, DELETE_BUTTON, OPEN_BUTTON, RATE_PREFIX,
+        REOPEN_BUTTON, TOPIC_SELECT, TicketExtras,
+    };
 
     #[test]
     fn durations_read_naturally() {
@@ -1225,5 +1500,46 @@ mod stats_tests {
         assert_eq!(human_secs(3600.0 * 3.0 + 300.0), "3 sa 5 dk");
         assert_eq!(human_secs(86_400.0 * 2.0 + 3600.0 * 4.0), "2 g 4 sa");
         assert_eq!(human_secs(f64::NAN), "0 sn");
+    }
+
+    #[test]
+    fn ticket_extras_backward_compatible_json() {
+        let legacy_json = r#"{"topics":["genel","destek"],"max_open":2,"keep_closed":true}"#;
+        let parsed: Result<TicketExtras, _> = serde_json::from_str(legacy_json);
+        assert!(parsed.is_ok());
+        if let Ok(extras) = parsed {
+            assert_eq!(extras.sla_warn_minutes, 0);
+            assert_eq!(extras.auto_close_hours, 0);
+            assert_eq!(extras.max_open, 2);
+            assert!(extras.keep_closed);
+            assert_eq!(extras.topics.len(), 2);
+        }
+    }
+
+    #[test]
+    fn sla_threshold_check() {
+        let created = 1_000_000_i64;
+        let sla_mins = 15_u32;
+
+        let before_sla = created + 14 * 60;
+        let at_sla = created + 15 * 60;
+        let after_sla = created + 20 * 60;
+
+        let is_breached = |now: i64| (now - created).max(0) / 60 >= i64::from(sla_mins);
+
+        assert!(!is_breached(before_sla));
+        assert!(is_breached(at_sla));
+        assert!(is_breached(after_sla));
+    }
+
+    #[test]
+    fn button_and_prefix_constants() {
+        assert_eq!(OPEN_BUTTON, "ticket:open");
+        assert_eq!(CLOSE_BUTTON, "ticket:close");
+        assert_eq!(CLAIM_BUTTON, "ticket:claim");
+        assert_eq!(TOPIC_SELECT, "ticket:topic");
+        assert_eq!(REOPEN_BUTTON, "ticket:reopen");
+        assert_eq!(DELETE_BUTTON, "ticket:delete");
+        assert_eq!(RATE_PREFIX, "ticket:rate:");
     }
 }

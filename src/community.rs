@@ -25,8 +25,6 @@ pub const MAX_AFK_REASON: usize = 150;
 /// Sabit mesaj en az bu kadar yeni mesajdan ve süreden sonra yeniden gönderilir.
 const STICKY_EVERY: u32 = 4;
 const STICKY_COOLDOWN: Duration = Duration::from_secs(12);
-/// Tek seferde en fazla bu kadar dakika ses XP'si verilir (kanalda unutulan hesaplar için).
-const VOICE_XP_MAX_MINUTES: u64 = 600;
 const ROLE_MEMORY_SECS: u64 = 30 * 24 * 3600;
 const ACTIVITY_DAYS: u64 = 45;
 pub const MAX_BOOST_MESSAGE: usize = 1000;
@@ -536,6 +534,7 @@ pub async fn flow(redis: &ConnectionManager, guild_id: GuildId, days: i64) -> Ve
 }
 
 /// Son `days` günün mesaj sayıları (eskiden yeniye): (gün damgası, toplam) ve bu aralıkta en çok yazılan kanallar.
+#[expect(dead_code)]
 pub async fn activity(redis: &ConnectionManager, guild_id: GuildId, days: i64) -> (Vec<(i64, u64)>, Vec<(u64, u64)>) {
     let today = day_stamp(serenity::Timestamp::now().unix_timestamp());
     let mut conn = redis.clone();
@@ -622,63 +621,9 @@ pub async fn on_join(ctx: &serenity::Context, data: &Data, member: &Member) {
     }
 }
 
-/// Seste "etkin" geçen süre: (biriken saniye, şu an etkinse etkinliğin başladığı an).
-type ActiveTime = (u64, Option<std::time::Instant>);
-static VOICE_ACTIVE: std::sync::LazyLock<dashmap::DashMap<(GuildId, UserId), ActiveTime>> = std::sync::LazyLock::new(dashmap::DashMap::new);
-
-/// Ses XP'si sayılır mı: AFK kanalında değil, sesi açık, sağır değil ve kanalda onu duyan başka biri var.
+#[cfg(test)]
 pub fn voice_counts(in_afk: bool, muted: bool, deaf: bool, other_listeners: usize) -> bool {
     !in_afk && !muted && !deaf && other_listeners > 0
-}
-
-/// Sunucudaki herkesin seste etkin olup olmadığını yeniden hesaplar (her ses olayında; önbellekten).
-pub fn refresh_voice_activity(cache: &serenity::Cache, guild_id: GuildId) {
-    let Some(guild) = cache.guild(guild_id) else { return };
-    let is_bot = |s: &serenity::VoiceState| s.member.as_ref().map_or_else(|| guild.members.get(&s.user_id).is_some_and(|m| m.user.bot), |m| m.user.bot);
-    let listening = |s: &serenity::VoiceState| !is_bot(s) && !s.deaf && !s.self_deaf;
-    let now = std::time::Instant::now();
-    for state in guild.voice_states.values() {
-        let Some(channel) = state.channel_id else { continue };
-        if is_bot(state) {
-            continue;
-        }
-        let others = guild.voice_states.values().filter(|o| o.user_id != state.user_id && o.channel_id == Some(channel) && listening(o)).count();
-        let active = voice_counts(guild.afk_metadata.as_ref().is_some_and(|a| a.afk_channel_id == channel), state.mute || state.self_mute, state.deaf || state.self_deaf, others);
-        let mut entry = VOICE_ACTIVE.entry((guild_id, state.user_id)).or_insert((0, None));
-        match (active, entry.1) {
-            (true, None) => entry.1 = Some(now),
-            (false, Some(since)) => {
-                entry.0 += since.elapsed().as_secs();
-                entry.1 = None;
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Üye sesten ayrıldı: etkin geçen dakikalar.
-fn take_active_minutes(guild_id: GuildId, user: UserId) -> u64 {
-    VOICE_ACTIVE.remove(&(guild_id, user)).map_or(0, |(_, (secs, since))| (secs + since.map_or(0, |s| s.elapsed().as_secs())) / 60)
-}
-
-/// Sesten ayrılan üyeye XP: süzgeç açıksa yalnızca etkin dakikalar, kapalıysa bütün süre.
-pub async fn voice_session_xp(data: &Data, guild_id: GuildId, user: UserId, total_minutes: u64) {
-    let active = take_active_minutes(guild_id, user);
-    let idle_counts = data.settings.get::<CommunitySettings>(&data.db, guild_id).await.is_ok_and(|s| s.voice_xp_idle);
-    voice_xp(data, guild_id, user, if idle_counts { total_minutes } else { active }).await;
-}
-
-/// Seste geçen dakikalar için XP (ayar açıksa).
-pub async fn voice_xp(data: &Data, guild_id: GuildId, user: UserId, minutes: u64) {
-    let rate = data.settings.get::<CommunitySettings>(&data.db, guild_id).await.map_or(0, |s| s.voice_xp_per_min.min(MAX_VOICE_XP));
-    let xp = u64::from(rate) * minutes.min(VOICE_XP_MAX_MINUTES);
-    let Ok(delta) = i64::try_from(xp) else { return };
-    if delta == 0 {
-        return;
-    }
-    if let Err(e) = data.leveling.add_xp(&data.db, &data.redis, guild_id, user, delta).await {
-        warn!(guild = %guild_id, error = ?e, "Ses XP'si eklenemedi");
-    }
 }
 
 /// Klip sıralamasındaki anahtar: üyeler kimlikleriyle, webhook'lar (AxT Capture) adlarıyla sayılır.

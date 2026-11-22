@@ -1,6 +1,7 @@
 //! Slash komut kaydı. Yeni bir komut eklemek için modülünü burada tanımlayıp `all()`'a ekleyin.
 
 mod ai;
+mod analytics;
 mod automod;
 mod community;
 mod context;
@@ -126,6 +127,7 @@ fn defined() -> Vec<poise::Command<Data, Error>> {
         utility::bilgi(),
         economy::magaza_yonet(),
         economy::ekonomi_yonet(),
+        analytics::istatistik(),
     ]
 }
 

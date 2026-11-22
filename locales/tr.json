@@ -1,0 +1,59 @@
+{
+  "common": {
+    "error": "Bir hata oluştu",
+    "success": "Başarılı",
+    "yes": "Evet",
+    "no": "Hayır",
+    "enabled": "Açık",
+    "disabled": "Kapalı"
+  },
+  "music": {
+    "now_playing": "Şu an çalan: {title}",
+    "queue_empty": "Kuyruk boş.",
+    "not_in_voice": "Şu an bir ses kanalında değilim.",
+    "join_voice_first": "Önce bir ses kanalına katıl.",
+    "dj_only": "Bu komutu yalnızca DJ rolündekiler kullanabilir.",
+    "mode_247_on": "7/24 modu açık: Kanal boşalsa da ses kanalından ayrılmayacağım.",
+    "mode_247_off": "7/24 modu kapalı.",
+    "session_limit_reached": "Maksimum oturum süresine ulaşıldı ({limit} dk), ses kanalından ayrılıyorum.",
+    "lyrics_not_found": "Şarkı sözü bulunamadı.",
+    "volume_set": "Ses seviyesi %{level} olarak ayarlandı."
+  },
+  "tickets": {
+    "created": "Bilet kanalı oluşturuldu: {channel}",
+    "closed": "Bilet kapatıldı.",
+    "claimed": "Bilet {user} tarafından üstlenildi.",
+    "rated": "Bilet puanlandı: {rating}/5"
+  },
+  "analytics": {
+    "overview_title": "Sunucu İstatistikleri",
+    "messages_count": "Toplam Mesaj: {count}",
+    "voice_hours": "Toplam Ses: {hours} saat",
+    "net_growth": "Net Üye Büyümesi: {count}"
+  },
+  "feeds": {
+    "new_post": "**{source}** yeni bir paylaşım yaptı:\n{link}",
+    "reddit_post": "**{source}** içinde yeni gönderi: **{title}**\n{link}"
+  },
+  "panel": {
+    "overview": "Genel Bakış",
+    "logs": "Loglar",
+    "system": "Sistem",
+    "stats": "İstatistikler",
+    "transcripts": "Bilet Kayıtları",
+    "templates": "Sunucu Şablonları",
+    "health": "Sağlık Kontrolü",
+    "plugins": "Eklentiler",
+    "wizard": "Kurulum Sihirbazı",
+    "logout": "Çıkış",
+    "live": "Canlı",
+    "connecting": "Bağlanıyor",
+    "save": "Kaydet",
+    "saved": "Değişiklikler kaydedildi."
+  },
+  "automations": {
+    "stream_live": "{yayinci} {platform}'da yayında: {baslik}",
+    "stream_offline": "{yayinci} yayını kapattı.",
+    "webhook_sent": "Webhook tetiklendi: {url}"
+  }
+}
