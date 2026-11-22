@@ -14,8 +14,8 @@ use tracing::{debug, warn};
 
 use super::TrackInfo;
 
-/// Redis TTL süresi (7 gün).
-pub const META_CACHE_TTL_SECS: u64 = 7 * 24 * 3600;
+/// Redis TTL süresi (24 saat).
+pub const META_CACHE_TTL_SECS: u64 = 24 * 3600;
 
 /// Redis istek zaman aşımı (250 ms): Redis yavaşlarsa veya yanıt vermezse müzik akışı bekletilmez (fail-open).
 pub const REDIS_TIMEOUT: Duration = Duration::from_millis(250);

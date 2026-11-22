@@ -230,8 +230,69 @@ pub fn pcm_stream_prebuffered(children: Vec<Child>) -> Result<AudioStream<Box<dy
     })
 }
 
+/// RAM seek için ffmpeg argümanlarını üretir: `-i pipe:0`'dan SONRA `-ss <seek_str>` yer alır.
+pub fn build_ram_seek_args(seek: Option<Duration>, chain: &str) -> Vec<String> {
+    let mut args = vec![
+        "-probesize".to_owned(),
+        "1048576".to_owned(),
+        "-analyzeduration".to_owned(),
+        "2000000".to_owned(),
+        "-i".to_owned(),
+        "pipe:0".to_owned(),
+    ];
+    if let Some(seek) = seek {
+        if seek.as_secs() > 0 || seek.subsec_millis() > 0 {
+            args.push("-ss".to_owned());
+            args.push(seek.as_secs_f64().to_string());
+        }
+    }
+    args.push("-vn".to_owned());
+    args.push("-af".to_owned());
+    args.push(chain.to_owned());
+    for p in PCM_OUT {
+        args.push((*p).to_owned());
+    }
+    args
+}
+
+/// RAM'deki ses verisini (`bytes::Bytes`) ffmpeg stdin'ine besleyerek belirli bir saniyeden itibaren açar.
+/// `-ss <target_secs>` parametresi `-i pipe:0` SONRASINDA yer alır (RAM verisi kayıpsız ve hızlı taranır, sıfır disk kullanılır).
+pub fn open_ram_seek_stream(
+    bytes: bytes::Bytes,
+    seek: Duration,
+    filter: Filter,
+) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
+    let chain = filter.chain().unwrap_or(BASE_RESAMPLE_AF);
+    let seek_opt = (seek.as_secs() > 0 || seek.subsec_millis() > 0).then_some(seek);
+    let args = build_ram_seek_args(seek_opt, chain);
+    let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    let mut child = spawn(&str_args, Stdio::piped())?;
+    let Some(mut stdin) = child.stdin.take() else {
+        return Err(AudioStreamError::Fail("ffmpeg stdin açılamadı".into()));
+    };
+
+    std::thread::spawn(move || {
+        let _ = stdin.write_all(&bytes);
+        let _ = stdin.flush();
+    });
+
+    pcm_stream_prebuffered(vec![child])
+}
+
+/// RAM'deki ses verisini Songbird Input olarak belirli bir saniyeden açar.
+pub fn open_ram_seek(
+    bytes: bytes::Bytes,
+    seek: Duration,
+    filter: Filter,
+) -> Result<Input, AudioStreamError> {
+    let stream = open_ram_seek_stream(bytes, seek, filter)?;
+    Ok(Input::Live(LiveInput::Raw(stream), None))
+}
+
 /// Yerel bir ses dosyasını ffmpeg ile belirli bir saniyeden itibaren açar (AudioStream).
 /// `-ss` parametresi `-i` girişinden ÖNCE yer alır (hızlı input seeking).
+#[allow(dead_code)]
 pub fn open_file_seek_stream(
     path: &Path,
     seek: Duration,
@@ -259,6 +320,7 @@ pub fn open_file_seek_stream(
 }
 
 /// Yerel bir ses dosyasını Songbird Input olarak belirli bir saniyeden açar.
+#[allow(dead_code)]
 pub fn open_file_seek(
     path: &Path,
     seek: Duration,
@@ -676,5 +738,34 @@ mod tests {
         }
         assert!(url_args.contains(&"-reconnect"));
         assert!(url_args.contains(&"1"));
+    }
+
+    #[test]
+    fn test_ram_seek_ss_is_placed_after_i_pipe0_and_no_async1() {
+        let seek = Duration::from_secs(30);
+        let args = build_ram_seek_args(Some(seek), BASE_RESAMPLE_AF);
+
+        let ss_pos = args.iter().position(|x| x == "-ss");
+        let i_pos = args.iter().position(|x| x == "-i");
+        let pipe_pos = args.iter().position(|x| x == "pipe:0");
+
+        assert!(i_pos.is_some());
+        assert!(pipe_pos.is_some());
+        assert!(ss_pos.is_some());
+
+        if let (Some(i), Some(ss)) = (i_pos, ss_pos) {
+            assert!(i < ss, "RAM seek için -ss parametresi -i pipe:0 sonrasında yer almalı");
+        }
+
+        // async=1 kesinlikle bulunmamalı
+        for arg in &args {
+            assert!(!arg.contains("async=1"), "RAM filtre argümanlarında async=1 bulunmamalı: {arg}");
+        }
+
+        for filter in [Filter::Bass, Filter::Nightcore, Filter::Vaporwave, Filter::EightD] {
+            if let Some(chain) = filter.chain() {
+                assert!(!chain.contains("async=1"), "{filter:?} filtresinde async=1 bulunmamalı: {chain}");
+            }
+        }
     }
 }

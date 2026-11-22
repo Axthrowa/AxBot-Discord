@@ -526,15 +526,15 @@ impl Music {
             return Ok(());
         }
 
-        // Yol B: Hızlı FFmpeg input seeking (-ss <target> -i ...) ile taze akış başlatma
+        // Yol B: RAM veya doğrudan akış üzerinden FFmpeg input seeking ile taze akış başlatma
         let Some(url) = info.url.clone() else {
             return Err("Bu yayın/şarkı sarılamıyor.".to_owned());
         };
 
-        let cached_path = cache::get_cached_track(&url);
-        let input = if let Some(ref path) = cached_path {
-            filters::open_file_seek(path, target, current_filter)
-                .map_err(|e| format!("Önbellek dosyası açılamadı: {e}"))?
+        let cached_ram = cache::get_cached_audio(&url);
+        let input = if let Some(bytes) = cached_ram {
+            filters::open_ram_seek(bytes, target, current_filter)
+                .map_err(|e| format!("RAM önbellek akışı açılamadı: {e}"))?
         } else {
             let direct_url = self.resolve_direct_stream_url(&url).await.unwrap_or_else(|| url.clone());
             filters::open_direct_url_seek(&direct_url, &std::collections::HashMap::new(), target, current_filter)
@@ -885,15 +885,15 @@ impl Music {
         prefetch::Prefetched::resolve(source, args, Some(self.http.clone())).await.map_err(|e| e.to_string())
     }
 
-    /// Arama sorgusunu veya bağlantıyı, önce Redis metaveri ve yerel disk önbelleğini denetleyerek
+    /// Arama sorgusunu veya bağlantıyı, önce Redis metaveri ve RAM ses önbelleğini denetleyerek
     /// çalınabilir bir kaynağa çevirir.
     ///
-    /// - Yol A (Redis İsabeti + Disk İsabeti): Şarkı daha önce dinlenmiş ve yerel diskte (`%TEMP%/axbot_music_cache`)
-    ///   hâlihazırda mevcutsa, yt-dlp ve Deno HİÇ çalıştırılmadan doğrudan diskten `<10 ms` içinde başlatılır.
-    /// - Yol B (Redis İsabeti + Disk Iska): Redis'te standart URL ve başlık var ancak disk önbelleği silinmişse,
-    ///   arama sorgusu yerine doğrudan kanonik URL ile yt-dlp'ye gidilir (hızlı ve doğru video garantisi).
-    /// - Yol C (Redis Iska): Normal `resolve_preferring_spotify` akışına devam edilir. Başarılı sonuç alındığında
-    ///   arkaplanda Redis'e (`q`, `vid`, `url`) anahtarlarıyla asenkron kaydedilir.
+    /// - Durum A (Redis + RAM İsabeti — Sıfır yt-dlp): Şarkı daha önce dinlenmiş ve RAM önbelleğinde
+    ///   (`bytes::Bytes`) hazırsa, yt-dlp ve Deno HİÇ çalıştırılmadan doğrudan RAM'den `<10 ms` içinde başlatılır.
+    /// - Durum B (Redis Var, RAM Yok — restart/LRU sonrası): Arama sorgusu yerine doğrudan kanonik URL ile
+    ///   hızlıca çözümlenir ve arka planda RAM önbelleğine alınır.
+    /// - Durum C (Soğuk İstek): Normal `resolve_preferring_spotify` akışına devam edilir. Başarılı sonuç alındığında
+    ///   arkaplanda hem Redis'e kaydedilir hem de RAM önbelleğine indirilir.
     pub async fn resolve_with_cache(
         &self,
         query: &str,
@@ -908,10 +908,10 @@ impl Music {
         // 1. Redis'te metaveri kontrolü (fail-open)
         if let Some(ref redis) = self.redis {
             if let Some(meta) = meta_cache::get_cached_meta(redis, trimmed).await {
-                // Disk önbelleğinde dosya mevcut mu?
-                if let Some(cached_path) = cache::get_cached_track(&meta.webpage_url) {
-                    cache::touch_cached_track(&cached_path);
-                    let input: Input = songbird::input::File::new(cached_path).into();
+                // RAM önbelleğinde ses verisi hazır mı?
+                if let Some(bytes) = cache::get_cached_audio(&meta.webpage_url) {
+                    cache::touch_cached_audio(&meta.webpage_url);
+                    let input = cache::memory_input(bytes);
                     let info = TrackInfo {
                         guild_id,
                         title: meta.title,
@@ -923,16 +923,34 @@ impl Music {
                         spotify_url: None,
                     };
                     info!(
-                        source = "redis+disk",
+                        source = "redis+ram",
                         title = %info.title,
-                        "Şarkı Redis metaveri + disk önbelleğinden anında (<10ms) başlatıldı"
+                        "Şarkı Redis metaveri + RAM önbelleğinden anında (<10ms) başlatıldı"
                     );
                     return Ok((input, info));
                 }
 
-                // Yol B: Redis'te meta var ama disk dosyası yok -> kanonik URL ile doğrudan çöz
+                // Durum B: Redis'te meta var ama RAM'de yok -> doğrudan kanonik URL ile çöz
                 match self.resolve(&meta.webpage_url, requester, guild_id).await {
-                    Ok(res) => return Ok(res),
+                    Ok((input, info)) => {
+                        let http_clone = self.http.clone();
+                        let ytdlp_str = self.ytdlp.to_owned();
+                        let args_clone = self.args();
+                        let target_url = meta.webpage_url.clone();
+                        let dur = info.duration;
+                        tokio::spawn(async move {
+                            let _ = cache::download_to_ram_cache(
+                                Some(&http_clone),
+                                &ytdlp_str,
+                                &args_clone,
+                                &target_url,
+                                None,
+                                None,
+                                dur,
+                            ).await;
+                        });
+                        return Ok((input, info));
+                    }
                     Err(e) => {
                         warn!(
                             url = %meta.webpage_url,
@@ -944,17 +962,36 @@ impl Music {
             }
         }
 
-        // Yol C: Standart Spotify/YouTube çözümlemesi
+        // Durum C: Standart Spotify/YouTube çözümlemesi
         let (input, info) = self.resolve_preferring_spotify(trimmed, requester, guild_id).await?;
 
-        // Başarılı çözümleme sonrası arkaplanda Redis'e kaydet (yalnızca canlı olmayan, süresi belli parçalar)
-        if let Some(ref redis) = self.redis {
-            if info.url.is_some() && info.duration.is_some() {
+        // Başarılı çözümleme sonrası arkaplanda hem Redis'e kaydet hem de RAM önbelleğine indir
+        if info.url.is_some() && info.duration.is_some() {
+            if let Some(ref redis) = self.redis {
                 let redis_clone = redis.clone();
                 let query_owned = trimmed.to_owned();
                 let info_clone = info.clone();
                 tokio::spawn(async move {
                     meta_cache::save_track_info(&redis_clone, &query_owned, &info_clone).await;
+                });
+            }
+
+            if let Some(ref target_url) = info.url {
+                let http_clone = self.http.clone();
+                let ytdlp_str = self.ytdlp.to_owned();
+                let args_clone = self.args();
+                let target_clone = target_url.clone();
+                let dur = info.duration;
+                tokio::spawn(async move {
+                    let _ = cache::download_to_ram_cache(
+                        Some(&http_clone),
+                        &ytdlp_str,
+                        &args_clone,
+                        &target_clone,
+                        None,
+                        None,
+                        dur,
+                    ).await;
                 });
             }
         }
@@ -984,12 +1021,12 @@ impl Music {
     pub async fn resolve_spotify_track(&self, track: &extra::SpotifyTrack, requester: UserId, guild_id: GuildId) -> Result<(Input, TrackInfo), String> {
         let query = format!("{} - {}", track.artists, track.title);
 
-        // Fast-path: Redis meta + Disk cache
+        // Fast-path: Redis meta + RAM cache
         if let Some(ref redis) = self.redis {
             if let Some(meta) = meta_cache::get_cached_meta(redis, &query).await {
-                if let Some(cached_path) = cache::get_cached_track(&meta.webpage_url) {
-                    cache::touch_cached_track(&cached_path);
-                    let input: Input = songbird::input::File::new(cached_path).into();
+                if let Some(bytes) = cache::get_cached_audio(&meta.webpage_url) {
+                    cache::touch_cached_audio(&meta.webpage_url);
+                    let input = cache::memory_input(bytes);
                     let info = TrackInfo {
                         guild_id,
                         title: if track.artists.is_empty() { track.title.clone() } else { query },
@@ -1001,9 +1038,9 @@ impl Music {
                         spotify_url: track.url.clone(),
                     };
                     info!(
-                        source = "redis+disk(spotify)",
+                        source = "redis+ram(spotify)",
                         title = %info.title,
-                        "Spotify parçası Redis metaveri + disk önbelleğinden anında (<10ms) başlatıldı"
+                        "Spotify parçası Redis metaveri + RAM önbelleğinden anında (<10ms) başlatıldı"
                     );
                     return Ok((input, info));
                 }
@@ -1017,13 +1054,32 @@ impl Music {
             info.thumbnail = track.cover.clone();
         }
 
-        if let Some(ref redis) = self.redis {
-            if info.url.is_some() && info.duration.is_some() {
+        if info.url.is_some() && info.duration.is_some() {
+            if let Some(ref redis) = self.redis {
                 let redis_clone = redis.clone();
                 let query_clone = query.clone();
                 let info_clone = info.clone();
                 tokio::spawn(async move {
                     meta_cache::save_track_info(&redis_clone, &query_clone, &info_clone).await;
+                });
+            }
+
+            if let Some(ref target_url) = info.url {
+                let http_clone = self.http.clone();
+                let ytdlp_str = self.ytdlp.to_owned();
+                let args_clone = self.args();
+                let target_clone = target_url.clone();
+                let dur = info.duration;
+                tokio::spawn(async move {
+                    let _ = cache::download_to_ram_cache(
+                        Some(&http_clone),
+                        &ytdlp_str,
+                        &args_clone,
+                        &target_clone,
+                        None,
+                        None,
+                        dur,
+                    ).await;
                 });
             }
         }
@@ -1406,7 +1462,7 @@ impl Shared {
         }
     }
 
-    /// Sıradaki parçayı arka planda önceden çözümler ve yerel diske indirir (şarkı geçişini anında ve sıfır gecikmeli yapar).
+    /// Sıradaki parçayı arka planda önceden çözümler ve RAM önbelleğine indirir (şarkı geçişini anında ve sıfır gecikmeli yapar).
     pub(crate) async fn prefetch_next(this: Arc<Self>, guild_id: GuildId) {
         let Some(call) = this.songbird.get(guild_id) else { return; };
         let next_track = {
@@ -1416,12 +1472,12 @@ impl Shared {
         };
         let Some((Some(target), duration, title)) = next_track else { return; };
         if !target.is_empty() {
-            if let Some(cached_path) = cache::get_cached_track(&target) {
-                cache::touch_cached_track(&cached_path);
+            if cache::has_cached_audio(&target) {
+                cache::touch_cached_audio(&target);
                 return;
             }
             let _ = Music(Arc::clone(&this)).fetch(&target, false).await;
-            let res = cache::download_to_cache(
+            let res = cache::download_to_ram_cache(
                 Some(&this.http),
                 this.ytdlp,
                 &this.args(),
@@ -2114,5 +2170,19 @@ mod live_tests {
         let client = reqwest::Client::new();
         let music_none = Music::with_options(Arc::clone(&songbird), client.clone(), None);
         assert!(music_none.redis.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_memory_input_creation_from_bytes() {
+        let bytes = bytes::Bytes::from_static(b"test audio pcm or webm data");
+        let input = cache::memory_input(bytes.clone());
+        let songbird = Songbird::serenity();
+        let client = reqwest::Client::new();
+        let music = Music::with_options(Arc::clone(&songbird), client, None);
+        let wrapped = filters::wrap(input, GuildId::new(1), &music.filters);
+        match wrapped {
+            songbird::input::Input::Lazy(_) => {}
+            _ => panic!("Expected Input::Lazy"),
+        }
     }
 }

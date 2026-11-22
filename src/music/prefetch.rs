@@ -152,24 +152,22 @@ impl Compose for Prefetched {
     }
 
     async fn create_async(&mut self) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-        // 1. Önbellekte yerel dosya var mı kontrol et. Varsa sıfır ağ gecikmesi ve sıfır takılmayla aç.
+        // 1. RAM önbelleğinde hazır veri var mı kontrol et. Varsa sıfır disk ve sıfır gecikmeyle aç.
         if !self.target.is_empty() {
-            if let Some(cached_path) = super::cache::get_cached_track(&self.target) {
+            if let Some(bytes) = super::cache::get_cached_audio(&self.target) {
                 if let Some(seek) = self.seek_to {
-                    if seek.as_secs() > 0 {
-                        return super::filters::open_file_seek_stream(&cached_path, seek, super::filters::Filter::Off);
+                    if seek.as_secs() > 0 || seek.subsec_millis() > 0 {
+                        return super::filters::open_ram_seek_stream(bytes, seek, super::filters::Filter::Off);
                     }
                 }
-                match songbird::input::File::new(cached_path.clone()).create_async().await {
-                    Ok(stream) => return Ok(stream),
-                    Err(e) => {
-                        tracing::warn!(error = %e, path = ?cached_path, "Önbellekteki dosya açılamadı, alternatif deneniyor");
-                    }
-                }
+                let source = super::cache::MemoryMediaSource::new(bytes);
+                return Ok(AudioStream {
+                    input: Box::new(source),
+                });
             }
         }
 
-        // 2. Eğer yerel önbellekte yoksa ve arama/sarma yoksa önce doğrudan HTTP akışıyla, olmazsa yt-dlp ile indir.
+        // 2. RAM önbelleğinde yoksa ve arama/sarma yoksa doğrudan RAM önbelleğine indir.
         if !self.target.is_empty() && self.seek_to.is_none() {
             let ytdlp_bin = super::filters::ytdlp();
             let (direct_url, headers, duration) = self
@@ -184,7 +182,7 @@ impl Compose for Prefetched {
                 })
                 .unwrap_or((None, None, None));
 
-            if let Ok(cached_path) = super::cache::download_to_cache(
+            if let Ok(bytes) = super::cache::download_to_ram_cache(
                 self.http.as_ref(),
                 ytdlp_bin,
                 &self.args,
@@ -195,9 +193,10 @@ impl Compose for Prefetched {
             )
             .await
             {
-                if let Ok(stream) = songbird::input::File::new(cached_path).create_async().await {
-                    return Ok(stream);
-                }
+                let source = super::cache::MemoryMediaSource::new(bytes);
+                return Ok(AudioStream {
+                    input: Box::new(source),
+                });
             }
         }
 

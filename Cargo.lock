@@ -947,6 +947,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "dashmap 6.2.1",
  "dotenvy",
