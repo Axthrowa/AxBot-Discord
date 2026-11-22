@@ -66,11 +66,61 @@ pub fn get_cached_track(identifier: &str) -> Option<PathBuf> {
     None
 }
 
-/// Parçayı yt-dlp ile geçici `.part` dosyasına indirip atomik olarak son dosyaya taşır.
+/// URL'nin HLS akışı (parçalı / manifest) olup olmadığını denetler.
+pub fn is_hls_stream(url: &str) -> bool {
+    url.contains(".m3u8") || url.contains("/manifest/") || url.starts_with("hls")
+}
+
+async fn try_direct_http_download(
+    client: &reqwest::Client,
+    direct_url: &str,
+    headers: Option<&std::collections::HashMap<String, String>>,
+    part_path: &std::path::Path,
+) -> Result<u64, String> {
+    let mut req = client.get(direct_url);
+    if let Some(hdrs) = headers {
+        for (k, v) in hdrs {
+            if let (Ok(hname), Ok(hval)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(v),
+            ) {
+                req = req.header(hname, hval);
+            }
+        }
+    }
+
+    let resp = tokio::time::timeout(Duration::from_secs(30), req.send())
+        .await
+        .map_err(|_| "Doğrudan HTTP istek zaman aşımı (30 sn)".to_owned())?
+        .map_err(|e| format!("Doğrudan HTTP isteği gönderilemedi: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Doğrudan HTTP yanıtı başarısız (kod: {})", resp.status()));
+    }
+
+    let bytes = tokio::time::timeout(Duration::from_secs(45), resp.bytes())
+        .await
+        .map_err(|_| "Doğrudan HTTP veri alma zaman aşımı (45 sn)".to_owned())?
+        .map_err(|e| format!("Doğrudan HTTP verisi okunamadı: {e}"))?;
+
+    let len = bytes.len() as u64;
+    if len < 1024 {
+        return Err(format!("Doğrudan indirilen dosya çok küçük ({len} bayt)"));
+    }
+
+    std::fs::write(part_path, &bytes).map_err(|e| format!("Diske yazılamadı: {e}"))?;
+    Ok(len)
+}
+
+/// Parçayı önce doğrudan ses akış URL'si (direct_url) üzerinden hızlı HTTP akışıyla dener;
+/// başarısız olursa yt-dlp ile geçici `.part` dosyasına indirip atomik olarak son dosyaya taşır.
 pub async fn download_to_cache(
+    http: Option<&reqwest::Client>,
     ytdlp: &str,
     user_args: &[String],
     target: &str,
+    direct_url: Option<&str>,
+    headers: Option<&std::collections::HashMap<String, String>>,
     duration: Option<Duration>,
 ) -> Result<PathBuf, String> {
     if let Some(dur) = duration {
@@ -120,6 +170,30 @@ pub async fn download_to_cache(
     let part_name = format!("dl_{}_{}.part", uuid::Uuid::new_v4(), std::process::id());
     let part_path = cache_dir().join(&part_name);
 
+    // 1. Yol: Doğrudan HTTP Akış İndirmesi (çift yt-dlp başlatmadan hızlıca indirme)
+    if let (Some(client), Some(url)) = (http, direct_url) {
+        if !is_hls_stream(url) {
+            debug!(target, url, "Doğrudan HTTP akış indirmesi deneniyor");
+            match try_direct_http_download(client, url, headers, &part_path).await {
+                Ok(bytes) => {
+                    if final_path.exists() {
+                        let _ = std::fs::remove_file(&final_path);
+                    }
+                    if std::fs::rename(&part_path, &final_path).is_ok() {
+                        info!(path = ?final_path, bytes, "Şarkı doğrudan HTTP akışıyla yerel önbelleğe alındı");
+                        let _ = prune_cache();
+                        return Ok(final_path);
+                    }
+                }
+                Err(e) => {
+                    debug!(target, error = %e, "Doğrudan HTTP indirmesi başarısız; yt-dlp fallback'ine geçiliyor");
+                    let _ = std::fs::remove_file(&part_path);
+                }
+            }
+        }
+    }
+
+    // 2. Yol (Fallback): yt-dlp ile indirme
     let mut cmd = Command::new(ytdlp);
     cmd.args([
         "-q",
@@ -275,5 +349,36 @@ mod tests {
     fn limits_are_consistent() {
         const { assert!(TARGET_CACHE_BYTES < MAX_CACHE_BYTES) };
         assert_eq!(MAX_CACHEABLE_SECS, 1800);
+    }
+
+    #[tokio::test]
+    async fn direct_download_fallback_on_invalid_url() {
+        let client = reqwest::Client::new();
+        let target = "test_nonexistent_track_for_fallback_test";
+        let bad_url = "http://127.0.0.1:1/invalid_stream.opus";
+        let res = download_to_cache(
+            Some(&client),
+            "invalid_ytdlp_binary_nonexistent",
+            &[],
+            target,
+            Some(bad_url),
+            None,
+            Some(Duration::from_secs(120)),
+        )
+        .await;
+        // Doğrudan HTTP başarısız olmalı ve yt-dlp fallback'ine geçip paniklemeden hata dönmeli
+        assert!(res.is_err());
+        assert!(!res.as_ref().err().map_or("", |e| e.as_str()).is_empty());
+    }
+
+    #[test]
+    fn hls_streams_skip_direct_download() {
+        let hls1 = "https://example.com/stream/playlist.m3u8";
+        let hls2 = "https://example.com/manifest/hls/audio";
+        let regular = "https://rr1---sn-abc.googlevideo.com/videoplayback?expire=123";
+
+        assert!(is_hls_stream(hls1));
+        assert!(is_hls_stream(hls2));
+        assert!(!is_hls_stream(regular));
     }
 }

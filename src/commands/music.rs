@@ -49,19 +49,39 @@ pub async fn cal(
         }
     }
 
-    // yt-dlp arama/çözme birkaç saniye sürebilir.
+    // yt-dlp arama/çözme birkaç saniye sürebilir; önce erteliyoruz.
     ctx.defer().await?;
     let started = Instant::now();
+    let http = Arc::clone(&ctx.serenity_context().http);
 
     if let Some((kind, id)) = crate::music::extra::spotify_link(&query) {
-        return play_spotify(ctx, guild_id, user_channel, kind, &id, MAX_QUEUE - queued).await;
+        let (join_res, spotify_res) = tokio::join!(
+            music.ensure_connected(&http, guild_id, user_channel),
+            play_spotify(ctx, guild_id, user_channel, kind, &id, MAX_QUEUE - queued)
+        );
+        let _ = join_res;
+        return spotify_res;
     }
     if crate::music::is_playlist_url(&query) {
-        return play_playlist(ctx, guild_id, user_channel, &query, MAX_QUEUE - queued).await;
+        let (join_res, playlist_res) = tokio::join!(
+            music.ensure_connected(&http, guild_id, user_channel),
+            play_playlist(ctx, guild_id, user_channel, &query, MAX_QUEUE - queued)
+        );
+        let _ = join_res;
+        return playlist_res;
     }
 
-    // Şarkı adı: önce Spotify'da aranır (anahtar varsa), ses YouTube'dan çalınır.
-    let (input, info) = match music.resolve_preferring_spotify(&query, ctx.author().id, guild_id).await {
+    // Şarkı adı / arama: ses kanalına katılımı ve şarkı çözümlemesini paralel başlat
+    let (join_res, resolved_res) = tokio::join!(
+        music.ensure_connected(&http, guild_id, user_channel),
+        music.resolve_preferring_spotify(&query, ctx.author().id, guild_id)
+    );
+
+    if let Err(e) = join_res {
+        tracing::warn!(guild = %guild_id, error = ?e, "Ses kanalına katılım başlatılamadı");
+    }
+
+    let (input, info) = match resolved_res {
         Ok(resolved) => resolved,
         Err(message) => {
             ctx.say(message).await?;
@@ -135,35 +155,24 @@ async fn reply_enqueued(ctx: Context<'_>, guild_id: GuildId, info: &TrackInfo, p
 
 /// Çalan şarkının kartını cevap olarak gönderir ve kaydeder.
 async fn send_card(ctx: Context<'_>, guild_id: GuildId) -> Result<(), Error> {
-    let music = &ctx.data().music;
-    // Kart çizimi bir an sürebilir; komut zaten ertelenmediyse gizli olarak ertelenir.
-    ctx.defer_ephemeral().await?;
-    // Kart normal kanal mesajı olarak gönderilir: şarkı değişince/bitince güvenle silinebilsin.
-    if music.post_card(&ctx.serenity_context().http, guild_id, ctx.channel_id()).await {
-        // "Düşünüyor…" cevabı kaldırılır; sohbette sadece kart kalır.
-        if let Context::Application(app) = ctx {
-            if app.interaction.delete_response(ctx.http()).await.is_err() {
-                ctx.send(CreateReply::default().content("🎶 Kart gönderildi.").ephemeral(true)).await?;
-            }
+    let music = ctx.data().music.clone();
+    let http = Arc::clone(&ctx.serenity_context().http);
+    let channel_id = ctx.channel_id();
+
+    // "Düşünüyor…" cevabını hemen kaldırarak komut yanıtını anında tamamla
+    if let Context::Application(app) = ctx {
+        let _ = app.interaction.delete_response(ctx.http()).await;
+    } else {
+        let _ = ctx.send(CreateReply::default().content("🎶 Şarkı çalıyor.").ephemeral(true)).await;
+    }
+
+    // Kart çizimi, dosya yükleme ve canlı kart kaydı arka planda yapılır
+    tokio::spawn(async move {
+        if !music.post_card(&http, guild_id, channel_id).await {
+            let _ = channel_id.say(&http, "🎶 Şarkı çalıyor.").await;
         }
-        return Ok(());
-    }
-    // Kanala yazılamadıysa (izin yok) kart komutun cevabı olarak gösterilir.
-    let Some((jpeg, content, buttons)) = music.render_card(ctx.http(), guild_id).await else {
-        ctx.say("🎶 Çalıyor.").await?;
-        return Ok(());
-    };
-    let reply = ctx
-        .send(
-            CreateReply::default()
-                .content(content)
-                .attachment(serenity::CreateAttachment::bytes(jpeg, "kart.jpg"))
-                .components(buttons),
-        )
-        .await?;
-    if let Ok(message) = reply.message().await {
-        music.set_card(&ctx.serenity_context().http, guild_id, message.channel_id, message.id).await;
-    }
+    });
+
     Ok(())
 }
 

@@ -33,6 +33,7 @@ use dashmap::DashMap;
 use poise::serenity_prelude::{self as serenity, ChannelId, GuildId, Http, UserId};
 use songbird::input::{Input, YoutubeDl};
 use songbird::tracks::Track;
+use tokio::sync::Mutex;
 use songbird::{Call, Event, Songbird, TrackEvent};
 use sqlx::PgPool;
 use tokio::process::Command;
@@ -620,7 +621,7 @@ impl Music {
                 let query = format!("{} - {}", t.artists, t.title);
                 let target = format!("ytsearch1:{query}");
                 let source = YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), query.clone()).user_args(self.args());
-                let input = prefetch::Prefetched::lazy(target.clone(), source, self.args());
+                let input = prefetch::Prefetched::lazy(target.clone(), source, self.args(), Some(self.http.clone()));
                 let info = TrackInfo {
                     guild_id,
                     title: query,
@@ -659,7 +660,7 @@ impl Music {
                     Some(url) => (url.clone(), YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), url.clone())),
                     None => (format!("ytsearch1:{}", t.title), YoutubeDl::new_search_ytdl_like(self.ytdlp, self.http.clone(), t.title.clone())),
                 };
-                let input = prefetch::Prefetched::lazy(target, source.user_args(self.args()), self.args());
+                let input = prefetch::Prefetched::lazy(target, source.user_args(self.args()), self.args(), Some(self.http.clone()));
                 let info = TrackInfo { guild_id, title: t.title, url, duration: None, thumbnail: None, requester, announce: false, spotify_url: None };
                 (input, info)
             })
@@ -786,6 +787,7 @@ impl Music {
                 source,
                 self.args(),
                 meta.clone(),
+                Some(self.http.clone()),
             ));
         }
         None
@@ -868,7 +870,7 @@ impl Music {
             YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), target.to_owned())
         }
         .user_args(args.clone());
-        prefetch::Prefetched::resolve(source, args).await.map_err(|e| e.to_string())
+        prefetch::Prefetched::resolve(source, args, Some(self.http.clone())).await.map_err(|e| e.to_string())
     }
 
     /// Şarkı adıysa ve Spotify anahtarı varsa önce Spotify'da arar: kart, kapak ve bağlantı Spotify'ın
@@ -940,6 +942,7 @@ impl Music {
                     entry.url.clone(),
                     YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), entry.url.clone()).user_args(self.args()),
                     self.args(),
+                    Some(self.http.clone()),
                 );
                 let info = TrackInfo {
                     guild_id,
@@ -984,6 +987,30 @@ impl Music {
         Ok(parse_search(&json, limit))
     }
 
+    /// Botun ses kanalına bağlı olduğundan emin olur; henüz bağlı değilse anında bağlanır ve sağırlaştırır.
+    pub async fn ensure_connected(
+        &self,
+        http: &Arc<Http>,
+        guild_id: GuildId,
+        voice_channel: ChannelId,
+    ) -> anyhow::Result<Arc<Mutex<Call>>> {
+        let first_join = self.songbird.get(guild_id).is_none();
+        let call = self.songbird.join(guild_id, voice_channel).await?;
+        if first_join {
+            self.session_started.insert(guild_id, std::time::Instant::now());
+            let mut handler = call.lock().await;
+            if let Err(e) = handler.deafen(true).await {
+                warn!(guild = %guild_id, error = %e, "Bot kendini sağırlaştıramadı");
+            }
+            handler.add_global_event(
+                Event::Periodic(Duration::from_secs(60), None),
+                IdleLeaver::new(Arc::downgrade(&self.0), Arc::clone(http), guild_id),
+            );
+            info!(guild = %guild_id, channel = %voice_channel, "Ses kanalına katılındı");
+        }
+        Ok(call)
+    }
+
     /// Gerekirse ses kanalına katılır ve parçayı kuyruğa ekler.
     pub async fn enqueue(
         &self,
@@ -1009,21 +1036,8 @@ impl Music {
     ) -> anyhow::Result<Enqueued> {
         self.text_channels.insert(guild_id, text_channel);
 
-        let first_join = self.songbird.get(guild_id).is_none();
-        let call = self.songbird.join(guild_id, voice_channel).await?;
+        let call = self.ensure_connected(&http, guild_id, voice_channel).await?;
         let mut handler = call.lock().await;
-
-        if first_join {
-            self.session_started.insert(guild_id, std::time::Instant::now());
-            if let Err(e) = handler.deafen(true).await {
-                warn!(guild = %guild_id, error = %e, "Bot kendini sağırlaştıramadı");
-            }
-            handler.add_global_event(
-                Event::Periodic(Duration::from_secs(60), None),
-                IdleLeaver::new(Arc::downgrade(&self.0), Arc::clone(&http), guild_id),
-            );
-            info!(guild = %guild_id, channel = %voice_channel, "Ses kanalına katılındı");
-        }
 
         let position = handler.queue().len();
         Shared::push(&self.0, &mut handler, &http, items);
@@ -1274,8 +1288,20 @@ impl Shared {
         };
         let Some((Some(target), duration)) = next_track else { return; };
         if !target.is_empty() {
+            if cache::get_cached_track(&target).is_some() {
+                return;
+            }
             let _ = Music(Arc::clone(&this)).fetch(&target, false).await;
-            let _ = cache::download_to_cache(this.ytdlp, &this.args(), &target, duration).await;
+            let _ = cache::download_to_cache(
+                Some(&this.http),
+                this.ytdlp,
+                &this.args(),
+                &target,
+                None,
+                None,
+                duration,
+            )
+            .await;
         }
     }
 
@@ -1443,6 +1469,7 @@ impl Shared {
             next.url.clone(),
             YoutubeDl::new_ytdl_like(this.ytdlp, this.http.clone(), next.url.clone()).user_args(this.args()),
             this.args(),
+            Some(this.http.clone()),
         );
         let info = TrackInfo {
             guild_id,

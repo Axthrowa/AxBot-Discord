@@ -227,7 +227,14 @@ async fn handle_inner(
             } else if id.starts_with(crate::games::animals::PREFIX) {
                 data.animals.handle_button(ctx, data, component).await?;
             } else if id.starts_with(crate::music::card::PREFIX) {
-                crate::music::card::handle_button(ctx, &data.music, component).await?;
+                let ctx = ctx.clone();
+                let music = data.music.clone();
+                let component = component.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = crate::music::card::handle_button(&ctx, &music, &component).await {
+                        tracing::warn!(error = ?e, "Müzik buton hatası");
+                    }
+                });
             } else if id.starts_with(crate::rsvp::PREFIX) {
                 crate::rsvp::handle_component(ctx, data, component).await?;
             } else if id.starts_with(crate::tempvoice::PREFIX) {
@@ -244,7 +251,14 @@ async fn handle_inner(
         } => {
             let id = modal.data.custom_id.as_str();
             if id.starts_with(crate::music::card::PREFIX) {
-                crate::music::card::handle_modal(ctx, &data.music, modal).await?;
+                let ctx = ctx.clone();
+                let music = data.music.clone();
+                let modal = modal.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = crate::music::card::handle_modal(&ctx, &music, &modal).await {
+                        tracing::warn!(error = ?e, "Müzik modal hatası");
+                    }
+                });
             } else if id.starts_with(verification::PREFIX) {
                 verification::handle_modal(ctx, data, modal).await?;
             } else if id.starts_with(appeals::PREFIX) {

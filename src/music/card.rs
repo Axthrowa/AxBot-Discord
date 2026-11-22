@@ -346,14 +346,33 @@ pub async fn handle_modal(ctx: &serenity::Context, music: &Music, modal: &ModalI
             Ok(())
         }
         "seek" | "seekmodal" => {
+            // Discord'un 3000 ms zaman aşımını önlemek için modalı hemen onayla
+            modal.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
+
             let Some(call) = music.songbird().get(guild_id) else {
-                return modal_reply(ctx, modal, "❌ Şu an müzik çalmıyor.").await;
+                let _ = modal
+                    .create_followup(
+                        ctx,
+                        serenity::CreateInteractionResponseFollowup::new()
+                            .content("❌ Şu an müzik çalmıyor.")
+                            .ephemeral(true),
+                    )
+                    .await;
+                return Ok(());
             };
             let (cur_pos, total) = {
                 let handler = call.lock().await;
                 let queue = handler.queue().clone();
                 let Some(current) = queue.current() else {
-                    return modal_reply(ctx, modal, "❌ Şu an çalan bir şarkı yok.").await;
+                    let _ = modal
+                        .create_followup(
+                            ctx,
+                            serenity::CreateInteractionResponseFollowup::new()
+                                .content("❌ Şu an çalan bir şarkı yok.")
+                                .ephemeral(true),
+                        )
+                        .await;
+                    return Ok(());
                 };
                 let offset = music.position_offset_of(guild_id);
                 let cur = current.get_info().await.ok().map(|s| s.position + offset);
@@ -362,21 +381,44 @@ pub async fn handle_modal(ctx: &serenity::Context, music: &Music, modal: &ModalI
             };
             let target = match super::extra::parse_seek_timestamp(&value, cur_pos) {
                 Ok(t) => t,
-                Err(msg) => return modal_reply(ctx, modal, &format!("❌ {msg}")).await,
+                Err(msg) => {
+                    let _ = modal
+                        .create_followup(
+                            ctx,
+                            serenity::CreateInteractionResponseFollowup::new()
+                                .content(format!("❌ {msg}"))
+                                .ephemeral(true),
+                        )
+                        .await;
+                    return Ok(());
+                }
             };
             if let Some(total) = total {
                 if target >= total {
-                    return modal_reply(
-                        ctx,
-                        modal,
-                        &format!("❌ Şarkı {} uzunluğunda; daha ileri sarılamaz.", super::format_duration(total)),
-                    )
-                    .await;
+                    let _ = modal
+                        .create_followup(
+                            ctx,
+                            serenity::CreateInteractionResponseFollowup::new()
+                                .content(format!(
+                                    "❌ Şarkı {} uzunluğunda; daha ileri sarılamaz.",
+                                    super::format_duration(total)
+                                ))
+                                .ephemeral(true),
+                        )
+                        .await;
+                    return Ok(());
                 }
             }
-            modal.create_response(ctx, CreateInteractionResponse::Acknowledge).await?;
             if let Err(e) = music.seek_to(&ctx.http, guild_id, target).await {
                 tracing::warn!(guild = %guild_id, error = %e, "Modal ile sarılamadı");
+                let _ = modal
+                    .create_followup(
+                        ctx,
+                        serenity::CreateInteractionResponseFollowup::new()
+                            .content("❌ Bu şarkı sarılamıyor (kaynak desteklemiyor olabilir).")
+                            .ephemeral(true),
+                    )
+                    .await;
             }
             music.refresh_card_now(&ctx.http, guild_id).await;
             Ok(())

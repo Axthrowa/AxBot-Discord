@@ -5,8 +5,10 @@
 //! Kayıt kanalı ayarlı değilse ya da olay panelden kapatılmışsa hiçbir embed oluşturulmadan çıkılır.
 //! Hangi olayların yazılacağı `ModSettings::log` içindedir (bellekte önbellekli).
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
 
+use dashmap::DashMap;
 use poise::serenity_prelude::{
     self as serenity, ChannelId, CreateEmbed, CreateEmbedFooter, CreateMessage, GuildChannel, GuildId,
     GuildMemberUpdateEvent, Member, Mentionable, Message, MessageId, MessageUpdateEvent, PartialGuild, Role,
@@ -19,6 +21,28 @@ use crate::data::Data;
 use crate::modlog::user_line;
 
 const FIELD_MAX: usize = 1000;
+
+/// Hata (özellikle Missing Access / 50001 veya Missing Permissions / 50013) veren kanallar için 5 dakikalık susturma/backoff.
+static CHANNEL_BACKOFF: LazyLock<DashMap<ChannelId, Instant>> = LazyLock::new(DashMap::new);
+pub const BACKOFF_DURATION: Duration = Duration::from_secs(5 * 60);
+
+pub fn is_channel_backed_off(channel: ChannelId) -> bool {
+    if let Some(until) = CHANNEL_BACKOFF.get(&channel) {
+        if Instant::now() < *until {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn set_channel_backoff(channel: ChannelId) {
+    CHANNEL_BACKOFF.insert(channel, Instant::now() + BACKOFF_DURATION);
+}
+
+#[allow(dead_code)]
+pub fn clear_channel_backoff(channel: ChannelId) {
+    CHANNEL_BACKOFF.remove(&channel);
+}
 
 /// Bir olayın yazılacağı yer ve geçerli kayıt ayarları.
 struct Target {
@@ -61,10 +85,26 @@ async fn target(data: &Data, guild_id: GuildId, event: &str) -> Option<Target> {
 }
 
 async fn send(ctx: &serenity::Context, channel: ChannelId, embed: CreateEmbed) {
-    let embed = embed.timestamp(serenity::Timestamp::now());
-    if let Err(e) = channel.send_message(&ctx.http, CreateMessage::new().embed(embed)).await {
-        warn!(channel = %channel, error = %e, "Olay logu gönderilemedi");
+    if is_channel_backed_off(channel) {
+        return;
     }
+    let http = Arc::clone(&ctx.http);
+    tokio::spawn(async move {
+        let embed = embed.timestamp(serenity::Timestamp::now());
+        if let Err(e) = channel.send_message(&http, CreateMessage::new().embed(embed)).await {
+            let err_str = e.to_string();
+            if err_str.contains("50001")
+                || err_str.contains("Missing Access")
+                || err_str.contains("50013")
+                || err_str.contains("Missing Permissions")
+            {
+                warn!(channel = %channel, error = %e, "Olay log kanalı erişilemez (Missing Access/Permissions), 5 dakika susturuluyor");
+                set_channel_backoff(channel);
+            } else {
+                warn!(channel = %channel, error = %e, "Olay logu gönderilemedi");
+            }
+        }
+    });
 }
 
 /// Baskın/giriş filtresi gibi uyarılar (olay seçiminden bağımsız, her zaman yazılır).
@@ -626,4 +666,22 @@ fn truncate(s: &str) -> String {
     let mut out: String = s.chars().take(FIELD_MAX - 1).collect();
     out.push('…');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn channel_backoff_lifecycle() {
+        let channel = ChannelId::new(987654321098765432);
+        clear_channel_backoff(channel);
+        assert!(!is_channel_backed_off(channel));
+
+        set_channel_backoff(channel);
+        assert!(is_channel_backed_off(channel));
+
+        clear_channel_backoff(channel);
+        assert!(!is_channel_backed_off(channel));
+    }
 }

@@ -27,6 +27,7 @@ pub struct Prefetched {
     args: Vec<String>,
     result: Option<(YoutubeDlOutput, Instant)>,
     seek_to: Option<Duration>,
+    http: Option<reqwest::Client>,
 }
 
 async fn query(inner: &mut YoutubeDl<'static>) -> Result<YoutubeDlOutput, AudioStreamError> {
@@ -41,7 +42,11 @@ async fn query(inner: &mut YoutubeDl<'static>) -> Result<YoutubeDlOutput, AudioS
 
 impl Prefetched {
     /// yt-dlp'yi bir kez çalıştırır; şarkı bilgisini ve çalmaya hazır kaynağı döner.
-    pub async fn resolve(mut inner: YoutubeDl<'static>, args: Vec<String>) -> Result<(Input, AuxMetadata), AudioStreamError> {
+    pub async fn resolve(
+        mut inner: YoutubeDl<'static>,
+        args: Vec<String>,
+        http: Option<reqwest::Client>,
+    ) -> Result<(Input, AuxMetadata), AudioStreamError> {
         let first = query(&mut inner).await?;
         let meta = first.as_aux_metadata();
         let target = first.webpage_url.clone().unwrap_or_else(|| first.url.clone());
@@ -51,42 +56,63 @@ impl Prefetched {
             args,
             result: Some((first, Instant::now())),
             seek_to: None,
+            http,
         };
         Ok((Input::Lazy(Box::new(source)), meta))
     }
 
     /// Belirli bir saniyeden itibaren başlayan kaynak.
     #[allow(dead_code)]
-    pub fn seek_from(target: String, inner: YoutubeDl<'static>, args: Vec<String>, seek: Duration) -> Input {
+    pub fn seek_from(
+        target: String,
+        inner: YoutubeDl<'static>,
+        args: Vec<String>,
+        seek: Duration,
+        http: Option<reqwest::Client>,
+    ) -> Input {
         Input::Lazy(Box::new(Self {
             target,
             inner: Some(inner),
             args,
             result: None,
             seek_to: Some(seek),
+            http,
         }))
     }
 
     /// yt-dlp'yi çalmaya başlarken çalıştıran kaynak (çalma listesi parçaları gibi); HLS desteği için
     /// düz `YoutubeDl` yerine bu kullanılır.
-    pub fn lazy(target: String, inner: YoutubeDl<'static>, args: Vec<String>) -> Input {
+    pub fn lazy(
+        target: String,
+        inner: YoutubeDl<'static>,
+        args: Vec<String>,
+        http: Option<reqwest::Client>,
+    ) -> Input {
         Input::Lazy(Box::new(Self {
             target,
             inner: Some(inner),
             args,
             result: None,
             seek_to: None,
+            http,
         }))
     }
 
     /// Bellek önbelleğindeki meta veri ile hazır kaynak oluşturur; yt-dlp araması yapmaz.
-    pub fn from_cached(target: String, inner: YoutubeDl<'static>, args: Vec<String>, meta: AuxMetadata) -> (Input, AuxMetadata) {
+    pub fn from_cached(
+        target: String,
+        inner: YoutubeDl<'static>,
+        args: Vec<String>,
+        meta: AuxMetadata,
+        http: Option<reqwest::Client>,
+    ) -> (Input, AuxMetadata) {
         let source = Self {
             target,
             inner: Some(inner),
             args,
             result: None,
             seek_to: None,
+            http,
         };
         (Input::Lazy(Box::new(source)), meta)
     }
@@ -143,10 +169,32 @@ impl Compose for Prefetched {
             }
         }
 
-        // 2. Eğer yerel önbellekte yoksa ve arama/sarma yoksa arka planda disk önbelleğine indirmeyi dene.
+        // 2. Eğer yerel önbellekte yoksa ve arama/sarma yoksa önce doğrudan HTTP akışıyla, olmazsa yt-dlp ile indir.
         if !self.target.is_empty() && self.seek_to.is_none() {
             let ytdlp_bin = super::filters::ytdlp();
-            if let Ok(cached_path) = super::cache::download_to_cache(ytdlp_bin, &self.args, &self.target, None).await {
+            let (direct_url, headers, duration) = self
+                .result
+                .as_ref()
+                .map(|(r, _)| {
+                    (
+                        Some(r.url.as_str()),
+                        r.http_headers.as_ref(),
+                        r.duration.map(Duration::from_secs_f64),
+                    )
+                })
+                .unwrap_or((None, None, None));
+
+            if let Ok(cached_path) = super::cache::download_to_cache(
+                self.http.as_ref(),
+                ytdlp_bin,
+                &self.args,
+                &self.target,
+                direct_url,
+                headers,
+                duration,
+            )
+            .await
+            {
                 if let Ok(stream) = songbird::input::File::new(cached_path).create_async().await {
                     return Ok(stream);
                 }
