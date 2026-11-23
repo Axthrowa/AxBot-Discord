@@ -130,3 +130,20 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod live_tests {
+    #[tokio::test]
+    #[ignore = "yerel PostgreSQL'e bağlanır (DATABASE_URL)"]
+    async fn live_query_latency() -> anyhow::Result<()> {
+        let url = std::env::var("DATABASE_URL")?;
+        let pool = sqlx::postgres::PgPoolOptions::new().max_connections(2).connect_with(super::connect_options(&url)?).await?;
+        let mut times = Vec::new();
+        for _ in 0..30 {
+            times.push(super::ping(&pool).await?.as_micros());
+        }
+        times.sort_unstable();
+        println!("SELECT 1 µs: ortanca {} · en yavaş {}", times[times.len() / 2], times[times.len() - 1]);
+        Ok(())
+    }
+}

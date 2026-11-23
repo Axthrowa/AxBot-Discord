@@ -802,6 +802,7 @@ pub async fn system(State(state): State<WebState>, headers: HeaderMap, Query(que
          <tr><th>Üye olayları (intent)</th><td>{intent}</td></tr>\
          <tr><th>Discord ile giriş</th><td>{oauth}</td></tr>\
          <tr><th>Botu sunucuya ekle</th><td><a href=\"{invite}\" target=\"_blank\" rel=\"noopener\">Davet bağlantısı</a></td></tr></table>\
+         <h2>Komut süreleri</h2><div class=\"box\">{timings}</div>\
          <h2>Bot durumu</h2><div class=\"box\">{presence}</div>\
          <h2>Yeniden başlat</h2><div class=\"box\">{restart}</div>\
          <h2>Güncelleme</h2><div class=\"box\">1. Bilgisayarında <code>Sunucu Güncellemesi Hazırla.cmd</code>'ye çift tıkla → \
@@ -820,8 +821,34 @@ pub async fn system(State(state): State<WebState>, headers: HeaderMap, Query(que
             escape(&auth::oauth_redirect_uri(&state))
         ),
         invite = escape(&invite),
+        timings = timings_table(),
     );
     Html(layout(&state, &session, Nav::System, None, Page { title: "Sistem", body }).await).into_response()
+}
+
+/// Bot açıldığından beri komut başına süreler (kullanıcının gördüğü süreye Discord gidiş-dönüşü eklenir).
+fn timings_table() -> String {
+    let rows = crate::timings::summaries();
+    if rows.is_empty() {
+        return "<p class=\"note\">Bot açıldığından beri komut kullanılmadı.</p>".to_owned();
+    }
+    let mut out = String::from("<table><tr><th>Komut</th><th>Kullanım</th><th>Tipik</th><th>En yavaş %5</th><th>En uzun</th></tr>");
+    for row in rows {
+        let _ = write!(
+            out,
+            "<tr><td><code>/{}</code></td><td>{}</td><td>{} ms</td><td>{} ms</td><td>{} ms</td></tr>",
+            escape(&row.command),
+            row.count,
+            row.p50,
+            row.p95,
+            row.max
+        );
+    }
+    out.push_str(
+        "</table><p class=\"note\">Bot açıldığından beri, komut başına son 500 kullanım. Hedef: tipik süre 300 ms altı. \
+         Oyunlar ve anketler oyuncu beklediği için sayılmaz.</p>",
+    );
+    out
 }
 
 pub async fn restart(State(state): State<WebState>, headers: HeaderMap, Form(form): Form<CsrfForm>) -> Response {

@@ -28,6 +28,7 @@ mod error;
 mod eventlog;
 mod events;
 mod perms;
+mod timings;
 mod feeds;
 mod catalog;
 mod feelm;
@@ -318,9 +319,11 @@ async fn run() -> anyhow::Result<()> {
                         return;
                     };
                     let ms = started.elapsed().as_millis();
-                    // Oyun, anket ve soygun komutları oyuncuları bekler (dakikalar sürer); süreleri yavaşlık sayılmaz.
                     let name = ctx.command().qualified_name.as_str();
-                    let interactive = name.starts_with("oyun ") || matches!(name, "ekonomi blackjack" | "ekonomi soy" | "eğlence anket");
+                    let interactive = timings::is_interactive(name);
+                    if !interactive {
+                        timings::record(name, u32::try_from(ms).unwrap_or(u32::MAX));
+                    }
                     if ms >= SLOW_COMMAND_MS && !interactive {
                         warn!(command = %ctx.command().qualified_name, ms, "Yavaş komut");
                     } else {
