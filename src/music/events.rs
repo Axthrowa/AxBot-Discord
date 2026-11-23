@@ -165,31 +165,7 @@ impl EventHandler for IdleLeaver {
         let always_on = settings.always_on;
         let idle_target = u64::from(settings.idle_disconnect_secs);
 
-        // 2. Ses kanalında kimse kalmama kontrolü (always_on kapalıyken)
-        if !always_on && idle_target > 0 {
-            if let Some(empty_since) = music.empty_channels.get(&self.guild_id) {
-                if empty_since.elapsed() >= Duration::from_secs(idle_target) {
-                    info!(guild = %self.guild_id, "Ses kanalında kimse kalmadı (süre doldu), ayrılınıyor");
-                    music.session_started.remove(&self.guild_id);
-                    music.empty_channels.remove(&self.guild_id);
-                    let songbird = Arc::clone(&music.songbird);
-                    let http = Arc::clone(&self.http);
-                    let guild_id = self.guild_id;
-                    let channel = music.text_channels.get(&guild_id).map(|c| *c);
-                    tokio::spawn(async move {
-                        if let Err(e) = songbird.remove(guild_id).await {
-                            warn!(guild = %guild_id, error = %e, "Ses kanalından ayrılırken hata");
-                        }
-                        if let Some(channel) = channel {
-                            let _ = channel
-                                .say(&http, "👋 Ses kanalında kimse kalmadığı için ayrıldım.")
-                                .await;
-                        }
-                    });
-                    return Some(Event::Cancel);
-                }
-            }
-        }
+        // Kanal boşalınca ayrılma `Music::on_voice_state_update` içindeki zamanlayıcıda yapılır.
 
         // 3. Boşta kalma (kuyruk boş) kontrolü
         let is_autoplay_busy = music.autoplay_tasks.contains(&self.guild_id);

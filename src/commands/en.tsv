@@ -427,9 +427,10 @@ P | etiket ekle | içerik | content | Text to send. Write \n for a new line.
 C | etiket sil | delete | Deletes a tag (needs Manage Messages).
 P | etiket sil | ad | name | Tag to delete
 C | etiket liste | list | Lists the server's tags.
-C | davetler | invites | Shows how many people a member has invited.
-P | davetler | kullanıcı | user | Member to look at (empty = you)
-C | davet-sıralama | invite-leaderboard | Top 10 inviters.
+C | davetler | invites | Invite stats: per member and leaderboard.
+C | davetler kişi | member | Shows how many people a member has invited.
+P | davetler kişi | kullanıcı | user | Member to look at (empty = you)
+C | davetler sıralama | leaderboard | Top 10 inviters.
 C | sayaç | counter | Counter channels whose names update automatically (members, goal...).
 C | sayaç ekle | add | Creates a counter channel (locked voice channel; renamed every 10 minutes).
 P | sayaç ekle | tür | type | What to count

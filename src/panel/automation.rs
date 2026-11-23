@@ -405,10 +405,9 @@ pub async fn dry_run_handler(
     let Some(session) = auth::session(&state, &headers).await else {
         return Err(StatusCode::UNAUTHORIZED);
     };
-    let Ok(guild_num) = guild_str.parse::<u64>() else {
+    let Some(guild_id) = guild_str.parse::<u64>().ok().filter(|g| *g != 0).map(GuildId::new) else {
         return Err(StatusCode::BAD_REQUEST);
     };
-    let guild_id = GuildId::new(guild_num);
     if !can_manage(&state, session.user, guild_id).await {
         return Err(StatusCode::FORBIDDEN);
     }

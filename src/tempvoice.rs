@@ -1,6 +1,7 @@
 //! Geçici ses odaları: "➕ Oda Oluştur" kanalına giren üyeye kendi ses odası açılır ve üye
 //! oraya taşınır; oda boşalınca silinir. Oda sahibi oda ayar kartıyla odasını yönetir.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
@@ -21,19 +22,22 @@ use crate::guild_config::to_id;
 use crate::modals;
 
 pub const PREFIX: &str = "tempvoice:";
-const GRACE: Duration = Duration::from_secs(15);
+/// Butonla açılan odaya katılmak için süre; içine hiç girilmemiş oda bu süreden önce silinmez.
+const GRACE: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 struct Room {
     guild_id: GuildId,
     owner: UserId,
     created: Instant,
+    /// Odaya en az bir kez girildi mi (girildiyse boşalınca beklemeden silinir).
+    used: bool,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TempVoice {
-    rooms: DashMap<ChannelId, Room>,
-    lock: Mutex<()>,
+    rooms: Arc<DashMap<ChannelId, Room>>,
+    lock: Arc<Mutex<()>>,
 }
 
 impl TempVoice {
@@ -47,7 +51,7 @@ impl TempVoice {
             if let (Some(c), Some(g), Some(o)) = (to_id(Some(channel)), to_id(Some(guild)), to_id(Some(owner))) {
                 self.rooms.insert(
                     ChannelId::new(c),
-                    Room { guild_id: GuildId::new(g), owner: UserId::new(o), created: old },
+                    Room { guild_id: GuildId::new(g), owner: UserId::new(o), created: old, used: true },
                 );
             }
         }
@@ -91,6 +95,9 @@ impl TempVoice {
             return;
         }
 
+        if let Some(mut room) = new.channel_id.and_then(|c| self.rooms.get_mut(&c)) {
+            room.used = true;
+        }
         let _guard = self.lock.lock().await;
         if let (Some(hub), Some(joined)) = (hub, new.channel_id) {
             if hub == joined {
@@ -112,10 +119,14 @@ impl TempVoice {
         user: UserId,
         member: Option<&serenity::Member>,
     ) -> anyhow::Result<ChannelId> {
-        let existing = self.room_of_user(guild_id, user);
-        if let Some(room) = existing {
-            let _ = guild_id.move_member(ctx, user, room).await;
-            return Ok(room);
+        if let Some(room) = self.room_of_user(guild_id, user) {
+            // Kanal elle/bot kapalıyken silindiyse kayıt bayattır: unut ve yenisini aç.
+            let exists = ctx.cache.guild(guild_id).is_some_and(|g| g.channels.contains_key(&room));
+            if exists {
+                let _ = guild_id.move_member(ctx, user, room).await;
+                return Ok(room);
+            }
+            let _ = self.forget(db, room).await;
         }
 
         let (category, display, avatar_url) = {
@@ -158,7 +169,7 @@ impl TempVoice {
             builder = builder.category(category);
         }
         let channel = guild_id.create_channel(ctx, builder).await?;
-        self.rooms.insert(channel.id, Room { guild_id, owner: user, created: Instant::now() });
+        self.rooms.insert(channel.id, Room { guild_id, owner: user, created: Instant::now(), used: false });
         sqlx::query("INSERT INTO temp_voice_channels (channel_id, guild_id, owner_id) VALUES ($1, $2, $3)")
             .bind(snowflake(channel.id.get())?)
             .bind(snowflake(guild_id.get())?)
@@ -166,9 +177,21 @@ impl TempVoice {
             .execute(db)
             .await?;
 
-        if let Err(e) = guild_id.move_member(ctx, user, channel.id).await {
-            debug!(error = %e, "Üye geçici odaya taşınamadı");
+        match guild_id.move_member(ctx, user, channel.id).await {
+            Ok(_) => {
+                if let Some(mut room) = self.rooms.get_mut(&channel.id) {
+                    room.used = true;
+                }
+            }
+            Err(e) => debug!(error = %e, "Üye geçici odaya taşınamadı"),
         }
+        // Kimse girmezse ya da hemen çıkılırsa başka ses olayı gelmeyebilir; süre dolunca yeniden bak.
+        let this = self.clone();
+        let (ctx2, db2) = (ctx.clone(), db.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(GRACE + Duration::from_secs(2)).await;
+            this.clean(&ctx2, &db2, guild_id).await;
+        });
         info!(guild = %guild_id, channel = %channel.id, owner = %user, "Geçici oda açıldı");
 
         // Ses kanalının sohbetine oda yönetim kartı davetini gönderir:
@@ -203,7 +226,7 @@ impl TempVoice {
         let candidates: Vec<ChannelId> = self
             .rooms
             .iter()
-            .filter(|r| r.guild_id == guild_id && r.created.elapsed() >= GRACE)
+            .filter(|r| r.guild_id == guild_id && (r.used || r.created.elapsed() >= GRACE))
             .map(|r| *r.key())
             .collect();
         if candidates.is_empty() {
@@ -299,7 +322,7 @@ pub async fn build_settings_card(
         .thumbnail(avatar_url)
         .colour(serenity::Colour::from_rgb(31, 41, 55)); // Koyu şık gri/teal
 
-    // 1. Satır: [🔒 Kilitle] [👤 Limit] [✏️ Ad] [💾 Kaydet] [👑]
+    // 1. Satır: [🔒 Kilitle] [👤 Limit] [✏️ Ad] [🗑️ Kapat]
     let row1 = vec![
         CreateButton::new(format!("{PREFIX}lock:{channel_id}"))
             .label(lock_btn_label)
@@ -313,12 +336,9 @@ pub async fn build_settings_card(
             .label("Ad")
             .emoji(serenity::ReactionType::Unicode("✏️".to_string()))
             .style(ButtonStyle::Secondary),
-        CreateButton::new(format!("{PREFIX}save:{channel_id}"))
-            .label("Kaydet")
-            .emoji(serenity::ReactionType::Unicode("💾".to_string()))
-            .style(ButtonStyle::Secondary),
         CreateButton::new(format!("{PREFIX}devret:{channel_id}"))
-            .emoji(serenity::ReactionType::Unicode("👑".to_string()))
+            .label("Kapat")
+            .emoji(serenity::ReactionType::Unicode("🗑️".to_string()))
             .style(ButtonStyle::Danger),
     ];
 
@@ -347,8 +367,7 @@ pub fn build_main_hub_message() -> (CreateEmbed, Vec<CreateActionRow>) {
              • **Oda Oluştur** butonuna bas, odan anında açılsın.\n\
              • **60 saniye** içinde odana katıl, yoksa oda kapanır.\n\
              • Odanı ses kanalının sohbetindeki kontrol panelinden ya da **Odamı Yönet** butonundan yönet.\n\
-             • Odadan çıksan da oda senin kalır; oda tamamen boşalınca otomatik silinir.\n\
-             _Ayarlarını kaydedersen bir sonraki odan aynı adla, limitle ve izinli arkadaşlarınla açılır._\n\n\
+             • Odadan çıksan da oda senin kalır; oda tamamen boşalınca otomatik silinir.\n\n\
              *Noi apriamo la strada, chi viene dopo segue solo le nostre orme.*"
         )
         .colour(serenity::Colour::from_rgb(255, 102, 0)); // Turuncu vurgulu
@@ -392,7 +411,20 @@ pub async fn handle_component(ctx: &serenity::Context, data: &Data, interaction:
             return Ok(());
         };
 
-        let channel_id = data.tempvoice.open_room(ctx, &data.db, guild_id, hub, user, interaction.member.as_ref()).await?;
+        // Kanal açmak 3 saniyeyi aşabilir; önce yanıtı ertele ki etkileşim zaman aşımına düşmesin.
+        interaction
+            .create_response(ctx, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true)))
+            .await?;
+        let channel_id = match data.tempvoice.open_room(ctx, &data.db, guild_id, hub, user, interaction.member.as_ref()).await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(guild = %guild_id, error = ?e, "Geçici oda açılamadı");
+                interaction
+                    .edit_response(ctx, EditInteractionResponse::new().content("❌ Oda açılamadı. Botun **Kanalları Yönet** ve **Üyeleri Taşı** izni olduğundan emin ol."))
+                    .await?;
+                return Ok(());
+            }
+        };
         let link_btn = CreateButton::new_link(format!("https://discord.com/channels/{}/{}", guild_id.get(), channel_id.get()))
             .label("Odaya Git ↗");
 
@@ -405,11 +437,10 @@ pub async fn handle_component(ctx: &serenity::Context, data: &Data, interaction:
             ))
             .colour(serenity::Colour::from_rgb(32, 102, 148));
 
-        let reply = CreateInteractionResponseMessage::new()
+        let reply = EditInteractionResponse::new()
             .embed(ready_embed)
-            .components(vec![CreateActionRow::Buttons(vec![link_btn])])
-            .ephemeral(true);
-        interaction.create_response(ctx, CreateInteractionResponse::Message(reply)).await?;
+            .components(vec![CreateActionRow::Buttons(vec![link_btn])]);
+        interaction.edit_response(ctx, reply).await?;
         return Ok(());
     }
 
@@ -505,12 +536,6 @@ pub async fn handle_component(ctx: &serenity::Context, data: &Data, interaction:
                 .components(vec![modals::text_field("name", "Odanın yeni adını yaz", false, true, 90)]);
             interaction.create_response(ctx, CreateInteractionResponse::Modal(modal)).await?;
         }
-        "save" => {
-            let reply = CreateInteractionResponseMessage::new()
-                .content("💾 Oda ayarların kaydedildi! Bir sonraki odan açıldığında bu ayarlar geçerli olacak.")
-                .ephemeral(true);
-            interaction.create_response(ctx, CreateInteractionResponse::Message(reply)).await?;
-        }
         "devret" => {
             let row = vec![
                 CreateButton::new(format!("{PREFIX}confirm_delete:{channel_id}"))
@@ -561,6 +586,11 @@ pub async fn handle_component(ctx: &serenity::Context, data: &Data, interaction:
                 .ephemeral(true);
             interaction.create_response(ctx, CreateInteractionResponse::Message(reply)).await?;
         }
+        "perm_allow" | "perm_kick" | "perm_ban" if target_problem(ctx, interaction.user.id, &parts).is_some() => {
+            let text = target_problem(ctx, interaction.user.id, &parts).unwrap_or_default();
+            let reply = CreateInteractionResponseMessage::new().content(text).ephemeral(true);
+            interaction.create_response(ctx, CreateInteractionResponse::Message(reply)).await?;
+        }
         "perm_allow" => {
             let target: UserId = parts.get(2).and_then(|id| id.parse::<u64>().ok()).map(UserId::new).unwrap_or_default();
             let ow = PermissionOverwrite {
@@ -576,10 +606,14 @@ pub async fn handle_component(ctx: &serenity::Context, data: &Data, interaction:
         }
         "perm_kick" => {
             let target: UserId = parts.get(2).and_then(|id| id.parse::<u64>().ok()).map(UserId::new).unwrap_or_default();
-            let _ = guild_id.disconnect_member(ctx, target).await;
-            let reply = CreateInteractionResponseMessage::new()
-                .content(format!("🚪 <@{target}> odadan çıkarıldı."))
-                .ephemeral(true);
+            // Yalnızca bu odadaki üye çıkarılır; başka ses kanalındakine dokunulmaz.
+            let text = if in_room(ctx, guild_id, channel_id, target) {
+                let _ = guild_id.disconnect_member(ctx, target).await;
+                format!("🚪 <@{target}> odadan çıkarıldı.")
+            } else {
+                "Bu üye odanda değil.".to_owned()
+            };
+            let reply = CreateInteractionResponseMessage::new().content(text).ephemeral(true);
             interaction.create_response(ctx, CreateInteractionResponse::Message(reply)).await?;
         }
         "perm_ban" => {
@@ -590,9 +624,11 @@ pub async fn handle_component(ctx: &serenity::Context, data: &Data, interaction:
                 kind: PermissionOverwriteType::Member(target),
             };
             let _ = channel_id.create_permission(ctx, ow).await;
-            let _ = guild_id.disconnect_member(ctx, target).await;
+            if in_room(ctx, guild_id, channel_id, target) {
+                let _ = guild_id.disconnect_member(ctx, target).await;
+            }
             let reply = CreateInteractionResponseMessage::new()
-                .content(format!("🚫 <@{target}> odadan yasaklandı ve çıkarıldı."))
+                .content(format!("🚫 <@{target}> artık odana giremez."))
                 .ephemeral(true);
             interaction.create_response(ctx, CreateInteractionResponse::Message(reply)).await?;
         }
@@ -600,6 +636,25 @@ pub async fn handle_component(ctx: &serenity::Context, data: &Data, interaction:
     }
 
     Ok(())
+}
+
+/// Üye şu an bu ses odasında mı?
+fn in_room(ctx: &serenity::Context, guild_id: GuildId, channel: ChannelId, user: UserId) -> bool {
+    ctx.cache
+        .guild(guild_id)
+        .is_some_and(|g| g.voice_states.get(&user).is_some_and(|vs| vs.channel_id == Some(channel)))
+}
+
+/// Oda sahibi kendine veya bota işlem yapamaz (`/oda` komutlarındaki kuralın aynısı).
+fn target_problem(ctx: &serenity::Context, actor: UserId, parts: &[&str]) -> Option<&'static str> {
+    let target = parts.get(2).and_then(|id| id.parse::<u64>().ok())?;
+    if target == actor.get() {
+        Some("Bunu kendine yapamazsın.")
+    } else if target == ctx.cache.current_user().id.get() {
+        Some("Beni odamdan edemezsin. 🙂")
+    } else {
+        None
+    }
 }
 
 /// Modal formlarını işler.

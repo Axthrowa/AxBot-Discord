@@ -55,7 +55,7 @@ fn record_circuit_success(model: &str) {
 }
 
 /// Akıl yürüten modellerde düşünme de bu sınıra dahildir; düşük tutulursa cevap boş kalır.
-const MAX_OUTPUT_TOKENS: u32 = 1500;
+const MAX_OUTPUT_TOKENS: u32 = 2500;
 /// Düşük sıcaklık: daha tutarlı dil bilgisi, daha az uydurma kelime.
 const TEMPERATURE: f32 = 0.4;
 /// Akıl yürüten modellerde (örn. GLM) düşünmeyi kısa tutar; desteklemeyen modeller yok sayar.
@@ -225,6 +225,11 @@ async fn nim_request(
         "reasoning_effort": REASONING_EFFORT,
         "stream": true,
     });
+    // Nemotron modelleri düşünmeyi varsayılan açık getirir; düşünme bütçeyi yiyip `content`'i boş
+    // bırakıyordu (loglarda "boş içerik"). Kapalıyken hem cevap gelir hem 2-3 kat hızlı olur.
+    if config.model.contains("nemotron") {
+        request["chat_template_kwargs"] = json!({ "enable_thinking": false });
+    }
     if with_tools {
         request["tools"] = json!([search::tool_definition()]);
         request["tool_choice"] = json!("auto");

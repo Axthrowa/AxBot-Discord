@@ -26,6 +26,7 @@ pub async fn cal(
     #[rename = "şarkı"]
     #[description = "Şarkı adı veya bağlantı (YouTube, Spotify, SoundCloud, çalma listesi)"]
     #[max_length = 300]
+    #[autocomplete = "autocomplete_song"]
     query: String,
 ) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
@@ -71,11 +72,17 @@ pub async fn cal(
         return playlist_res;
     }
 
-    // Şarkı adı / arama: ses kanalına katılımı ve şarkı çözümlemesini paralel başlat
-    let (join_res, resolved_res) = tokio::join!(
-        music.ensure_connected(&http, guild_id, user_channel),
-        music.resolve_with_cache(&query, ctx.author().id, guild_id)
-    );
+    // Şarkı adı / arama: ses kanalına katılımı ve şarkı çözümlemesini paralel başlat. Şarkı bulunur
+    // bulunmaz adı gösterilir; bağlantı o sırada sürüyor olabilir.
+    let resolve = async {
+        let resolved = music.resolve_with_cache(&query, ctx.author().id, guild_id).await;
+        let handle = match &resolved {
+            Ok((_, info)) => ctx.say(format!("🎵 **{}** bulundu, hazırlanıyor…", info.title)).await.ok(),
+            Err(_) => None,
+        };
+        (resolved, handle)
+    };
+    let (join_res, (resolved_res, found)) = tokio::join!(music.ensure_connected(&http, guild_id, user_channel), resolve);
 
     if let Err(e) = join_res {
         tracing::warn!(guild = %guild_id, error = ?e, "Ses kanalına katılım başlatılamadı");
@@ -133,11 +140,35 @@ pub async fn cal(
         "Şarkı eklendi"
     );
 
-    reply_enqueued(ctx, guild_id, &info, enqueued.position).await
+    reply_enqueued(ctx, guild_id, &info, enqueued.position, found).await
 }
 
-/// Hemen çalıyorsa "şimdi çalıyor" kartı, sıraya eklendiyse kısa bilgi.
-async fn reply_enqueued(ctx: Context<'_>, guild_id: GuildId, info: &TrackInfo, position: usize) -> Result<(), Error> {
+/// `/çal` yazılırken YouTube sonuçları önerilir; seçilen şarkının bilgisi bilindiği için komut aramasız çalışır.
+async fn autocomplete_song(_ctx: Context<'_>, partial: &str) -> Vec<serenity::AutocompleteChoice> {
+    let partial = partial.trim();
+    // Bağlantılar ve çok kısa metinler için öneri yok (her tuşta istek atılmasın).
+    if partial.chars().count() < 3 || partial.starts_with("http") {
+        return Vec::new();
+    }
+    let Ok(client) = crate::net::fetch_client() else {
+        return Vec::new();
+    };
+    let hits = crate::music::innertube::search(client, partial, 8).await.unwrap_or_default();
+    hits.into_iter()
+        .map(|hit| {
+            let duration = hit.duration.map(crate::music::format_duration).unwrap_or_default();
+            // Discord seçenek adı en fazla 100 karakter.
+            let mut name: String = hit.title.chars().take(100 - duration.chars().count() - 3).collect();
+            if !duration.is_empty() {
+                name.push_str(&format!(" · {duration}"));
+            }
+            serenity::AutocompleteChoice::new(name, hit.url())
+        })
+        .collect()
+}
+
+/// Hemen çalıyorsa "şimdi çalıyor" kartı, sıraya eklendiyse kısa bilgi (varsa "bulundu" mesajının yerine).
+async fn reply_enqueued(ctx: Context<'_>, guild_id: GuildId, info: &TrackInfo, position: usize, found: Option<poise::ReplyHandle<'_>>) -> Result<(), Error> {
     if position == 0 {
         return send_card(ctx, guild_id).await;
     }
@@ -149,7 +180,13 @@ async fn reply_enqueued(ctx: Context<'_>, guild_id: GuildId, info: &TrackInfo, p
     if let Some(thumb) = &info.thumbnail {
         embed = embed.thumbnail(thumb);
     }
-    ctx.send(CreateReply::default().embed(embed)).await?;
+    let reply = CreateReply::default().content("").embed(embed);
+    match found {
+        Some(handle) => handle.edit(ctx, reply).await?,
+        None => {
+            ctx.send(reply).await?;
+        }
+    }
     Ok(())
 }
 
@@ -217,7 +254,7 @@ async fn play_spotify(
                 return Ok(());
             }
         };
-        return reply_enqueued(ctx, guild_id, &info, enqueued.position).await;
+        return reply_enqueued(ctx, guild_id, &info, enqueued.position, None).await;
     }
 
     // Liste/albüm: şarkılar sırası gelince YouTube'da aranır (ekleme anında beklenmez).
@@ -556,7 +593,7 @@ async fn m_247(
     #[description = "Açık mı?"]
     on: bool,
     #[rename = "bekleme"]
-    #[description = "Kanal boşalınca ayrılmadan önce bekleme süresi (saniye; varsayılan 300, 0 = anında)"]
+    #[description = "Kanal boşalınca ayrılmadan önce bekleme süresi (saniye; varsayılan 60, 0 = anında)"]
     bekleme: Option<u32>,
     #[rename = "oturum"]
     #[description = "Maksimum oturum süresi (dakika; 0 = sınırsız)"]

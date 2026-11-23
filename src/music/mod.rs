@@ -11,7 +11,6 @@
 //! şarkı ekleyebilsin diye.
 
 pub mod card;
-pub mod driver;
 pub mod lyrics;
 pub mod render;
 mod events;
@@ -23,6 +22,7 @@ pub mod soundboard;
 mod prefetch;
 pub mod cache;
 pub mod meta_cache;
+pub mod innertube;
 
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -78,7 +78,7 @@ pub struct MusicSettings {
     pub always_on: bool,
     /// Kuyruk bitince benzer şarkılarla devam et.
     pub autoplay: bool,
-    /// Boşta kalınca ayrılma süresi (saniye; varsayılan 300 = 5 dk, 0 = anında).
+    /// Boşta kalınca ayrılma süresi (saniye; varsayılan 60 = 1 dk, 0 = anında).
     pub idle_disconnect_secs: u32,
     /// Tek bir ses oturumunda kalma üst süresi (dakika; 0 = sınırsız).
     pub max_session_mins: u32,
@@ -95,7 +95,7 @@ impl Default for MusicSettings {
         Self {
             always_on: false,
             autoplay: false,
-            idle_disconnect_secs: 300,
+            idle_disconnect_secs: 60,
             max_session_mins: 0,
             default_volume: 60,
             max_length_secs: 0,
@@ -103,9 +103,6 @@ impl Default for MusicSettings {
         }
     }
 }
-
-#[allow(dead_code)]
-pub type MusicConfig = MusicSettings;
 
 impl crate::settings::PluginConfig for MusicSettings {
     const KEY: &'static str = "music";
@@ -139,7 +136,6 @@ pub struct Shared {
     pub(crate) text_channels: Arc<DashMap<GuildId, ChannelId>>,
     pub(crate) settings: Arc<DashMap<GuildId, MusicSettings>>,
     pub(crate) session_started: Arc<DashMap<GuildId, std::time::Instant>>,
-    driver: Arc<dyn driver::AudioDriver>,
     /// Son çalınan YouTube video kimlikleri (otomatik çalma tekrar etmesin).
     history: DashMap<GuildId, VecDeque<String>>,
     /// Sunucudaki son "şimdi çalıyor" kartı; yenisi gelince eskisinin butonları kaldırılır.
@@ -329,7 +325,6 @@ impl Music {
         }
         ytdlp_args.extend(server_ytdlp_args());
 
-        let driver = driver::resolve_driver(&http);
         cache::clear_orphaned_cache();
         Self(Arc::new(Shared {
             songbird,
@@ -342,7 +337,6 @@ impl Music {
             text_channels: Arc::new(DashMap::new()),
             settings: Arc::new(DashMap::new()),
             session_started: Arc::new(DashMap::new()),
-            driver,
             history: DashMap::new(),
             cards: DashMap::new(),
             card_tasks: dashmap::DashSet::new(),
@@ -364,11 +358,6 @@ impl Music {
         } else {
             self.filters.insert(guild_id, filter);
         }
-    }
-
-    /// Aktif ses sürücüsü (NativeSongbird veya Lavalink v4).
-    pub fn driver(&self) -> &dyn driver::AudioDriver {
-        self.driver.as_ref()
     }
 
     /// Müzik yönetim yetkisi denetimi:
@@ -752,6 +741,15 @@ impl Music {
             return Err("❌ Bu bağlantı çalınamaz. YouTube, Spotify, SoundCloud, Bandcamp, Twitch gibi bilinen bir müzik/video sitesinin bağlantısını ver ya da şarkının adını yaz.".to_owned());
         }
 
+        if is_url {
+            // Öneri listesinden seçilmiş (bilgisi bilinen) video: aramasız, anında.
+            if let Some(hit) = extra::youtube_video_id(query).and_then(|id| innertube::known(&id)) {
+                return Ok(self.lazy_hit(&hit, requester, guild_id));
+            }
+        } else if let Some(hit) = self.quick_search(query).await {
+            return Ok(self.lazy_hit(&hit, requester, guild_id));
+        }
+
         let result = self.fetch(query, !is_url).await;
         let (input, meta) = result.map_err(|text| {
             warn!(query, error = %text, "Şarkı çözülemedi");
@@ -781,6 +779,41 @@ impl Music {
             spotify_url: None,
         };
         Ok((input, info))
+    }
+
+    /// Bilgisi zaten bilinen bir YouTube videosu: yt-dlp ŞİMDİ çalıştırılmaz, şarkı çalmaya başlarken
+    /// (sıradaysa bitişe 30 sn kala) arka planda çalışır. `/çal` böylece aramadan hemen sonra cevap verir.
+    fn lazy_track(&self, url: String, title: String, duration: Option<Duration>, thumbnail: Option<String>, requester: UserId, guild_id: GuildId) -> (Input, TrackInfo) {
+        let mut args = self.args();
+        args.push("--no-playlist".to_owned());
+        let source = YoutubeDl::new_ytdl_like(self.ytdlp, self.http.clone(), url.clone()).user_args(args.clone());
+        let input = prefetch::Prefetched::lazy(url.clone(), source, args, Some(self.http.clone()));
+        let info = TrackInfo {
+            guild_id,
+            title,
+            url: Some(url),
+            duration,
+            thumbnail,
+            requester,
+            announce: false,
+            spotify_url: None,
+        };
+        (input, info)
+    }
+
+    fn lazy_hit(&self, hit: &innertube::Hit, requester: UserId, guild_id: GuildId) -> (Input, TrackInfo) {
+        self.lazy_track(hit.url(), hit.title.clone(), hit.duration, Some(hit.thumbnail()), requester, guild_id)
+    }
+
+    /// YouTube'un kendi aramasıyla ilk sonuç (bulunamazsa ya da uç nokta cevap vermezse `None`).
+    async fn quick_search(&self, query: &str) -> Option<innertube::Hit> {
+        match innertube::search(&self.http, query, 1).await {
+            Ok(hits) => hits.into_iter().next(),
+            Err(e) => {
+                warn!(error = %e, "Hızlı YouTube araması başarısız, yt-dlp ile aranıyor");
+                None
+            }
+        }
     }
 
     fn check_cached_resolve(&self, target: &str, search: bool) -> Option<(Input, songbird::input::AuxMetadata)> {
@@ -890,8 +923,8 @@ impl Music {
     ///
     /// - Durum A (Redis + RAM İsabeti — Sıfır yt-dlp): Şarkı daha önce dinlenmiş ve RAM önbelleğinde
     ///   (`bytes::Bytes`) hazırsa, yt-dlp ve Deno HİÇ çalıştırılmadan doğrudan RAM'den `<10 ms` içinde başlatılır.
-    /// - Durum B (Redis Var, RAM Yok — restart/LRU sonrası): Arama sorgusu yerine doğrudan kanonik URL ile
-    ///   hızlıca çözümlenir ve arka planda RAM önbelleğine alınır.
+    /// - Durum B (Redis Var, RAM Yok — restart/LRU sonrası): yt-dlp beklenmez;
+    ///   bilgi hazır olduğundan anında sıraya eklenir; ses çalarken çözülür ve arka planda RAM önbelleğine alınır.
     /// - Durum C (Soğuk İstek): Normal `resolve_preferring_spotify` akışına devam edilir. Başarılı sonuç alındığında
     ///   arkaplanda hem Redis'e kaydedilir hem de RAM önbelleğine indirilir.
     pub async fn resolve_with_cache(
@@ -930,35 +963,24 @@ impl Music {
                     return Ok((input, info));
                 }
 
-                // Durum B: Redis'te meta var ama RAM'de yok -> doğrudan kanonik URL ile çöz
-                match self.resolve(&meta.webpage_url, requester, guild_id).await {
-                    Ok((input, info)) => {
-                        let http_clone = self.http.clone();
-                        let ytdlp_str = self.ytdlp.to_owned();
-                        let args_clone = self.args();
-                        let target_url = meta.webpage_url.clone();
-                        let dur = info.duration;
-                        tokio::spawn(async move {
-                            let _ = cache::download_to_ram_cache(
-                                Some(&http_clone),
-                                &ytdlp_str,
-                                &args_clone,
-                                &target_url,
-                                None,
-                                None,
-                                dur,
-                            ).await;
-                        });
-                        return Ok((input, info));
-                    }
-                    Err(e) => {
-                        warn!(
-                            url = %meta.webpage_url,
-                            error = %e,
-                            "Kanonik URL çözülemedi, genel arama akışına dönülüyor"
-                        );
-                    }
-                }
+                // Durum B: Redis'te meta var ama RAM'de yok -> bilgi hazır, ses çalarken çözülür
+                let (input, info) = self.lazy_track(
+                    meta.webpage_url.clone(),
+                    meta.title.clone(),
+                    meta.duration_secs.map(Duration::from_secs),
+                    meta.thumbnail.clone(),
+                    requester,
+                    guild_id,
+                );
+                let http_clone = self.http.clone();
+                let ytdlp_str = self.ytdlp.to_owned();
+                let args_clone = self.args();
+                let target_url = meta.webpage_url.clone();
+                let dur = info.duration;
+                tokio::spawn(async move {
+                    let _ = cache::download_to_ram_cache(Some(&http_clone), &ytdlp_str, &args_clone, &target_url, None, None, dur).await;
+                });
+                return Ok((input, info));
             }
         }
 
@@ -1007,13 +1029,16 @@ impl Music {
         if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
             return self.resolve(trimmed, requester, guild_id).await;
         }
-        match extra::spotify_search(&self.http, trimmed).await {
-            Ok(Some(track)) => self.resolve_spotify_track(&track, requester, guild_id).await,
-            Ok(None) => self.resolve(trimmed, requester, guild_id).await,
-            Err(e) => {
-                warn!(error = ?e, "Spotify araması başarısız, YouTube'da aranıyor");
-                self.resolve(trimmed, requester, guild_id).await
-            }
+        // İkisi aynı anda: Spotify bulamazsa YouTube sonucu zaten hazırdır.
+        let (spotify, youtube) = tokio::join!(extra::spotify_search(&self.http, trimmed), self.quick_search(trimmed));
+        match spotify {
+            Ok(Some(track)) => return self.resolve_spotify_track(&track, requester, guild_id).await,
+            Ok(None) => {}
+            Err(e) => warn!(error = ?e, "Spotify araması başarısız, YouTube'da aranıyor"),
+        }
+        match youtube {
+            Some(hit) => Ok(self.lazy_hit(&hit, requester, guild_id)),
+            None => self.resolve(trimmed, requester, guild_id).await,
         }
     }
 
@@ -1146,6 +1171,16 @@ impl Music {
 
     /// YouTube'da arama yapar (`/ara youtube`). Hata mesajı kullanıcıya gösterilir.
     pub async fn search_youtube(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>, String> {
+        match innertube::search(&self.http, query, limit).await {
+            Ok(hits) if !hits.is_empty() => {
+                return Ok(hits
+                    .into_iter()
+                    .map(|h| SearchResult { url: h.url(), title: h.title, channel: h.channel, duration: h.duration })
+                    .collect());
+            }
+            Ok(_) => {}
+            Err(e) => warn!(error = %e, "Hızlı YouTube araması başarısız, yt-dlp ile aranıyor"),
+        }
         // Sorgu yt-dlp'ye tek argüman olarak gider; baştaki "-" seçenek sanılmasın diye önek hep var.
         let target = format!("ytsearch{limit}:{}", query.trim());
         let output = tokio::time::timeout(
@@ -1252,47 +1287,83 @@ impl Music {
         let Some(call) = self.songbird.get(guild_id) else {
             return;
         };
-        let bot_channel = call.lock().await.current_channel();
-        let bot_id = ctx.cache.current_user().id;
+        let bot_channel = call.lock().await.current_channel().map(|c| ChannelId::new(c.0.get()));
+        let humans_left = bot_channel.map_or(0, |channel| humans_in(ctx, guild_id, channel));
 
-        let humans_left = match bot_channel {
-            Some(channel) => {
-                let channel = ChannelId::new(channel.0.get());
-                ctx.cache.guild(guild_id).map_or(1, |guild| {
-                    guild
-                        .voice_states
-                        .values()
-                        .filter(|vs| vs.channel_id == Some(channel) && vs.user_id != bot_id)
-                        .filter(|vs| !vs.member.as_ref().is_some_and(|m| m.user.bot))
-                        .count()
-                })
-            }
-            // Bot kanaldan atıldı / bağlantı koptu.
-            None => 0,
-        };
-
-        // 7/24 modunda kanal boşalsa da kalınır (bot kanaldan atıldıysa yine temizlenir).
-        if humans_left == 0 && bot_channel.is_some() && self.settings(guild_id).always_on {
+        if humans_left > 0 {
+            self.empty_channels.remove(&guild_id);
             return;
         }
-        if humans_left == 0 {
-            let settings = self.settings(guild_id);
-            if settings.idle_disconnect_secs == 0 {
-                info!(guild = %guild_id, "Ses kanalında kimse kalmadı, anında ayrılınıyor");
-                self.stop_and_leave(guild_id).await;
-                if let (Some(channel), true) = (self.text_channels.get(&guild_id).map(|c| *c), bot_channel.is_some()) {
-                    let _ = channel
-                        .say(&ctx.http, "👋 Ses kanalında kimse kalmadı, ayrıldım.")
-                        .await;
-                }
-            } else {
-                self.empty_channels.entry(guild_id).or_insert_with(std::time::Instant::now);
-                info!(guild = %guild_id, wait = settings.idle_disconnect_secs, "Ses kanalında kimse kalmadı, boşta bekleme devrede");
+        // 7/24 modunda kanal boşalsa da kalınır (bot kanaldan atıldıysa yine temizlenir).
+        let settings = self.settings(guild_id);
+        if bot_channel.is_some() && settings.always_on {
+            return;
+        }
+        if bot_channel.is_none() || settings.idle_disconnect_secs == 0 {
+            info!(guild = %guild_id, "Ses kanalında kimse kalmadı, ayrılınıyor");
+            self.leave_empty(ctx, guild_id, bot_channel.is_some()).await;
+            return;
+        }
+        // Zaten bekleme sayacı varsa yenisini kurma.
+        if self.empty_channels.contains_key(&guild_id) {
+            return;
+        }
+        let since = std::time::Instant::now();
+        self.empty_channels.insert(guild_id, since);
+        info!(guild = %guild_id, wait = settings.idle_disconnect_secs, "Ses kanalında kimse kalmadı, boşta bekleme devrede");
+
+        // Songbird'ün periyodik olayına güvenmeden (çalma yokken tetiklenmeyebilir) kendi zamanlayıcımız.
+        let music = self.clone();
+        let ctx = ctx.clone();
+        let wait = Duration::from_secs(u64::from(settings.idle_disconnect_secs));
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            // Bu arada biri geldi ya da yeni bir bekleme başladıysa vazgeç.
+            if music.empty_channels.get(&guild_id).map(|t| *t) != Some(since) {
+                return;
             }
-        } else {
-            self.empty_channels.remove(&guild_id);
+            let Some(call) = music.songbird.get(guild_id) else {
+                music.empty_channels.remove(&guild_id);
+                return;
+            };
+            let channel = call.lock().await.current_channel().map(|c| ChannelId::new(c.0.get()));
+            if music.settings(guild_id).always_on && channel.is_some() {
+                music.empty_channels.remove(&guild_id);
+                return;
+            }
+            if channel.is_some_and(|c| humans_in(&ctx, guild_id, c) > 0) {
+                music.empty_channels.remove(&guild_id);
+                return;
+            }
+            info!(guild = %guild_id, "Ses kanalında kimse kalmadı (süre doldu), ayrılınıyor");
+            music.leave_empty(&ctx, guild_id, true).await;
+        });
+    }
+
+    async fn leave_empty(&self, ctx: &serenity::Context, guild_id: GuildId, announce: bool) {
+        let text_channel = self.text_channels.get(&guild_id).map(|c| *c);
+        self.stop_and_leave(guild_id).await;
+        if let (Some(channel), true) = (text_channel, announce) {
+            let _ = channel.say(&ctx.http, "👋 Ses kanalında kimse kalmadığı için ayrıldım.").await;
         }
     }
+}
+
+/// Kanaldaki bot olmayan üye sayısı. Önbellekteki ses durumlarında `member` her zaman dolu
+/// gelmediği için bot kontrolü üye önbelleğinden de yapılır.
+fn humans_in(ctx: &serenity::Context, guild_id: GuildId, channel: ChannelId) -> usize {
+    let bot_id = ctx.cache.current_user().id;
+    ctx.cache.guild(guild_id).map_or(1, |guild| {
+        guild
+            .voice_states
+            .values()
+            .filter(|vs| vs.channel_id == Some(channel) && vs.user_id != bot_id)
+            .filter(|vs| {
+                let is_bot = vs.member.as_ref().map(|m| m.user.bot).or_else(|| guild.members.get(&vs.user_id).map(|m| m.user.bot));
+                is_bot != Some(true)
+            })
+            .count()
+    })
 }
 
 impl Shared {
@@ -1603,8 +1674,8 @@ impl Shared {
             info.announce = info.announce || !handler.queue().is_empty();
             // `Call::enqueue` her parça için süreyi öğrenmek üzere yt-dlp çalıştırır (parça başına
             // birkaç saniye; 100 şarkılık listede dakikalarca kilit). Süre zaten bilindiği için
-            // doğrudan eklenir; sonraki parça bitişe 5 sn kala hazırlanır.
-            let preload = info.duration.map(|d| d.saturating_sub(Duration::from_secs(5)));
+            // doğrudan eklenir; sonraki parça bitişe 30 sn kala hazırlanır (ses adresi önceden çözülür).
+            let preload = info.duration.map(|d| d.saturating_sub(Duration::from_secs(30)));
             let queue = handler.queue().clone();
             let handle = queue.add_with_preload(Track::new(input).volume(volume), handler, preload);
             this.tracks.insert(handle.uuid(), info);
@@ -2029,7 +2100,7 @@ mod live_tests {
         let defaults = MusicSettings::default();
         assert!(!defaults.always_on);
         assert!(!defaults.autoplay);
-        assert_eq!(defaults.idle_disconnect_secs, 300);
+        assert_eq!(defaults.idle_disconnect_secs, 60);
         assert_eq!(defaults.max_session_mins, 0);
         assert_eq!(defaults.default_volume, 60);
         assert_eq!(defaults.max_length_secs, 0);
@@ -2055,7 +2126,7 @@ mod live_tests {
         let old_extras_json = r#"{"dj_role": 123456789}"#;
         let parsed: MusicSettings = serde_json::from_str(old_extras_json)?;
         assert_eq!(parsed.dj_role, Some(123456789));
-        assert_eq!(parsed.idle_disconnect_secs, 300);
+        assert_eq!(parsed.idle_disconnect_secs, 60);
         assert_eq!(parsed.default_volume, 60);
         assert!(!parsed.always_on);
         assert!(!parsed.autoplay);
@@ -2064,7 +2135,7 @@ mod live_tests {
         let parsed2: MusicSettings = serde_json::from_str(old_bool_json)?;
         assert!(parsed2.always_on);
         assert!(!parsed2.autoplay);
-        assert_eq!(parsed2.idle_disconnect_secs, 300);
+        assert_eq!(parsed2.idle_disconnect_secs, 60);
         assert_eq!(parsed2.dj_role, None);
         Ok(())
     }

@@ -78,12 +78,6 @@ pub fn render_plain_text(messages: &[Message], header: &Header<'_>) -> String {
     out
 }
 
-#[allow(dead_code)]
-pub async fn build(ctx: &serenity::Context, channel_id: ChannelId, header: &Header<'_>) -> anyhow::Result<String> {
-    let messages = fetch_messages(ctx, channel_id).await?;
-    Ok(render_plain_text(&messages, header))
-}
-
 pub async fn build_both(
     ctx: &serenity::Context,
     channel_id: ChannelId,

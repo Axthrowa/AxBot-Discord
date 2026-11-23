@@ -108,27 +108,6 @@ pub async fn export_safe_settings(db: &sqlx::PgPool, guild_id: GuildId) -> anyho
     Ok(Value::Object(plugins))
 }
 
-/// Şablondan gelen ayarları güvenle uygular.
-#[allow(dead_code)]
-pub async fn apply_safe_settings(state: &WebState, guild_id: GuildId, settings: &Value) -> Result<usize, &'static str> {
-    let Some(plugins) = settings.as_object() else {
-        return Ok(0);
-    };
-    let wanted: Vec<(&String, &Value)> = plugins.iter().filter(|(key, _)| !SKIP.contains(&key.as_str())).collect();
-    for (key, value) in &wanted {
-        if !apply(state, guild_id, key, value, false).await? {
-            continue;
-        }
-    }
-    let mut count = 0;
-    for (key, value) in &wanted {
-        if apply(state, guild_id, key, value, true).await? {
-            count += 1;
-        }
-    }
-    Ok(count)
-}
-
 /// `GET /panel/sunucu/{id}/ayarlar-disa-aktar`: yalnızca gerçek sunucu yöneticileri.
 pub async fn export(State(state): State<WebState>, headers: HeaderMap, Path(guild): Path<u64>) -> Response {
     let Some(session) = auth::session(&state, &headers).await else {

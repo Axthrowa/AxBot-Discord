@@ -445,12 +445,6 @@ fn parse_absolute_duration(input: &str) -> Result<Duration, &'static str> {
     Err("Geçersiz zaman formatı. `1:30`, `90`, `90s`, `1m30s`, `+15` veya `-15` gibi yazın.")
 }
 
-/// "90", "1:30", "1:02:03" → süre.
-#[allow(dead_code)]
-pub fn parse_position(input: &str) -> Option<Duration> {
-    parse_seek_timestamp(input, None).ok()
-}
-
 // ===================== Bağlantı güvenliği =====================
 
 /// İnternette herkese açık bir adres mi? Yerel ağ / bu bilgisayar (veritabanı, Redis, web formu)
@@ -645,11 +639,11 @@ mod tests {
 
     #[test]
     fn parses_seek_positions() {
-        assert_eq!(parse_position("90"), Some(Duration::from_secs(90)));
-        assert_eq!(parse_position("1:30"), Some(Duration::from_secs(90)));
-        assert_eq!(parse_position("1:02:03"), Some(Duration::from_secs(3723)));
-        assert_eq!(parse_position("1:75"), None);
-        assert_eq!(parse_position("abc"), None);
+        assert_eq!(parse_seek_timestamp("90", None).ok(), Some(Duration::from_secs(90)));
+        assert_eq!(parse_seek_timestamp("1:30", None).ok(), Some(Duration::from_secs(90)));
+        assert_eq!(parse_seek_timestamp("1:02:03", None).ok(), Some(Duration::from_secs(3723)));
+        assert_eq!(parse_seek_timestamp("1:75", None).ok(), None);
+        assert_eq!(parse_seek_timestamp("abc", None).ok(), None);
 
         // Kapsamlı parse_seek_timestamp testleri
         assert_eq!(parse_seek_timestamp("90", None), Ok(Duration::from_secs(90)));
@@ -688,7 +682,7 @@ mod tests {
 #[cfg(test)]
 mod live_tests {
     use super::*;
-    use crate::music::lyrics::lyrics;
+    use crate::music::lyrics::search_lyrics as lyrics;
     use songbird::input::codecs::{get_codec_registry, get_probe};
     use songbird::input::{HttpRequest, Input};
 

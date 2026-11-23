@@ -544,7 +544,7 @@ pub async fn invite_fields(state: &WebState, guild_id: GuildId) -> anyhow::Resul
         + &section(
             "Nasıl çalışır",
             "<p class=\"note\">Botun 'Sunucuyu Yönet' izni olmalı. Sunucudan ayrılanlar, belirlenen süreden hızlı çıkanlar ve yeni açılmış sahte hesaplar sayılmaz. \
-             Komutlar: <code>/davetler</code> (bir üyenin davetleri), <code>/davet-sıralama</code>.</p>"
+             Komutlar: <code>/davetler kişi</code> (bir üyenin davetleri), <code>/davetler sıralama</code>.</p>"
                 .to_owned(),
         );
     Ok((out, true))

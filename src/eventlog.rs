@@ -39,7 +39,8 @@ pub fn set_channel_backoff(channel: ChannelId) {
     CHANNEL_BACKOFF.insert(channel, Instant::now() + BACKOFF_DURATION);
 }
 
-#[allow(dead_code)]
+/// Yalnızca testlerde: geri çekilmeyi sıfırlar.
+#[cfg(test)]
 pub fn clear_channel_backoff(channel: ChannelId) {
     CHANNEL_BACKOFF.remove(&channel);
 }

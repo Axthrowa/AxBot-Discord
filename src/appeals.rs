@@ -306,8 +306,19 @@ pub async fn token_state(db: &PgPool, token: &str) -> anyhow::Result<TokenState>
     })
 }
 
-pub async fn mark_token_used(db: &PgPool, token: &str) -> anyhow::Result<()> {
-    sqlx::query("UPDATE appeal_tokens SET used = TRUE WHERE token = $1").bind(token).execute(db).await?;
+/// Bağlantıyı tek seferde "kullanıldı" yapar; aynı anda gelen ikinci gönderim `false` alır.
+pub async fn claim_token(db: &PgPool, token: &str) -> anyhow::Result<bool> {
+    let claimed = sqlx::query("UPDATE appeal_tokens SET used = TRUE WHERE token = $1 AND NOT used")
+        .bind(token)
+        .execute(db)
+        .await?
+        .rows_affected();
+    Ok(claimed == 1)
+}
+
+/// Gönderim tamamlanamadıysa bağlantı yeniden kullanılabilir olur.
+pub async fn release_token(db: &PgPool, token: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE appeal_tokens SET used = FALSE WHERE token = $1").bind(token).execute(db).await?;
     Ok(())
 }
 

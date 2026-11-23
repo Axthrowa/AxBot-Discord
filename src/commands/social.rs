@@ -205,12 +205,21 @@ fn command_list(ctx: Context<'_>) -> CreateEmbed {
         if !command.subcommands.is_empty() {
             let subs: Vec<&str> = command.subcommands.iter().map(|s| s.name.as_str()).collect();
             line.push_str(&format!(" {}", subs.join(" · ")));
+        } else if let Some(desc) = command.description.as_deref().filter(|d| !d.is_empty()) {
+            // Kısa ipucu: ne işe yaradığı tek bakışta görünsün.
+            let short: String = desc.chars().take(60).collect();
+            line.push_str(&format!(" — {short}{}", if desc.chars().count() > 60 { "…" } else { "" }));
         }
         groups.entry(command.category.as_deref().unwrap_or("Diğer")).or_default().push(line);
     }
     let mut embed = CreateEmbed::new()
         .title("📜 Tüm komutlar")
-        .description("Bir komutun ne yaptığını görmek için `/` yazıp adını seç; açıklaması ve seçenekleri orada görünür.")
+        .description(
+            "💡 **İpuçları**\n\
+             • `/` yazıp komut adını seç; her seçeneğin açıklaması orada görünür.\n\
+             • Gruplu komutlarda önce grup, sonra alt komut seçilir (örn. `/müzik sıra`, `/davetler sıralama`).\n\
+             • Yanlış değer girersen bot sana doğru kullanımı gösterir.",
+        )
         .colour(serenity::Colour::BLURPLE);
     for (category, mut names) in groups {
         names.sort();

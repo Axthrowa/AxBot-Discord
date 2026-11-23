@@ -53,6 +53,24 @@ pub enum ConfigError {
     Invalid { key: &'static str, reason: String },
 }
 
+/// "💡 Kullanım: `/komut <zorunlu> [isteğe bağlı]` — açıklama" satırı.
+pub fn usage_hint(command: &poise::Command<Data, Error>) -> String {
+    let mut usage = format!("/{}", command.qualified_name);
+    for p in &command.parameters {
+        if p.required {
+            usage.push_str(&format!(" <{}>", p.name));
+        } else {
+            usage.push_str(&format!(" [{}]", p.name));
+        }
+    }
+    let mut line = format!("💡 Kullanım: `{usage}`");
+    if let Some(desc) = command.description.as_deref().filter(|d| !d.is_empty()) {
+        line.push_str(&format!(" — {desc}"));
+    }
+    line.push_str("\n_`<...>` zorunlu, `[...]` isteğe bağlı. Tüm komutlar için `/yardım`._");
+    line
+}
+
 pub async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     match error {
         poise::FrameworkError::Setup { error, .. } => {
@@ -75,6 +93,7 @@ pub async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
                 }
                 _ => "⚠️ Komut çalıştırılırken beklenmeyen bir hata oluştu.",
             };
+            let text = format!("{text}\n{}", usage_hint(ctx.command()));
             let reply = CreateReply::default().content(text).ephemeral(true);
 
             if let Err(e) = ctx.send(reply).await {
@@ -103,6 +122,13 @@ pub async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
             let text = format!("⏳ Biraz yavaş! **{} sn** sonra tekrar dene.", remaining_cooldown.as_secs().max(1));
             if let Err(e) = ctx.send(CreateReply::default().content(text).ephemeral(true)).await {
                 warn!(error = %e, "Bekleme uyarısı gönderilemedi");
+            }
+        }
+        poise::FrameworkError::ArgumentParse { ctx, input, .. } => {
+            let what = input.map(|i| format!(" (`{}`)", i.chars().take(50).collect::<String>())).unwrap_or_default();
+            let text = format!("❌ Girdiğin değer anlaşılamadı{what}.\n{}", usage_hint(ctx.command()));
+            if let Err(e) = ctx.send(CreateReply::default().content(text).ephemeral(true)).await {
+                warn!(error = %e, "Kullanım ipucu gönderilemedi");
             }
         }
         poise::FrameworkError::EventHandler { error, event, .. } => {

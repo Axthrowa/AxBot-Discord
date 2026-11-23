@@ -112,7 +112,6 @@ fn defined() -> Vec<poise::Command<Data, Error>> {
         engagement::starboard(),
         engagement::etiket(),
         server::davetler(),
-        server::davet_siralama(),
         server::sayac(),
         server::dogum_gunu(),
         server::gecici_oda(),

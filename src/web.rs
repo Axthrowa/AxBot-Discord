@@ -146,30 +146,35 @@ async fn submit_form(State(state): State<WebState>, Path(token): Path<String>, F
     if why.chars().count() > MAX_ANSWER || plea.chars().count() > MAX_ANSWER {
         return (StatusCode::BAD_REQUEST, Html(page("Çok uzun", &format!("<p>Cevaplar en fazla {MAX_ANSWER} karakter olabilir.</p>")))).into_response();
     }
-    let user = match state.http.get_user(user_id).await {
-        Ok(u) => u,
-        Err(e) => return server_error(&anyhow::Error::from(e)),
-    };
-    let channel = match appeals::appeal_channel(&state.db, guild_id).await {
-        Ok(c) => c,
+    // Önce bağlantı sahiplenilir: çift tıklamada ikinci istek itiraz açamaz.
+    match appeals::claim_token(&state.db, &token).await {
+        Ok(true) => {}
+        Ok(false) => return token_problem(&TokenState::Used).into_response(),
         Err(e) => return server_error(&e),
-    };
-    let filed = match appeals::file_appeal(&state.http, &state.db, guild_id, channel, &user, why, plea).await {
+    }
+    let filed = file(&state, guild_id, user_id, why, plea).await;
+    // Gönderilen ya da artık gerekmeyen (yasak kalkmış) itirazlarda bağlantı bir daha kullanılamaz.
+    if !matches!(filed, Ok(Filed::Sent | Filed::NotBanned)) {
+        if let Err(e) = appeals::release_token(&state.db, &token).await {
+            warn!(error = ?e, "İtiraz anahtarı yeniden açılamadı");
+        }
+    }
+    let filed = match filed {
         Ok(f) => f,
         Err(e) => return server_error(&e),
     };
-    // Gönderilen ya da artık gerekmeyen (yasak kalkmış) itirazlarda bağlantı bir daha kullanılamaz.
-    if matches!(filed, Filed::Sent | Filed::NotBanned) {
-        if let Err(e) = appeals::mark_token_used(&state.db, &token).await {
-            warn!(error = ?e, "İtiraz anahtarı kullanıldı olarak işaretlenemedi");
-        }
-    }
     let (title, status) = match &filed {
         Filed::Sent => ("İtirazın gönderildi ✅", StatusCode::OK),
         Filed::Failed => ("Bir sorun oluştu", StatusCode::BAD_GATEWAY),
         _ => ("İtiraz gönderilemedi", StatusCode::OK),
     };
     (status, Html(page(title, &format!("<p>{}</p>", escape(&strip_markdown(&filed.message())))))).into_response()
+}
+
+async fn file(state: &WebState, guild_id: poise::serenity_prelude::GuildId, user_id: poise::serenity_prelude::UserId, why: &str, plea: &str) -> anyhow::Result<Filed> {
+    let user = state.http.get_user(user_id).await?;
+    let channel = appeals::appeal_channel(&state.db, guild_id).await?;
+    appeals::file_appeal(&state.http, &state.db, guild_id, channel, &user, why, plea).await
 }
 
 fn guild_name(state: &WebState, guild_id: poise::serenity_prelude::GuildId) -> String {

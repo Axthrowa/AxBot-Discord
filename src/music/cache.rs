@@ -36,7 +36,6 @@ pub struct RamAudioCache {
     max_bytes: usize,
 }
 
-#[allow(dead_code)]
 impl RamAudioCache {
     pub fn new(max_bytes: usize) -> Self {
         Self {
@@ -46,18 +45,22 @@ impl RamAudioCache {
         }
     }
 
+    #[cfg(test)]
     pub fn max_bytes(&self) -> usize {
         self.max_bytes
     }
 
+    #[cfg(test)]
     pub fn current_bytes(&self) -> usize {
         self.current_bytes
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -122,6 +125,7 @@ impl RamAudioCache {
         }
     }
 
+    #[cfg(test)]
     pub fn remove(&mut self, key: &str) -> Option<Bytes> {
         if let Some(removed) = self.entries.remove(key) {
             self.current_bytes = self.current_bytes.saturating_sub(removed.bytes.len());
@@ -131,6 +135,7 @@ impl RamAudioCache {
         }
     }
 
+    #[cfg(test)]
     pub fn clear(&mut self) {
         self.entries.clear();
         self.current_bytes = 0;
@@ -430,7 +435,6 @@ pub struct MemoryMediaSource {
     inner: std::io::Cursor<Bytes>,
 }
 
-#[allow(dead_code)]
 impl MemoryMediaSource {
     pub fn new(bytes: Bytes) -> Self {
         Self {
@@ -438,6 +442,7 @@ impl MemoryMediaSource {
         }
     }
 
+    #[cfg(test)]
     pub fn into_inner(self) -> Bytes {
         self.inner.into_inner()
     }

@@ -98,12 +98,10 @@ pub async fn music_fields(state: &WebState, guild_id: GuildId, options: &Options
         ),
         None => "<p class=\"note\">Şu an müzik çalmıyor. Bir ses kanalına girip Discord'da <code>/çal</code> yaz.</p>".to_owned(),
     };
-    let driver_name = state.music.driver().name();
     let out = section("Şu an", now)
         + &section(
             "Müzik Ayarları",
-            format!("<p class=\"note\" style=\"margin-bottom:12px;\">Aktif Sürücü: <b>{}</b></p>", escape(driver_name))
-                + &checkbox("always_on", settings.always_on, "7/24 modu: kanal boşalsa da sıra bitse de ses kanalından ayrılma")
+            checkbox("always_on", settings.always_on, "7/24 modu: kanal boşalsa da sıra bitse de ses kanalından ayrılma")
                 + &checkbox("autoplay", settings.autoplay, "Otomatik çalma: sıra bitince benzer şarkılarla devam et")
                 + &field(
                     "DJ rolü",
@@ -113,7 +111,7 @@ pub async fn music_fields(state: &WebState, guild_id: GuildId, options: &Options
                 + &field(
                     "Boşta ayrılma süresi (saniye)",
                     &format!("<input type=\"number\" name=\"idle_disconnect_secs\" value=\"{}\" min=\"0\" max=\"3600\">", settings.idle_disconnect_secs),
-                    "7/24 kapalıyken kanal boşalınca veya şarkı bitince ayrılmadan önce bekleme süresi (0 = hemen ayrıl, varsayılan 300 = 5 dakika)",
+                    "7/24 kapalıyken kanal boşalınca veya şarkı bitince ayrılmadan önce bekleme süresi (0 = hemen ayrıl, varsayılan 60 = 1 dakika)",
                 )
                 + &field(
                     "Maksimum oturum süresi (dakika)",
@@ -139,7 +137,7 @@ pub async fn music_fields(state: &WebState, guild_id: GuildId, options: &Options
 
 pub async fn music_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Result<(), &'static str> {
     let dj_role = input.id("dj_role", &input.options.all_roles, "rol")?;
-    let idle_disconnect_secs = input.raw("idle_disconnect_secs").parse::<u32>().unwrap_or(300);
+    let idle_disconnect_secs = input.raw("idle_disconnect_secs").parse::<u32>().unwrap_or(60);
     let max_session_mins = input.raw("max_session_mins").parse::<u32>().unwrap_or(0);
     let default_volume = input.raw("default_volume").parse::<u16>().unwrap_or(60).clamp(1, 100);
     let max_length_secs = input.raw("max_length_secs").parse::<u32>().unwrap_or(0);

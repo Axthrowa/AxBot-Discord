@@ -23,9 +23,6 @@ pub struct Lyrics {
 /// Şarkı sözü servisi soyutlaması.
 #[async_trait::async_trait]
 pub trait LyricsProvider: Send + Sync {
-    /// Servis adı (ör. "lrclib.net").
-    #[allow(dead_code)]
-    fn name(&self) -> &'static str;
 
     /// Şarkı ve opsiyonel sanatçı adı ile söz arar.
     async fn fetch_lyrics(&self, client: &reqwest::Client, query: &str) -> anyhow::Result<Option<Lyrics>>;
@@ -37,9 +34,6 @@ pub struct LrclibProvider;
 
 #[async_trait::async_trait]
 impl LyricsProvider for LrclibProvider {
-    fn name(&self) -> &'static str {
-        "lrclib.net"
-    }
 
     async fn fetch_lyrics(&self, client: &reqwest::Client, query: &str) -> anyhow::Result<Option<Lyrics>> {
         let resp = client
@@ -100,12 +94,6 @@ pub async fn search_lyrics(client: &reqwest::Client, query: &str) -> anyhow::Res
         }
         Err(e) => Err(e),
     }
-}
-
-/// Geriye dönük uyumluluk: `music::extra::lyrics` çağrıları için.
-#[allow(dead_code)]
-pub async fn lyrics(client: &reqwest::Client, query: &str) -> anyhow::Result<Option<Lyrics>> {
-    search_lyrics(client, query).await
 }
 
 #[cfg(test)]

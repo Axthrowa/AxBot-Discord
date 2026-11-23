@@ -310,7 +310,9 @@ async fn run() -> anyhow::Result<()> {
                         return;
                     };
                     let ms = started.elapsed().as_millis();
-                    if ms >= SLOW_COMMAND_MS {
+                    // `/oyun` komutları oyun bitene kadar sürer (cevap beklenir); süreleri yavaşlık sayılmaz.
+                    let interactive = ctx.command().qualified_name.starts_with("oyun ");
+                    if ms >= SLOW_COMMAND_MS && !interactive {
                         warn!(command = %ctx.command().qualified_name, ms, "Yavaş komut");
                     } else {
                         debug!(command = %ctx.command().qualified_name, ms, "Komut tamamlandı");

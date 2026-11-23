@@ -61,25 +61,6 @@ impl Prefetched {
         Ok((Input::Lazy(Box::new(source)), meta))
     }
 
-    /// Belirli bir saniyeden itibaren başlayan kaynak.
-    #[allow(dead_code)]
-    pub fn seek_from(
-        target: String,
-        inner: YoutubeDl<'static>,
-        args: Vec<String>,
-        seek: Duration,
-        http: Option<reqwest::Client>,
-    ) -> Input {
-        Input::Lazy(Box::new(Self {
-            target,
-            inner: Some(inner),
-            args,
-            result: None,
-            seek_to: Some(seek),
-            http,
-        }))
-    }
-
     /// yt-dlp'yi çalmaya başlarken çalıştıran kaynak (çalma listesi parçaları gibi); HLS desteği için
     /// düz `YoutubeDl` yerine bu kullanılır.
     pub fn lazy(

@@ -8,7 +8,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{ErrorKind, Read, Result as IoResult, Write};
-use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
@@ -287,46 +286,6 @@ pub fn open_ram_seek(
     filter: Filter,
 ) -> Result<Input, AudioStreamError> {
     let stream = open_ram_seek_stream(bytes, seek, filter)?;
-    Ok(Input::Live(LiveInput::Raw(stream), None))
-}
-
-/// Yerel bir ses dosyasını ffmpeg ile belirli bir saniyeden itibaren açar (AudioStream).
-/// `-ss` parametresi `-i` girişinden ÖNCE yer alır (hızlı input seeking).
-#[allow(dead_code)]
-pub fn open_file_seek_stream(
-    path: &Path,
-    seek: Duration,
-    filter: Filter,
-) -> Result<AudioStream<Box<dyn MediaSource>>, AudioStreamError> {
-    let mut ff_cmd = Command::new(ffmpeg());
-    ff_cmd.args(["-hide_banner", "-loglevel", "error"]);
-    let seek_str;
-    if seek.as_secs() > 0 {
-        seek_str = seek.as_secs_f64().to_string();
-        ff_cmd.args(["-ss", &seek_str]);
-    }
-    ff_cmd.arg("-i");
-    ff_cmd.arg(path);
-    ff_cmd.arg("-vn");
-    let chain = filter.chain().unwrap_or(BASE_RESAMPLE_AF);
-    ff_cmd.args(["-af", chain]);
-    ff_cmd.args(PCM_OUT);
-    ff_cmd.stdin(Stdio::null());
-    ff_cmd.stdout(Stdio::piped());
-    ff_cmd.stderr(Stdio::null());
-
-    let child = ff_cmd.spawn().map_err(|e| AudioStreamError::Fail(format!("ffmpeg çalıştırılamadı: {e}").into()))?;
-    pcm_stream_prebuffered(vec![child])
-}
-
-/// Yerel bir ses dosyasını Songbird Input olarak belirli bir saniyeden açar.
-#[allow(dead_code)]
-pub fn open_file_seek(
-    path: &Path,
-    seek: Duration,
-    filter: Filter,
-) -> Result<Input, AudioStreamError> {
-    let stream = open_file_seek_stream(path, seek, filter)?;
     Ok(Input::Live(LiveInput::Raw(stream), None))
 }
 

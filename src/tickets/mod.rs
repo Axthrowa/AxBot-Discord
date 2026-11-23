@@ -140,12 +140,6 @@ pub struct TicketSettings {
 static SETTINGS_CACHE: std::sync::LazyLock<dashmap::DashMap<GuildId, Option<TicketSettings>>> =
     std::sync::LazyLock::new(dashmap::DashMap::new);
 
-/// Bilet ayar önbelleğini temizler (ayar doğrudan SQL ile güncellendiğinde çağrılabilir).
-#[allow(dead_code)]
-pub fn invalidate_settings_cache(guild_id: GuildId) {
-    SETTINGS_CACHE.remove(&guild_id);
-}
-
 pub async fn save_settings(db: &PgPool, guild_id: GuildId, settings: &TicketSettings) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO ticket_settings (guild_id, category_id, support_role_id) VALUES ($1, $2, $3)

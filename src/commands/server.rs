@@ -1,4 +1,4 @@
-//! Sunucu yönetimi: `/davetler`, `/davet-sıralama`, `/sayaç`, `/doğum-günü`, `/geçici-oda`, `/oda`, `/youtube`.
+//! Sunucu yönetimi: `/davetler kişi/sıralama`, `/sayaç`, `/doğum-günü`, `/geçici-oda`, `/oda`, `/youtube`.
 
 use poise::serenity_prelude::{self as serenity, CreateEmbed, EditChannel, Mentionable, PermissionOverwrite, PermissionOverwriteType, Permissions};
 use poise::{ChoiceParameter as _, CreateReply};
@@ -13,9 +13,15 @@ use crate::{birthdays, invites, youtube};
 
 // ===================== Davet takibi =====================
 
-/// Bir üyenin kaç kişiyi davet ettiğini gösterir.
-#[poise::command(slash_command, guild_only, category = "Sunucu")]
-pub async fn davetler(
+/// Davet istatistikleri: kişi başı sayı ve sıralama.
+#[poise::command(slash_command, guild_only, category = "Sunucu", subcommands("davet_kisi", "davet_siralama"), subcommand_required)]
+pub async fn davetler(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+/// Bir üyenin kaç kişiyi davet ettiğini gösterir (örn. `/davetler kişi`).
+#[poise::command(slash_command, guild_only, rename = "kişi")]
+async fn davet_kisi(
     ctx: Context<'_>,
     #[rename = "kullanıcı"]
     #[description = "Bakılacak üye (boşsa sen)"]
@@ -48,8 +54,8 @@ pub async fn davetler(
 }
 
 /// En çok davet eden 10 üye.
-#[poise::command(slash_command, guild_only, rename = "davet-sıralama", category = "Sunucu")]
-pub async fn davet_siralama(ctx: Context<'_>) -> Result<(), Error> {
+#[poise::command(slash_command, guild_only, rename = "sıralama")]
+async fn davet_siralama(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = guild_id(ctx)?;
     let top = invites::leaderboard(&ctx.data().db, guild_id, 10).await?;
     let description = if top.is_empty() {

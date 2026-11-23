@@ -26,12 +26,7 @@ pub struct CreateTemplateForm {
     pub category: Option<String>,
     pub description: Option<String>,
     pub include_settings: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize)]
-pub struct ApplyTemplateForm {
-    pub code: String,
+    pub csrf: String,
 }
 
 /// `GET /panel/sunucu/{guild}/sablonlar`
@@ -81,6 +76,7 @@ pub async fn list_page(
         "<div class=\"card\" style=\"margin-top:16px;\">\
          <h3>✨ Bu Sunucudan Yeni Şablon Oluştur</h3>\
          <form method=\"POST\" action=\"/panel/sunucu/{}/sablon-olustur\" style=\"margin-top:12px;display:grid;gap:12px;max-width:540px;\">\
+         <input type=\"hidden\" name=\"csrf\" value=\"{}\">\
          <div><label style=\"display:block;margin-bottom:4px;font-weight:600;\">Şablon Adı:</label>\
          <input type=\"text\" name=\"name\" value=\"{} Şablonu\" required style=\"width:100%;\">\
          </div>\
@@ -100,6 +96,7 @@ pub async fn list_page(
          <div><button type=\"submit\" class=\"btn on\">Şablon Kodu Oluştur</button></div>\
          </form></div>",
         guild,
+        escape(&session.csrf),
         escape(&guild_name)
     );
 
@@ -194,7 +191,7 @@ pub async fn create_template(
     let Some(guild_id) = (guild != 0).then(|| GuildId::new(guild)) else {
         return forbidden();
     };
-    if !is_guild_admin(&state, session.user, guild_id).await {
+    if form.csrf != session.csrf || !is_guild_admin(&state, session.user, guild_id).await {
         return forbidden();
     }
 

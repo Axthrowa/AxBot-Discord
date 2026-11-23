@@ -102,7 +102,7 @@ pub const PAGES: &[Page] = &[
 • `/yaz istek:…` kısa metin yazdırır · `/çevir metin:… dil:…` · `/hayal-et istek:…` resim çizdirir\n\n\
 **Arama — `/ara`**: `youtube` · `twitch` · `anime` · `manga` · `pokemon` · `sözlük` · `imgur` · `kripto` (fiyat, TL, 24 saat) · `gaz` (Ethereum işlem ücreti)\n\
 **Emoji — `/emoji büyüt`** bir emojiyi büyük gösterir\n\
-**Davetler:** `/davetler` kaç kişi davet ettin · `/davet-sıralama`\n\
+**Davetler:** `/davetler kişi` kaç kişi davet ettin · `/davetler sıralama`\n\
 **Vurgu — `/vurgu ekle kelime:…`:** seçtiğin kelime (ör. adın) görebildiğin bir kanalda geçince sana özelden haber verilir · `liste` · `sil`\n\
 **Kişisel haberler:** haber kanalındaki **⚙️ Tercihlerim** ile kategorilerini seç, istersen özelden al; **📰 Haberlerim** yalnızca senin kategorilerini gösterir\n\
 **Rol bilgisi:** `/rol bilgi rol:@…`",

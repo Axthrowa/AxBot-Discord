@@ -314,12 +314,18 @@ async fn handle_inner(
             }
         }
         serenity::FullEvent::VoiceStateUpdate { old, new } => {
-            if let Some(guild_id) = new.guild_id {
-                data.music.on_voice_state_update(ctx, guild_id).await;
-            }
-            data.tempvoice.on_voice_update(ctx, data, new).await;
-            crate::achievements::on_voice(ctx, data, new).await;
-            eventlog::voice_changed(ctx, data, old.as_ref(), new).await;
+            // Birbirinden bağımsız işler: biri (oda açma, log gönderme) yavaşsa diğerlerini bekletmesin.
+            let music = async {
+                if let Some(guild_id) = new.guild_id {
+                    data.music.on_voice_state_update(ctx, guild_id).await;
+                }
+            };
+            tokio::join!(
+                music,
+                data.tempvoice.on_voice_update(ctx, data, new),
+                crate::achievements::on_voice(ctx, data, new),
+                eventlog::voice_changed(ctx, data, old.as_ref(), new),
+            );
         }
         serenity::FullEvent::GuildMemberAddition { new_member } => {
             if new_member.user.bot {
