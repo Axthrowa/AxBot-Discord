@@ -310,8 +310,9 @@ async fn run() -> anyhow::Result<()> {
                         return;
                     };
                     let ms = started.elapsed().as_millis();
-                    // `/oyun` komutları oyun bitene kadar sürer (cevap beklenir); süreleri yavaşlık sayılmaz.
-                    let interactive = ctx.command().qualified_name.starts_with("oyun ");
+                    // Oyun, anket ve soygun komutları oyuncuları bekler (dakikalar sürer); süreleri yavaşlık sayılmaz.
+                    let name = ctx.command().qualified_name.as_str();
+                    let interactive = name.starts_with("oyun ") || matches!(name, "ekonomi blackjack" | "ekonomi soy" | "eğlence anket");
                     if ms >= SLOW_COMMAND_MS && !interactive {
                         warn!(command = %ctx.command().qualified_name, ms, "Yavaş komut");
                     } else {

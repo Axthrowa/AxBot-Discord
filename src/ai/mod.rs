@@ -167,7 +167,8 @@ pub async fn handle_message(
     let Some(config) = &ai.config else {
         return Ok(());
     };
-    if !ai.channels(&data.db, guild_id).await?.contains(&msg.channel_id) {
+    // Kanalda oyun sürüyorsa yazılanlar tahmindir (adam asmaca harfleri vb.); yapay zekâ karışmaz.
+    if data.game_channels.contains(&msg.channel_id) || !ai.channels(&data.db, guild_id).await?.contains(&msg.channel_id) {
         return Ok(());
     }
 
