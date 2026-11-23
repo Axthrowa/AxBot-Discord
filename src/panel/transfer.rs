@@ -65,6 +65,7 @@ async fn apply(state: &WebState, guild_id: GuildId, key: &str, value: &Value, wr
         crate::scheduler::recurring::TimerSettings,
         backup::BackupSettings,
         invites::InviteSettings,
+        modules::ModuleSettings,
     ])
 }
 

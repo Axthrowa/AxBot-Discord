@@ -410,6 +410,22 @@ mod tests {
         assert_eq!(card_text("{kullanıcı} · {sunucu} · {üye}", "Ali", "Sunucu", 42), "Ali · Sunucu · 42");
     }
 
+    /// Çizim süresi: `cargo test --release card_render_time -- --ignored --nocapture`
+    #[test]
+    #[ignore = "süre ölçümü"]
+    fn card_render_time() -> anyhow::Result<()> {
+        let avatar = RgbaImage::from_pixel(256, 256, Rgba([200, 50, 50, 255]));
+        let backdrop = RgbaImage::from_pixel(1200, 400, Rgba([10, 120, 200, 255]));
+        let rank = RankCard { name: "Şükrü Öğüt".to_owned(), level: 12, rank: Some(3), current: 429, needed: 1337, total: 15_000, accent: [88, 101, 242], font: "poppins".to_owned() };
+        render_rank(&rank, Some(&avatar), Some(&backdrop))?;
+        let started = std::time::Instant::now();
+        for _ in 0..10 {
+            render_rank(&rank, Some(&avatar), Some(&backdrop))?;
+        }
+        println!("rütbe kartı: {} ms", started.elapsed().as_millis() / 10);
+        Ok(())
+    }
+
     #[test]
     fn renders_cards_with_and_without_images() -> anyhow::Result<()> {
         let avatar = RgbaImage::from_pixel(64, 48, Rgba([200, 50, 50, 255]));

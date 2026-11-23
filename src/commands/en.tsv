@@ -109,6 +109,7 @@ C | cevir_mesaj | Translate message
 C | bildir | Report message
 C | ozetle | Summarize up to here
 C | cevap_taslagi | AI reply draft
+C | starboard_ekle | Add to starboard
 C | not_ekle_menu | Add staff note
 C | hizli_ceza | Quick punishment (member)
 C | hizli_ceza_mesaj | Quick punishment

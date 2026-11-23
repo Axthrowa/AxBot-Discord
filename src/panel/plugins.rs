@@ -301,7 +301,7 @@ pub const PLUGINS: &[Plugin] = &[
     },
 ];
 
-fn find(slug: &str) -> Option<&'static Plugin> {
+pub(super) fn find(slug: &str) -> Option<&'static Plugin> {
     PLUGINS.iter().find(|p| p.slug == slug)
 }
 
@@ -769,8 +769,9 @@ pub async fn page(
         None => (form_fields(plugin.slug, &cfg, &options), is_enabled(plugin.slug, &cfg, Extra::default())),
     };
 
+    let module = module_box(&state, guild_id, plugin.slug, &session.csrf).await;
     let body = format!(
-        "<div class=\"phead\"><div><h1>{icon} {name}</h1><p class=\"sub\">{about}</p></div>{badge}</div>{flash}\
+        "<div class=\"phead\"><div><h1>{icon} {name}</h1><p class=\"sub\">{about}</p></div>{badge}</div>{flash}{module}\
          <form method=\"post\" action=\"/panel/sunucu/{guild_id}/eklenti/{slug}\">\
          <input type=\"hidden\" name=\"csrf\" value=\"{csrf}\">{fields}\
          <div class=\"savebar\"><button>Kaydet</button><a class=\"btn ghost\" href=\"/panel/sunucu/{guild_id}\">Vazgeç</a></div></form>\
@@ -785,6 +786,69 @@ pub async fn page(
     );
     let nav = GuildNav { id: guild_id, name: &options.guild_name, active: plugin.slug };
     Html(layout(&state, &session, Nav::Home, Some(nav), Page { title: plugin.name, body }).await).into_response()
+}
+
+/// Modülün komutlarını sunucuda açıp kapatan küçük form (yalnızca komutu olan modüllerde).
+async fn module_box(state: &WebState, guild_id: GuildId, slug: &str, csrf: &str) -> String {
+    if !crate::modules::has_commands(slug) {
+        return String::new();
+    }
+    let modules = crate::commands::modules_of(&state.db, &state.settings, guild_id).await;
+    let on = !modules.is_disabled(slug);
+    format!(
+        "<form class=\"box sect\" method=\"post\" action=\"/panel/sunucu/{guild_id}/modul/{slug}\">\
+         <input type=\"hidden\" name=\"csrf\" value=\"{csrf}\"><input type=\"hidden\" name=\"acik\" value=\"{next}\">\
+         <h3>Komutlar</h3><p class=\"note\">{state_text}</p><button class=\"{class}\">{button}</button></form>",
+        csrf = escape(csrf),
+        next = if on { "0" } else { "1" },
+        state_text = if on {
+            "Bu modülün komutları sunucuda açık. Kapatırsan üyeler komut listesinde görmez ve kullanamaz; ayarların silinmez."
+        } else {
+            "Bu modülün komutları bu sunucuda kapalı: üyeler komut listesinde görmüyor."
+        },
+        class = if on { "ghost" } else { "" },
+        button = if on { "Komutları kapat" } else { "Komutları aç" },
+    )
+}
+
+#[derive(serde::Deserialize)]
+pub struct ModuleForm {
+    csrf: String,
+    acik: String,
+}
+
+/// Modülü açar/kapatır ve komutları o sunucuya yeniden kaydeder (birkaç saniyede görünür/kaybolur).
+pub async fn toggle_module(
+    State(state): State<WebState>,
+    headers: HeaderMap,
+    Path((guild, slug)): Path<(u64, String)>,
+    Form(form): Form<ModuleForm>,
+) -> Response {
+    let Some(session) = auth::session(&state, &headers).await else {
+        return auth::login_required();
+    };
+    let (Some(guild_id), Some(plugin)) = (parse_guild(guild), find(&slug)) else {
+        return forbidden();
+    };
+    if !crate::modules::has_commands(plugin.slug) || !can_manage(&state, session.user, guild_id).await {
+        return forbidden();
+    }
+    let back = |code: &str| Redirect::to(&format!("/panel/sunucu/{guild_id}/eklenti/{}?durum={code}", plugin.slug)).into_response();
+    if form.csrf != session.csrf {
+        return back("oturum");
+    }
+    let mut modules = crate::commands::modules_of(&state.db, &state.settings, guild_id).await;
+    modules.set(plugin.slug, form.acik == "1");
+    if let Err(e) = state.settings.set(&state.db, guild_id, modules.clone()).await {
+        warn!(guild = %guild_id, error = ?e, "Panel: modül ayarı kaydedilemedi");
+        return back("hata");
+    }
+    info!(user = %session.user, guild = %guild_id, module = plugin.slug, on = form.acik == "1", "Panelden modül açıldı/kapandı");
+    let http = std::sync::Arc::clone(&state.http);
+    tokio::spawn(async move {
+        crate::commands::register_guild(http, &crate::commands::all(), guild_id, &modules).await;
+    });
+    back("kaydedildi")
 }
 
 /// Form alanlarını doğrulayan yardımcı; hata kodu `flash`'taki anahtarlardan biridir.

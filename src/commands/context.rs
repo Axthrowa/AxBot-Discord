@@ -1,7 +1,7 @@
 //! Sağ tık menüsü komutları (Uygulamalar menüsü). Bunlar 100'lük slash komut sınırına sayılmaz
 //! (ayrı sınır: 5 mesaj + 5 üye komutu).
 //!
-//! Mesaja sağ tık: Çevir, Özetle, YZ cevap taslağı, Yetkiliye bildir, Hızlı ceza (Discord sınırı 5). Üyeye sağ tık: Sicil (`mod_tools::sicil`), Not ekle, Hızlı ceza (üye).
+//! Mesaja sağ tık: Çevir, Özetle, YZ cevap taslağı, Yetkiliye bildir, Starboard'a ekle, Hızlı ceza (Discord sınırı 15, Mart 2026). Üyeye sağ tık: Sicil (`mod_tools::sicil`), Not ekle, Hızlı ceza (üye).
 
 use poise::serenity_prelude::{self as serenity, CreateAllowedMentions, CreateEmbed, CreateEmbedAuthor, CreateMessage, Mentionable};
 use poise::CreateReply;
@@ -151,6 +151,30 @@ pub async fn bildir(ctx: Context<'_>, message: serenity::Message) -> Result<(), 
     // Bildirilen metindeki etiketler kimseyi bildirmez.
     let sent = log.send_message(ctx.http(), CreateMessage::new().embed(embed).allowed_mentions(CreateAllowedMentions::new())).await;
     reply_private(ctx, if sent.is_ok() { "✅ Mesaj yetkililere bildirildi. Teşekkürler." } else { "❌ Bildirim gönderilemedi; bir yetkiliye doğrudan yaz." }).await
+}
+
+/// Mesajı yıldız sayısına bakmadan starboard kanalına ekler (Mesajları Yönet izni gerekir).
+#[poise::command(context_menu_command = "Starboard'a ekle", guild_only, required_permissions = "MANAGE_MESSAGES", default_member_permissions = "MANAGE_MESSAGES")]
+pub async fn starboard_ekle(ctx: Context<'_>, message: serenity::Message) -> Result<(), Error> {
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let data = ctx.data();
+    let cfg = data.guild_configs.get(&data.db, guild_id).await?;
+    let Some(board) = cfg.starboard_channel else {
+        return reply_private(ctx, "Starboard kanalı ayarlı değil (`/starboard` ya da panel).").await;
+    };
+    if message.channel_id == board {
+        return reply_private(ctx, "Bu mesaj zaten starboard kanalında.").await;
+    }
+    let header = format!("📌 {} tarafından eklendi | {}", ctx.author().id.mention(), message.channel_id.mention());
+    let post = CreateMessage::new()
+        .content(header)
+        .embed(crate::starboard::embed(&message))
+        .components(crate::starboard::link(&message, guild_id))
+        .allowed_mentions(CreateAllowedMentions::new());
+    let sent = board.send_message(ctx.http(), post).await;
+    reply_private(ctx, if sent.is_ok() { "⭐ Mesaj starboard'a eklendi." } else { "❌ Eklenemedi; botun starboard kanalında mesaj gönderme izni olmalı." }).await
 }
 
 #[derive(Debug, poise::Modal)]

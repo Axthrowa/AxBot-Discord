@@ -27,6 +27,7 @@ mod economy;
 mod error;
 mod eventlog;
 mod events;
+mod modules;
 mod perms;
 mod timings;
 mod feeds;
@@ -349,7 +350,7 @@ async fn run() -> anyhow::Result<()> {
                     .map(|g| g.id)
                     .filter(|g| !appeal_guilds.iter().any(|a| u64::try_from(*a).ok() == Some(g.get())))
                     .collect();
-                commands::register(ctx, framework, dev_guild_id, &guilds).await?;
+                commands::register(ctx, framework, dev_guild_id, &guilds, &db, &plugin_settings).await?;
                 info!(link = %commands::invite_url(ready.user.id), "Botu sunucuya ekleme bağlantısı");
                 // Silinen/düzenlenen mesajları loglayabilmek için kanal başına son mesajlar tutulur.
                 ctx.cache.set_max_messages(MESSAGE_CACHE_PER_CHANNEL);

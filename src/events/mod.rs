@@ -52,7 +52,8 @@ async fn handle_inner(
             // Bot yeni bir sunucuya eklendi: komutlar orada hemen görünsün.
             if *is_new == Some(true) && data.dev_guild_id.is_none() {
                 info!(guild = %guild.id, name = %guild.name, "Bot yeni bir sunucuya eklendi");
-                crate::commands::register_guild(ctx, &framework.options.commands, guild.id).await;
+                let modules = crate::commands::modules_of(&data.db, &data.settings, guild.id).await;
+                crate::commands::register_guild(ctx, &framework.options.commands, guild.id, &modules).await;
             }
             data.invites.refresh(&ctx.http, guild.id).await;
             crate::privacy::on_present(&data.redis, guild.id).await;

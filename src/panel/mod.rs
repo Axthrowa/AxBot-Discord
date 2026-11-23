@@ -22,6 +22,12 @@ mod media;
 mod moderation;
 mod pages;
 mod plugins;
+
+/// Panelde bu adla bir eklenti sayfası var mı?
+#[cfg(test)]
+pub fn plugin_exists(slug: &str) -> bool {
+    plugins::find(slug).is_some()
+}
 mod welcome;
 mod templates;
 mod transcripts;
@@ -183,6 +189,7 @@ pub fn router() -> Router<WebState> {
         .route("/panel/oauth", get(auth::oauth_callback))
         .route("/panel/sunucu/{guild}", get(pages::guild))
         .route("/panel/sunucu/{guild}/eklenti/{slug}", get(plugins::page).post(plugins::save))
+        .route("/panel/sunucu/{guild}/modul/{slug}", post(plugins::toggle_module))
         .route("/panel/sunucu/{guild}/siralama", get(levels::leaderboard))
         .route("/panel/sunucu/{guild}/kart-onizleme", get(welcome::card_preview))
         .route("/siralama/{guild}", get(levels::public_leaderboard))

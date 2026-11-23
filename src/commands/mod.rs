@@ -83,6 +83,7 @@ fn defined() -> Vec<poise::Command<Data, Error>> {
         context::bildir(),
         context::ozetle(),
         context::cevap_taslagi(),
+        context::starboard_ekle(),
         context::not_ekle_menu(),
         context::hizli_ceza(),
         context::hizli_ceza_mesaj(),
@@ -191,6 +192,8 @@ pub async fn register(
     framework: &poise::Framework<Data, Error>,
     dev_guild_id: Option<serenity::GuildId>,
     guilds: &[serenity::GuildId],
+    db: &sqlx::PgPool,
+    settings: &crate::settings::PluginSettings,
 ) -> Result<(), Error> {
     let commands = &framework.options().commands;
 
@@ -215,22 +218,60 @@ pub async fn register(
         }
     }
     for chunk in guilds.chunks(3) {
-        let tasks = chunk.iter().map(|&guild_id| register_guild(ctx, commands, guild_id));
+        let tasks = chunk.iter().map(|&guild_id| async move {
+            let modules = modules_of(db, settings, guild_id).await;
+            register_guild(ctx, commands, guild_id, &modules).await;
+        });
         futures_util::future::join_all(tasks).await;
     }
     info!(count = commands.len(), guilds = guilds.len(), "Komutlar sunucuya kaydedildi (tüm sunucular)");
     Ok(())
 }
 
-/// Tek bir sunucuya kaydeder; hata olursa loglanır (diğer sunucular etkilenmez).
-pub async fn register_guild(ctx: &serenity::Context, commands: &[poise::Command<Data, Error>], guild_id: serenity::GuildId) {
+/// Sunucunun modül ayarı; okunamazsa hepsi açık sayılır (komutlar kaybolmasın).
+pub async fn modules_of(db: &sqlx::PgPool, settings: &crate::settings::PluginSettings, guild_id: serenity::GuildId) -> crate::modules::ModuleSettings {
+    match settings.get::<crate::modules::ModuleSettings>(db, guild_id).await {
+        Ok(modules) => (*modules).clone(),
+        Err(e) => {
+            tracing::warn!(guild = %guild_id, error = ?e, "Modül ayarı okunamadı; bütün komutlar kaydediliyor");
+            crate::modules::ModuleSettings::default()
+        }
+    }
+}
+
+/// Tek bir sunucuya kaydeder; hata olursa loglanır (diğer sunucular etkilenmez). Kapalı modüllerin komutları
+/// kaydedilmez.
+pub async fn register_guild(
+    http: impl AsRef<serenity::Http>,
+    commands: &[poise::Command<Data, Error>],
+    guild_id: serenity::GuildId,
+    modules: &crate::modules::ModuleSettings,
+) {
     // Hesaba kurulabilen komutlar genel kaydedildiyse sunucu listesinden çıkarılır.
     let filtered = user_install().then(guild_commands);
     let commands = filtered.as_deref().unwrap_or(commands);
-    match poise::builtins::register_in_guild(ctx, commands, guild_id).await {
-        Ok(()) => info!(guild = %guild_id, "Komutlar bu sunucuya kaydedildi"),
+    let builders = application_commands(commands.iter().filter(|c| modules.allows(&c.name)));
+    match guild_id.set_commands(http, builders).await {
+        Ok(_) => info!(guild = %guild_id, "Komutlar bu sunucuya kaydedildi"),
         Err(e) => tracing::warn!(guild = %guild_id, error = %e, "Komutlar bu sunucuya kaydedilemedi"),
     }
+}
+
+/// `poise::builtins::create_application_commands` gibi, ama süzülmüş referanslarla: sağ tık komutları
+/// alt komutların içinden de toplanır.
+fn application_commands<'a>(commands: impl Iterator<Item = &'a poise::Command<Data, Error>>) -> Vec<serenity::CreateCommand> {
+    fn context_menus(out: &mut Vec<serenity::CreateCommand>, command: &poise::Command<Data, Error>) {
+        out.extend(command.create_as_context_menu_command());
+        for sub in &command.subcommands {
+            context_menus(out, sub);
+        }
+    }
+    let mut out = Vec::new();
+    for command in commands {
+        out.extend(command.create_as_slash_command());
+        context_menus(&mut out, command);
+    }
+    out
 }
 
 #[cfg(test)]

@@ -39,6 +39,17 @@ async fn missing(ctx: Context<'_>, required: Permissions) -> Option<Permissions>
 }
 
 pub async fn check(ctx: Context<'_>) -> Result<bool, Error> {
+    if let Some(guild_id) = ctx.guild_id() {
+        let data = ctx.data();
+        let top = ctx.parent_commands().first().map_or(&ctx.command().name, |p| &p.name);
+        if crate::modules::module_of(top).is_some() {
+            let modules = crate::commands::modules_of(&data.db, &data.settings, guild_id).await;
+            if !modules.allows(top) {
+                ctx.send(poise::CreateReply::default().content("❌ Bu modül bu sunucuda kapalı (yöneticiler panelden açabilir).").ephemeral(true)).await?;
+                return Ok(false);
+            }
+        }
+    }
     let Some(required) = ctx.command().custom_data.downcast_ref::<Permissions>().copied() else {
         return Ok(true);
     };
