@@ -12,7 +12,8 @@ const DEFAULT_STREAM_POLL_SECS: u32 = 60;
 /// Önceki nemotron-3-super yabancı kelime karıştırıp hatalı cümle kuruyordu.
 const DEFAULT_NIM_MODEL: &str = "nvidia/nemotron-3.5-super-vl-120b-a12b";
 /// Asıl NIM modeli cevap vermezse denenen ikinci NIM modeli (`AI_FALLBACK_MODEL` ile değiştirilir).
-/// 2026-11-17 ölçümü: super-vl 3-10 sn, lightning 5-8 sn; nemotron-3-ultra 503 (aşırı yük), glm-5.3-flash cevapsız.
+/// 2026-11-23 ölçümü: lightning hızlı (<1 sn) ama cevapları zayıf; yalnızca asıl model takılınca kullanılır.
+/// mistral-large doğru ama 8-24 sn ve araçlı istekte 60 sn'de cevapsız; gemma-4, kimi-k3.1, glm-5.3-flash cevapsız.
 const DEFAULT_NIM_FALLBACK_MODEL: &str = "nvidia/nemotron-3.5-lightning-30b-a3b";
 /// Her zaman en yeni Flash modelini gösteren takma ad; model emekliye ayrılınca kırılmaz.
 const DEFAULT_GEMINI_MODEL: &str = "gemini-flash-lite-latest";

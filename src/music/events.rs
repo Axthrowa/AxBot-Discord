@@ -61,6 +61,12 @@ impl EventHandler for TrackNotifier {
                     }
                     if let Some(guild_id) = guild_id {
                         tokio::spawn(Shared::prefetch_next(Arc::clone(&music), guild_id));
+                        // Otomatik çalmada sıradaki benzer şarkı şimdiden seçilir (bitişte beklenmez).
+                        if music.settings.get(&guild_id).is_some_and(|s| s.autoplay) {
+                            if let Some(current) = music.tracks.get(&id).map(|t| t.clone()) {
+                                tokio::spawn(Shared::autoplay_after(Arc::clone(&music), Arc::clone(&self.http), current, true));
+                            }
+                        }
                     }
                 }
                 TrackNotice::Ended => {
@@ -72,7 +78,7 @@ impl EventHandler for TrackNotifier {
                         music.position_offsets.remove(&info.guild_id);
                         if music.settings.get(&info.guild_id).is_some_and(|s| s.autoplay) {
                             // Kuyruk kilidi burada alınmaz; ayrı görevde bakılır.
-                            tokio::spawn(Shared::autoplay_after(Arc::clone(&music), Arc::clone(&self.http), info));
+                            tokio::spawn(Shared::autoplay_after(Arc::clone(&music), Arc::clone(&self.http), info, false));
                         }
                     }
                 }

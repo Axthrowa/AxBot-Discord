@@ -53,6 +53,7 @@ async fn apply(state: &WebState, guild_id: GuildId, key: &str, value: &Value, wr
         cards::WelcomeSettings,
         community::CommunitySettings,
         customcmd::CustomCommandSettings,
+        economy::EconomySettings,
         feeds::FeedSettings,
         leveling::settings::LevelSettings,
         modmail::ModmailSettings,

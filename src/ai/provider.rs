@@ -13,8 +13,9 @@ const NIM_URL: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
 const GEMINI_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// Sırada yedek varken NIM'in cevaba başlaması için beklenen en uzun süre: kuyrukta takılan model
-/// (ücretsiz katmanda sık) yüzünden dakikalarca beklenmez, sıradakine geçilir.
-const FIRST_RESPONSE_WITH_FALLBACK: Duration = Duration::from_secs(12);
+/// (ücretsiz katmanda sık) yüzünden dakikalarca beklenmez, sıradakine geçilir. 2026-11-23 ölçümü:
+/// super-vl çoğunlukla 1-3 sn ama ara sıra 14 sn; 12 sn sınırı iyi cevapları yedeğe kaçırıyordu.
+const FIRST_RESPONSE_WITH_FALLBACK: Duration = Duration::from_secs(25);
 
 #[derive(Debug, Clone, Copy, Default)]
 struct CircuitState {
@@ -237,7 +238,7 @@ async fn nim_request(
 
     let send = client.post(NIM_URL).bearer_auth(&config.api_key).timeout(REQUEST_TIMEOUT).json(&request).send();
     let mut response = if config.fallback.is_some() {
-        tokio::time::timeout(FIRST_RESPONSE_WITH_FALLBACK, send).await.map_err(|_| anyhow::anyhow!("NVIDIA NIM 20 sn içinde cevaba başlamadı"))?
+        tokio::time::timeout(FIRST_RESPONSE_WITH_FALLBACK, send).await.map_err(|_| anyhow::anyhow!("NVIDIA NIM {} sn içinde cevaba başlamadı", FIRST_RESPONSE_WITH_FALLBACK.as_secs()))?
     } else {
         send.await
     }
@@ -253,7 +254,7 @@ async fn nim_request(
     let idle = if config.fallback.is_some() { FIRST_RESPONSE_WITH_FALLBACK } else { REQUEST_TIMEOUT };
     while let Some(chunk) = tokio::time::timeout(idle, response.chunk())
         .await
-        .map_err(|_| anyhow::anyhow!("NVIDIA NIM yanıtı yarıda kesildi (20 sn sessiz)"))?
+        .map_err(|_| anyhow::anyhow!("NVIDIA NIM yanıtı yarıda kesildi (uzun süre sessiz)"))?
         .context("NVIDIA NIM yanıtı okunamadı")?
     {
         if stream.feed(&chunk) {

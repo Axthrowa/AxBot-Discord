@@ -671,6 +671,7 @@ fn flash(code: Option<&str>) -> &'static str {
         Some("emoji") => "<div class=\"flash err\">❌ Emoji geçersiz ya da eksik. Tepki türünde her rol için bir emoji gerekir; sunucu emojisi &lt;:ad:kimlik&gt; biçiminde olmalı.</div>",
         Some("tekrar") => "<div class=\"flash err\">❌ Aynı rol ya da aynı emoji bir menüde iki kez kullanılamaz.</div>",
         Some("bos") => "<div class=\"flash err\">❌ Zorunlu bir alan boş (başlık, cevap, mesaj ya da en az bir rol).</div>",
+        Some("ad_bos") => "<div class=\"flash err\">❌ Komut adı boş. Regex kullansan da bir ad ver (listede ve silerken bu ad görünür).</div>",
         Some("ad") => "<div class=\"flash err\">❌ Komut adı geçersiz: en fazla 32 karakter; harf, rakam, - ve _ (boşluk olmaz).</div>",
         Some("gonder") => "<div class=\"flash err\">❌ Mesaj Discord'a gönderilemedi. Botun o kanalda 'Mesaj Gönder', 'Bağlantı Yerleştir' ve 'Tepki Ekle' izni var mı?</div>",
         Some("renk") => "<div class=\"flash err\">❌ Renk geçersiz; #RRGGBB biçiminde olmalı.</div>",

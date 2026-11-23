@@ -1706,8 +1706,10 @@ impl Shared {
         }
     }
 
-    /// Kuyruk bittiyse son şarkıya benzer bir şarkıyı (YouTube Mix) sıraya ekler.
-    async fn autoplay_after(this: Arc<Self>, http: Arc<Http>, finished: TrackInfo) {
+    /// Son şarkıya benzer bir şarkıyı (YouTube Mix) sıraya ekler. `ahead`: şarkı BAŞLARKEN çağrılır ve
+    /// yalnızca sırada başka şarkı yoksa ekler; böylece sıradaki şarkı bitişe 30 sn kala hazırlanır ve
+    /// geçiş beklemesiz olur. `ahead` değilse şarkı bittikten sonra kuyruk boşsa ekler (yedek yol).
+    async fn autoplay_after(this: Arc<Self>, http: Arc<Http>, finished: TrackInfo, ahead: bool) {
         let guild_id = finished.guild_id;
         if !this.autoplay_tasks.insert(guild_id) {
             return;
@@ -1721,11 +1723,16 @@ impl Shared {
         let _guard = AutoplayGuard(&this.autoplay_tasks, guild_id);
 
         // Bitişten hemen sonra sıradaki şarkı başlamış olabilir; kısa bekleyip bakılır.
-        tokio::time::sleep(Duration::from_millis(800)).await;
+        if !ahead {
+            tokio::time::sleep(Duration::from_millis(800)).await;
+        }
         let Some(call) = this.songbird.get(guild_id) else {
             return;
         };
-        if !call.lock().await.queue().is_empty() {
+        // Önceden eklemede sırada en fazla çalan şarkı olmalı; bitişte kuyruk boş olmalı. Arama sürerken
+        // şarkı geçildiyse (kuyruk boş) yine eklenir: bitiş yolu bu görev sürerken çalışmaz.
+        let wanted_len = usize::from(ahead);
+        if call.lock().await.queue().len() > wanted_len {
             return;
         }
         let Some(seed) = finished.url.as_deref().and_then(extra::youtube_video_id) else {
@@ -1757,7 +1764,7 @@ impl Shared {
             spotify_url: None,
         };
         let mut handler = call.lock().await;
-        if !handler.queue().is_empty() || handler.current_channel().is_none() {
+        if handler.queue().len() > wanted_len || handler.current_channel().is_none() {
             return;
         }
         Shared::push(&this, &mut handler, &http, vec![(input, info)]);

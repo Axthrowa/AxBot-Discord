@@ -306,7 +306,9 @@ pub async fn command_fields(state: &WebState, guild_id: GuildId, options: &Optio
 fn parse_command(input: &Input<'_>) -> Result<Option<Command>, &'static str> {
     let raw_name = input.raw("cmd_name");
     if raw_name.is_empty() {
-        return Ok(None);
+        // Cevap ya da regex yazılıp ad unutulduysa sessizce kaydetmemek yerine uyarılır.
+        let filled = !input.raw("cmd_response").is_empty() || !input.raw("cmd_pattern").is_empty();
+        return if filled { Err("ad_bos") } else { Ok(None) };
     }
     let name = crate::tags::normalize_name(raw_name.trim_start_matches(crate::tags::PREFIX)).map_err(|_| "ad")?;
     let response = short(input, "cmd_response", customcmd::MAX_RESPONSE)?.ok_or("bos")?;
@@ -1229,7 +1231,10 @@ mod tests {
             let form = form(pairs);
             parse_command(&Input { form: &form, options: &options }).map(|c| c.map(|c| (c.name, c.cooldown_secs, c.add_roles)))
         };
-        assert_eq!(parse(&[("cmd_response", "x")]), Ok(None));
+        assert_eq!(parse(&[]), Ok(None));
+        // Ad unutulup cevap ya da regex yazıldıysa uyarılır (eskiden sessizce kaydedilmiyordu).
+        assert_eq!(parse(&[("cmd_response", "x")]), Err("ad_bos"));
+        assert_eq!(parse(&[("cmd_pattern", "^selam+$")]), Err("ad_bos"));
         assert_eq!(
             parse(&[("cmd_name", "!KURALLAR"), ("cmd_response", "oku"), ("cmd_cooldown", "30"), ("cmd_add_role", "20")]),
             Ok(Some(("kurallar".to_owned(), 30, vec![20])))
