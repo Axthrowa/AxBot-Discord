@@ -135,18 +135,11 @@ pub async fn yaz(
     let guild_name = ctx.guild().map_or_else(|| "bu".to_owned(), |g| g.name.clone());
     let settings = data.settings.get::<AiSettings>(&data.db, guild_id).await.ok();
     let persona = settings.as_deref().and_then(|s| s.persona_for(ctx.channel_id().get()));
-    let answer = match ai::write_once(data, &guild_name, persona, &istek).await {
-        Some(Ok(answer)) if !answer.trim().is_empty() => answer,
-        Some(Err(e)) => {
-            tracing::warn!(guild = %guild_id, error = ?e, "AI metni üretilemedi");
-            return reply(ctx, "⚠️ Şu an yazamıyorum, biraz sonra tekrar dene.".to_owned()).await;
-        }
-        _ => return reply(ctx, "⚠️ Şu an yazamıyorum, biraz sonra tekrar dene.".to_owned()).await,
-    };
-    let text: String = answer.chars().take(1900).collect();
-    // Model çıktısındaki etiketler kimseyi bildirmez.
-    ctx.send(CreateReply::default().content(text).allowed_mentions(serenity::CreateAllowedMentions::new())).await?;
-    Ok(())
+    super::ai_live::ai_reply(ctx, &guild_name, persona, &istek, "⚠️ Şu an yazamıyorum, biraz sonra tekrar dene.", |answer| {
+        // Model çıktısındaki etiketler kimseyi bildirmez.
+        CreateReply::default().content(answer.chars().take(1900).collect::<String>()).allowed_mentions(serenity::CreateAllowedMentions::new())
+    })
+    .await
 }
 
 /// Yapay zekâ sağlayıcısını ve açık kanalları gösterir.

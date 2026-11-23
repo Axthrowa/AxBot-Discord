@@ -1,6 +1,7 @@
 //! Slash komut kaydı. Yeni bir komut eklemek için modülünü burada tanımlayıp `all()`'a ekleyin.
 
 mod ai;
+mod ai_live;
 mod analytics;
 mod automod;
 mod community;

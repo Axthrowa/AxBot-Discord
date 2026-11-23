@@ -39,7 +39,7 @@ const MAX_INPUT_CHARS: usize = 2000;
 /// Discord mesaj sınırı 2000; biraz pay bırakılır.
 const DISCORD_CHUNK: usize = 1900;
 /// Cevap yazılırken mesajın düzenlenme aralığı.
-const LIVE_EDIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1100);
+pub(crate) const LIVE_EDIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1100);
 
 pub struct Ai {
     config: Option<AiConfig>,
@@ -115,11 +115,12 @@ impl Ai {
 
 /// Tek seferlik metin üretimi (`/ai yaz`): sohbet geçmişi kullanılmaz ve kaydedilmez.
 /// AI kapalıysa `None`.
-pub async fn write_once(data: &Data, guild_name: &str, persona: Option<&str>, request: &str) -> Option<anyhow::Result<String>> {
-    write_once_ai(&data.ai, guild_name, persona, request).await
+/// `progress` verilirse cevap yazıldıkça oraya da gönderilir (komutlarda akışlı gösterim için).
+pub async fn write_once(data: &Data, guild_name: &str, persona: Option<&str>, request: &str, progress: Option<&provider::Progress>) -> Option<anyhow::Result<String>> {
+    write_once_ai(&data.ai, guild_name, persona, request, progress).await
 }
 
-pub async fn write_once_ai(ai: &Ai, guild_name: &str, persona: Option<&str>, request: &str) -> Option<anyhow::Result<String>> {
+pub async fn write_once_ai(ai: &Ai, guild_name: &str, persona: Option<&str>, request: &str, progress: Option<&provider::Progress>) -> Option<anyhow::Result<String>> {
     let config = ai.config.as_ref()?;
     let Ok(_permit) = ai.limiter.acquire().await else {
         return None;
@@ -131,7 +132,7 @@ pub async fn write_once_ai(ai: &Ai, guild_name: &str, persona: Option<&str>, req
     );
     let request: String = request.trim().chars().take(MAX_INPUT_CHARS).collect();
     let message = ChatMessage { role: Role::User, content: request };
-    Some(provider::complete(&ai.client, config, &system, &[message], None, false).await)
+    Some(provider::complete(&ai.client, config, &system, &[message], progress, false).await)
 }
 
 /// Arka plan işleri için tek seferlik istek: verilen sistem metniyle (sunucu kişiliği yok).
@@ -535,7 +536,7 @@ async fn live_reply(
 }
 
 /// Yazılmakta olan metin: Discord sınırına kısaltılır, sonuna imleç eklenir.
-fn live_text(partial: &str) -> String {
+pub(crate) fn live_text(partial: &str) -> String {
     let partial = partial.trim();
     if partial.is_empty() {
         return String::new();
