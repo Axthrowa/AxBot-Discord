@@ -1,7 +1,7 @@
 //! Sağ tık menüsü komutları (Uygulamalar menüsü). Bunlar 100'lük slash komut sınırına sayılmaz
 //! (ayrı sınır: 5 mesaj + 5 üye komutu).
 //!
-//! Mesaja sağ tık: Çevir, Yetkiliye bildir, Starboard'a ekle. Üyeye sağ tık: Sicil (`mod_tools::sicil`), Not ekle, Hızlı ceza.
+//! Mesaja sağ tık: Çevir, Özetle, YZ cevap taslağı, Yetkiliye bildir, Hızlı ceza (Discord sınırı 5). Üyeye sağ tık: Sicil (`mod_tools::sicil`), Not ekle, Hızlı ceza (üye).
 
 use poise::serenity_prelude::{self as serenity, CreateAllowedMentions, CreateEmbed, CreateEmbedAuthor, CreateMessage, Mentionable};
 use poise::CreateReply;
@@ -162,30 +162,6 @@ pub async fn bildir(ctx: Context<'_>, message: serenity::Message) -> Result<(), 
     reply_private(ctx, if sent.is_ok() { "✅ Mesaj yetkililere bildirildi. Teşekkürler." } else { "❌ Bildirim gönderilemedi; bir yetkiliye doğrudan yaz." }).await
 }
 
-/// Mesajı yıldız sayısına bakmadan starboard kanalına ekler (Mesajları Yönet izni gerekir).
-#[poise::command(context_menu_command = "Starboard'a ekle", guild_only, required_permissions = "MANAGE_MESSAGES", default_member_permissions = "MANAGE_MESSAGES")]
-pub async fn starboard_ekle(ctx: Context<'_>, message: serenity::Message) -> Result<(), Error> {
-    let Some(guild_id) = ctx.guild_id() else {
-        return Ok(());
-    };
-    let data = ctx.data();
-    let cfg = data.guild_configs.get(&data.db, guild_id).await?;
-    let Some(board) = cfg.starboard_channel else {
-        return reply_private(ctx, "Starboard kanalı ayarlı değil (`/starboard` ya da panel).").await;
-    };
-    if message.channel_id == board {
-        return reply_private(ctx, "Bu mesaj zaten starboard kanalında.").await;
-    }
-    let header = format!("📌 {} tarafından eklendi | {}", ctx.author().id.mention(), message.channel_id.mention());
-    let post = CreateMessage::new()
-        .content(header)
-        .embed(crate::starboard::embed(&message))
-        .components(crate::starboard::link(&message, guild_id))
-        .allowed_mentions(CreateAllowedMentions::new());
-    let sent = board.send_message(ctx.http(), post).await;
-    reply_private(ctx, if sent.is_ok() { "⭐ Mesaj starboard'a eklendi." } else { "❌ Eklenemedi; botun starboard kanalında mesaj gönderme izni olmalı." }).await
-}
-
 #[derive(Debug, poise::Modal)]
 #[name = "Üyeye not ekle"]
 struct NoteModal {
@@ -225,7 +201,8 @@ pub async fn not_ekle_menu(ctx: AppContext<'_>, user: serenity::User) -> Result<
 }
 
 /// Hızlı ceza düğmeleri: (anahtar, etiket, gereken izin).
-const QUICK_ACTIONS: [(&str, &str, serenity::Permissions); 6] = [
+const QUICK_ACTIONS: [(&str, &str, serenity::Permissions); 7] = [
+    ("warn", "Uyar", serenity::Permissions::MODERATE_MEMBERS),
     ("t10m", "Sustur 10 dk", serenity::Permissions::MODERATE_MEMBERS),
     ("t1h", "Sustur 1 sa", serenity::Permissions::MODERATE_MEMBERS),
     ("t1d", "Sustur 1 gün", serenity::Permissions::MODERATE_MEMBERS),
@@ -234,9 +211,19 @@ const QUICK_ACTIONS: [(&str, &str, serenity::Permissions); 6] = [
     ("ban", "Yasakla", serenity::Permissions::BAN_MEMBERS),
 ];
 
-/// Üyeye tek tıkla ceza: susturma (10 dk / 1 sa / 1 gün), karantina, atma, yasaklama. Yalnızca iznin olan düğmeler görünür.
-#[poise::command(context_menu_command = "Hızlı ceza", guild_only, required_permissions = "MODERATE_MEMBERS", default_member_permissions = "MODERATE_MEMBERS")]
+/// Üyeye tek tıkla ceza: uyarı, susturma (10 dk / 1 sa / 1 gün), karantina, atma, yasaklama. Yalnızca iznin olan düğmeler görünür.
+#[poise::command(context_menu_command = "Hızlı ceza (üye)", guild_only, required_permissions = "MODERATE_MEMBERS", default_member_permissions = "MODERATE_MEMBERS")]
 pub async fn hizli_ceza(ctx: AppContext<'_>, user: serenity::User) -> Result<(), Error> {
+    quick_punish(ctx, user).await
+}
+
+/// Mesajın yazarına hızlı ceza (mesaja sağ tık). poise menüleri ada göre bulur; iki menünün adı farklı olmalı.
+#[poise::command(context_menu_command = "Hızlı ceza", guild_only, required_permissions = "MODERATE_MEMBERS", default_member_permissions = "MODERATE_MEMBERS")]
+pub async fn hizli_ceza_mesaj(ctx: AppContext<'_>, message: serenity::Message) -> Result<(), Error> {
+    quick_punish(ctx, message.author).await
+}
+
+async fn quick_punish(ctx: AppContext<'_>, user: serenity::User) -> Result<(), Error> {
     use std::time::Duration;
     let pctx = poise::Context::Application(ctx);
     let Some(guild_id) = ctx.guild_id() else {
@@ -283,6 +270,7 @@ pub async fn hizli_ceza(ctx: AppContext<'_>, user: serenity::User) -> Result<(),
     };
     let hours = |h: u64| Duration::from_secs(h * 3600);
     match key.as_str() {
+        "warn" => super::moderation::do_warn(pctx, guild_id, member, "Hızlı ceza".to_owned(), 1).await,
         "t10m" => super::moderation::do_timeout(pctx, member, Duration::from_secs(600), reason).await,
         "t1h" => super::moderation::do_timeout(pctx, member, hours(1), reason).await,
         "t1d" => super::moderation::do_timeout(pctx, member, hours(24), reason).await,

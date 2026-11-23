@@ -27,6 +27,7 @@ mod economy;
 mod error;
 mod eventlog;
 mod events;
+mod perms;
 mod feeds;
 mod catalog;
 mod feelm;
@@ -280,7 +281,14 @@ async fn run() -> anyhow::Result<()> {
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: commands::all(),
+            commands: commands::all()
+                .into_iter()
+                .map(|mut c| {
+                    perms::take_required(&mut c, serenity::Permissions::empty());
+                    c
+                })
+                .collect(),
+            command_check: Some(|ctx| Box::pin(perms::check(ctx))),
             on_error: |err| Box::pin(error::on_error(err)),
             pre_command: |ctx| {
                 Box::pin(async move {

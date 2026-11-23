@@ -131,6 +131,8 @@ pub async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
                 warn!(error = %e, "Kullanım ipucu gönderilemedi");
             }
         }
+        // İzin denetimi (perms::check) cevabı zaten verdi.
+        poise::FrameworkError::CommandCheckFailed { error: None, .. } => {}
         poise::FrameworkError::EventHandler { error, event, .. } => {
             error!(event = event.snake_case_name(), error = ?error, "Event handler hatası");
         }

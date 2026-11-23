@@ -418,7 +418,10 @@ pub async fn warn(
     let Some(reason) = reason_text(ctx, Some(reason)).await else {
         return reply_private(ctx, "Uyarı için bir sebep yazmalısın.").await;
     };
+    do_warn(ctx, guild_id, member, reason, points).await
+}
 
+pub(super) async fn do_warn(ctx: Context<'_>, guild_id: GuildId, member: Member, reason: String, points: i32) -> Result<(), Error> {
     if member.user.bot {
         return reply_private(ctx, "Botlar uyarılamaz.").await;
     }

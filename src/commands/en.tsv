@@ -109,9 +109,9 @@ C | cevir_mesaj | Translate message
 C | bildir | Report message
 C | ozetle | Summarize up to here
 C | cevap_taslagi | AI reply draft
-C | starboard_ekle | Add to starboard
 C | not_ekle_menu | Add staff note
-C | hizli_ceza | Quick punishment
+C | hizli_ceza | Quick punishment (member)
+C | hizli_ceza_mesaj | Quick punishment
 C | afk | afk | Marks you as AFK; the bot tells people who mention you. Your next message clears it.
 P | afk | sebep | reason | Why are you AFK? (optional)
 C | itiraf | confess | Sends an anonymous confession to the confession channel.
