@@ -18,7 +18,6 @@ use crate::data::Data;
 use crate::db::snowflake;
 use crate::guild_config::to_id;
 use crate::modals;
-use crate::verification::modal_reply;
 
 pub const PREFIX: &str = "appeal:";
 
@@ -168,6 +167,8 @@ async fn submit(ctx: &serenity::Context, data: &Data, modal: &ModalInteraction, 
     let Some(guild_id) = to_id(Some(guild)).map(GuildId::new) else {
         return Ok(());
     };
+    // Yasak denetimi, kayıt ve kanala gönderim 3 sn'yi aşabilir; Discord'a önce "düşünüyor" denir.
+    modal.defer_ephemeral(ctx).await?;
     let channel = data.guild_configs.get(&data.db, guild_id).await?.appeal_channel;
     let answers = modals::values(modal);
     let why = answers.first().cloned().unwrap_or_default();
@@ -176,7 +177,8 @@ async fn submit(ctx: &serenity::Context, data: &Data, modal: &ModalInteraction, 
         Filed::Sent => "✅ İtirazın yetkililere iletildi. Sonuç sana DM ile bildirilecek.".to_owned(),
         other => other.message(),
     };
-    modal_reply(ctx, modal, &text).await
+    modal.edit_response(ctx, serenity::EditInteractionResponse::new().content(text)).await?;
+    Ok(())
 }
 
 /// İtiraz kaydının sonucu (Discord formu ve web formu ortak kullanır).
