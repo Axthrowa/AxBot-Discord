@@ -499,26 +499,29 @@ pub async fn reply_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) 
 
 // ---------------------------------------------------------------- Davet takibi
 
-pub async fn invite_fields(state: &WebState, guild_id: GuildId) -> anyhow::Result<(String, bool)> {
-    let settings = match state.settings.get::<crate::invites::InviteSettings>(&state.db, guild_id).await {
-        Ok(s) => s,
-        Err(_) => std::sync::Arc::new(crate::invites::InviteSettings::default()),
-    };
+pub static INVITES: super::schema::Schema = super::schema::Schema {
+    title: "Sahte Davet ve Hızlı Çıkış Filtresi",
+    fields: &[
+        super::schema::Field {
+            key: "fake_account_days",
+            label: "Hesap Yaşı Sınırı (Gün)",
+            hint: "Sunucuya katıldığında bu günden daha yeni olan hesaplar 'sahte davet' olarak işaretlenir ve sayılmaz (varsayılan: 7 gün, 0 = devre dışı).",
+            kind: super::schema::Kind::Number { min: 0, max: 365 },
+        },
+        super::schema::Field {
+            key: "quick_leave_mins",
+            label: "Hızlı Çıkış Süresi (Dakika)",
+            hint: "Sunucuya katıldıktan sonra bu dakika içinde ayrılanlar 'sahte/hızlı çıkış' olarak işaretlenir (varsayılan: 10 dakika, 0 = devre dışı).",
+            kind: super::schema::Kind::Number { min: 0, max: 1440 },
+        },
+    ],
+    store: super::schema::store::<crate::invites::InviteSettings>(),
+    enabled_by: None,
+    extra: Some(|state, guild_id, _| Box::pin(invite_extra(state, guild_id))),
+};
 
-    let settings_section = section(
-        "Sahte Davet ve Hızlı Çıkış Filtresi",
-        field(
-            "Hesap Yaşı Sınırı (Gün)",
-            &format!("<input type=\"number\" name=\"fake_account_days\" value=\"{}\" min=\"0\" max=\"365\">", settings.fake_account_days),
-            "Sunucuya katıldığında bu günden daha yeni olan hesaplar 'sahte davet' olarak işaretlenir ve sayılmaz (varsayılan: 7 gün, 0 = devre dışı).",
-        )
-        + &field(
-            "Hızlı Çıkış Süresi (Dakika)",
-            &format!("<input type=\"number\" name=\"quick_leave_mins\" value=\"{}\" min=\"0\" max=\"1440\">", settings.quick_leave_mins),
-            "Sunucuya katıldıktan sonra bu dakika içinde ayrılanlar 'sahte/hızlı çıkış' olarak işaretlenir (varsayılan: 10 dakika, 0 = devre dışı).",
-        ),
-    );
-
+/// Davet sayfasında ayarların altındaki sıralama ve açıklama.
+async fn invite_extra(state: &WebState, guild_id: GuildId) -> anyhow::Result<String> {
     let top = crate::invites::leaderboard(&state.db, guild_id, 25).await?;
     let mut list = String::new();
     if top.is_empty() {
@@ -539,24 +542,12 @@ pub async fn invite_fields(state: &WebState, guild_id: GuildId) -> anyhow::Resul
         }
         list.push_str("</table>");
     }
-    let out = settings_section
-        + &section("Davet sıralaması", list)
+    let out = section("Davet sıralaması", list)
         + &section(
             "Nasıl çalışır",
             "<p class=\"note\">Botun 'Sunucuyu Yönet' izni olmalı. Sunucudan ayrılanlar, belirlenen süreden hızlı çıkanlar ve yeni açılmış sahte hesaplar sayılmaz. \
              Komutlar: <code>/davetler kişi</code> (bir üyenin davetleri), <code>/davetler sıralama</code>.</p>"
                 .to_owned(),
         );
-    Ok((out, true))
-}
-
-pub async fn invite_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Result<(), &'static str> {
-    let fake_account_days = input.number("fake_account_days", 0, 365)?;
-    let quick_leave_mins = input.number("quick_leave_mins", 0, 1440)?;
-    let settings = crate::invites::InviteSettings {
-        fake_account_days,
-        quick_leave_mins,
-    };
-    state.settings.set(&state.db, guild_id, settings).await.map_err(failed(guild_id, "davet ayarı"))?;
-    Ok(())
+    Ok(out)
 }

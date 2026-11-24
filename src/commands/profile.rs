@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use poise::serenity_prelude::{
-    self as serenity, CreateAllowedMentions, CreateAttachment, CreateEmbed, Mentionable,
+    self as serenity, CreateAllowedMentions, CreateAttachment, Mentionable,
 };
 use poise::CreateReply;
 
@@ -43,18 +43,22 @@ pub async fn profil(
     let joined = ctx.guild().and_then(|g| g.members.get(&user.id).and_then(|m| m.joined_at)).map(|t| t.unix_timestamp());
 
     let name = user.global_name.clone().unwrap_or_else(|| user.name.clone());
-    let mut embed = CreateEmbed::new()
-        .title(format!("👤 {name}"))
-        .colour(serenity::Colour::from_rgb(accent[0], accent[1], accent[2]))
-        .field("Seviye", format!("**{}** · {} XP", progress.level, rank.total_xp), true)
-        .field("Sıra", rank.position.map_or_else(|| "—".to_owned(), |p| format!("#{p}")), true)
-        .field("İtibar", format!("⭐ {rep}"), true)
-        .field("Cüzdan", economy::cash(guild_id, account.wallet), true)
-        .field("Banka", economy::cash(guild_id, account.bank), true)
-        .field("Başarım", format!("🏅 {earned}"), true);
+    let mut stats = format!(
+        "## 👤 {name}
+**Seviye** {} · {} XP · **Sıra** {}
+**İtibar** ⭐ {rep} · **Başarım** 🏅 {earned}
+**Cüzdan** {} · **Banka** {}",
+        progress.level,
+        rank.total_xp,
+        rank.position.map_or_else(|| "—".to_owned(), |p| format!("#{p}")),
+        economy::cash(guild_id, account.wallet),
+        economy::cash(guild_id, account.bank),
+    );
     if let Some(joined) = joined {
-        embed = embed.field("Sunucuya katılım", format!("<t:{joined}:D>"), true);
+        stats.push_str(&format!("
+**Sunucuya katılım** <t:{joined}:D>"));
     }
+    let message = crate::ui::Message::new().accent(serenity::Colour::from_rgb(accent[0], accent[1], accent[2]));
 
     // Seviye kartı profilin görseli olur; çizilemezse profil yine gösterilir.
     let card = crate::cards::RankCard {
@@ -76,14 +80,15 @@ pub async fn profil(
     let (avatar, backdrop) = tokio::join!(crate::members::avatar_image(&user), backdrop);
     let _permit = crate::cards::RENDER_SEMAPHORE.acquire().await.ok();
     let drawn = tokio::task::spawn_blocking(move || crate::cards::render_rank(&card, avatar.as_ref(), backdrop.as_ref())).await;
-    let mut reply = CreateReply::default().allowed_mentions(CreateAllowedMentions::new());
-    if let Ok(Ok(bytes)) = drawn {
-        reply = reply.attachment(CreateAttachment::bytes(bytes, "profil.jpg"));
-        embed = embed.image("attachment://profil.jpg");
+    let message = if let Ok(Ok(bytes)) = drawn {
+        message
+            .text(stats)
+            .gallery(["attachment://profil.jpg".to_owned()])
+            .file(CreateAttachment::bytes(bytes, "profil.jpg"))
     } else {
-        embed = embed.thumbnail(user.face());
-    }
-    ctx.send(reply.embed(embed)).await?;
+        message.section(stats, user.face())
+    };
+    crate::ui::reply(ctx, &message).await?;
     Ok(())
 }
 

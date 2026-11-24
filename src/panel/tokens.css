@@ -1,0 +1,100 @@
+/* Panel tasarım belirteçleri ("kontrol odası"): renk, yazı, boşluk. Bileşenler (`panel.css`) yalnızca
+   bunları kullanır; sabit renk yazılmaz.
+   Tema: <html data-theme="koyu|acik|siyah|grafit">; yoksa sistemin açık/koyu tercihi.
+   Vurgu: <html data-accent="yosun|mavi|mor|pembe|turuncu|kirmizi|yesil">. Seçim `theme.js` ile tarayıcıda saklanır. */
+
+/* ---- Koyu (varsayılan): gece laciverti ---- */
+:root {
+  color-scheme: dark;
+  --bg: #10151F;
+  --aside: #0C1018;
+  --surface: #171D2A;
+  --surface-hover: #1C2334;
+  --surface-raised: #1E2536;
+  --field: #0E131C;
+  --sunken: #0A0E15;
+  --chip: #232B3D;
+  --line: #252D3F;
+  --text: #E7EAF1;
+  --text-strong: #FFFFFF;
+  --muted: #8D96AE;
+  --ok: #3FBF6F;
+  --warn: #E0A43A;
+  --err: #E5534B;
+  --switch-off: #2A3346;
+  --switch-knob: #93A0B8;
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  /* Vurgu: her rengin koyu ve açık temadaki tonu; tema hangisini kullanacağını seçer. */
+  --accent-dark: #2FB8A6;
+  --accent-light: #1F8F81;
+  --accent: var(--accent-dark);
+  --on-accent: #0A1210;
+  --link: color-mix(in srgb, var(--accent) 75%, white);
+  --link-hover: color-mix(in srgb, var(--accent) 50%, white);
+
+  --font: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-xl: 20px;
+  --r-sm: 4px; --r-md: 8px;
+  --row: 32px;
+
+  /* Türetilmiş tonlar: her temada çalışır. */
+  --accent-hover: color-mix(in srgb, var(--accent) 85%, black);
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 45%, transparent);
+  --focus: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  --tint-1: color-mix(in srgb, var(--text) 4%, transparent);
+  --tint-2: color-mix(in srgb, var(--text) 8%, transparent);
+  --tint-3: color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+/* ---- Açık: tema seçilmemişse sistem tercihine göre, seçilmişse her zaman ---- */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bg: #F5F6F9; --aside: #ECEEF3; --surface: #FFFFFF; --surface-hover: #F7F8FB; --surface-raised: #FFFFFF;
+    --field: #FFFFFF; --sunken: #F0F2F6; --chip: #E4E7EE; --line: #E1E4EB;
+    --text: #1B2130; --text-strong: #11151F; --muted: #5D6680;
+    --ok: #2E9E57; --warn: #B7831F; --err: #C9443D;
+    --switch-off: #C9CFDA; --switch-knob: #FFFFFF; --shadow: 0 8px 24px rgba(17, 21, 31, 0.12);
+    --accent: var(--accent-light); --on-accent: #FFFFFF;
+    --link: color-mix(in srgb, var(--accent) 85%, black); --link-hover: color-mix(in srgb, var(--accent) 65%, black);
+  }
+}
+:root[data-theme="acik"] {
+  color-scheme: light;
+  --bg: #F5F6F9; --aside: #ECEEF3; --surface: #FFFFFF; --surface-hover: #F7F8FB; --surface-raised: #FFFFFF;
+  --field: #FFFFFF; --sunken: #F0F2F6; --chip: #E4E7EE; --line: #E1E4EB;
+  --text: #1B2130; --text-strong: #11151F; --muted: #5D6680;
+  --ok: #2E9E57; --warn: #B7831F; --err: #C9443D;
+  --switch-off: #C9CFDA; --switch-knob: #FFFFFF; --shadow: 0 8px 24px rgba(17, 21, 31, 0.12);
+  --accent: var(--accent-light); --on-accent: #FFFFFF;
+  --link: color-mix(in srgb, var(--accent) 85%, black); --link-hover: color-mix(in srgb, var(--accent) 65%, black);
+}
+
+/* ---- Siyah: OLED ekranlar için saf siyah zemin ---- */
+:root[data-theme="siyah"] {
+  --bg: #000000; --aside: #000000; --surface: #0B0B0E; --surface-hover: #121217; --surface-raised: #141419;
+  --field: #050507; --sunken: #000000; --chip: #1A1A21; --line: #1E1E26;
+  --text: #E6E6EA; --muted: #8A8A96; --switch-off: #24242C;
+}
+
+/* ---- Grafit: renksiz, nötr gri ---- */
+:root[data-theme="grafit"] {
+  --bg: #1B1C1F; --aside: #161719; --surface: #232428; --surface-hover: #2A2B30; --surface-raised: #2C2D32;
+  --field: #18191B; --sunken: #121314; --chip: #34353B; --line: #34353B;
+  --text: #E8E8EA; --muted: #9A9BA3; --switch-off: #3A3B42; --switch-knob: #A5A6AE;
+}
+
+/* ---- Vurgu renkleri (koyu ton / açık ton) ---- */
+:root[data-accent="mavi"]    { --accent-dark: #5B8DEF; --accent-light: #2F6BD8; }
+:root[data-accent="mor"]     { --accent-dark: #A084F5; --accent-light: #6D4BD6; }
+:root[data-accent="pembe"]   { --accent-dark: #EC79B0; --accent-light: #C23F7E; }
+:root[data-accent="turuncu"] { --accent-dark: #F29A50; --accent-light: #BD611A; }
+:root[data-accent="kirmizi"] { --accent-dark: #EC6A60; --accent-light: #C2413A; }
+:root[data-accent="yesil"]   { --accent-dark: #55C77F; --accent-light: #2A8F4E; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

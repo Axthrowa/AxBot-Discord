@@ -106,55 +106,55 @@ pub async fn automation_fields(state: &WebState, guild_id: GuildId, options: &Op
         list.push_str("<div class=\"auto-cards\" style=\"display:grid;gap:12px;margin-bottom:18px;\">");
         for a in &settings.automations {
             let status_badge = if a.enabled {
-                "<span style=\"display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.75em;background:#23a55a;color:#fff;font-weight:600;\">Açık</span>"
+                "<span style=\"display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.75em;background:var(--ok);color:var(--on-accent);font-weight:600;\">Açık</span>"
             } else {
-                "<span style=\"display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.75em;background:#80848e;color:#fff;font-weight:600;\">Kapalı</span>"
+                "<span style=\"display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.75em;background:var(--chip);color:var(--text);font-weight:600;\">Kapalı</span>"
             };
             let _ = write!(
                 list,
-                "<div class=\"auto-card\" style=\"background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:12px 16px;\">\
+                "<div class=\"auto-card\" style=\"background:color-mix(in srgb, var(--text) 2%, transparent);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:8px;padding:12px 16px;\">\
                    <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;\">\
                      <div style=\"display:flex;align-items:center;gap:8px;\">\
                        {status_badge}\
                        <strong style=\"font-size:1.05em;\">{}</strong>\
                      </div>\
                      <div style=\"display:flex;gap:12px;align-items:center;\">\
-                       <button type=\"button\" onclick=\"toggleDryRun({id})\" style=\"background:rgba(88,101,242,0.15);border:1px solid rgba(88,101,242,0.4);color:#5865F2;padding:3px 10px;border-radius:6px;font-size:0.85em;cursor:pointer;font-weight:600;\">🧪 Test Et (Dry-Run)</button>\
+                       <button type=\"button\" onclick=\"toggleDryRun({id})\" style=\"background:color-mix(in srgb, var(--accent) 15%, transparent);border:1px solid color-mix(in srgb, var(--accent) 40%, transparent);color:var(--accent);padding:3px 10px;border-radius:6px;font-size:0.85em;cursor:pointer;font-weight:600;\">🧪 Test Et (Dry-Run)</button>\
                        <label style=\"display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.9em;\">\
                          <input type=\"checkbox\" name=\"auto_on\" value=\"{id}\"{}>\
                          <span>Aktif</span>\
                        </label>\
-                       <label style=\"display:flex;align-items:center;gap:6px;cursor:pointer;color:#ed4245;font-size:0.9em;\">\
+                       <label style=\"display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--err);font-size:0.9em;\">\
                          <input type=\"checkbox\" name=\"auto_del\" value=\"{id}\">\
                          <span>Sil</span>\
                        </label>\
                      </div>\
                    </div>\
-                   <div style=\"display:flex;flex-wrap:wrap;gap:6px;font-size:0.85em;color:#b5bac1;\">\
-                     <span style=\"background:rgba(88,101,242,0.2);color:#5865F2;padding:2px 8px;border-radius:4px;font-weight:600;\">⚡ {}</span>\
+                   <div style=\"display:flex;flex-wrap:wrap;gap:6px;font-size:0.85em;color:var(--muted);\">\
+                     <span style=\"background:color-mix(in srgb, var(--accent) 20%, transparent);color:var(--accent);padding:2px 8px;border-radius:4px;font-weight:600;\">⚡ {}</span>\
                      <span>➔</span>\
                      <span>{}</span>\
                    </div>\
-                   <div id=\"dryrun-box-{id}\" style=\"display:none;margin-top:12px;padding:12px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.08);border-radius:6px;\">\
+                   <div id=\"dryrun-box-{id}\" style=\"display:none;margin-top:12px;padding:12px;background:var(--sunken);border:1px solid color-mix(in srgb, var(--text) 8%, transparent);border-radius:6px;\">\
                      <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;\">\
                        <strong style=\"font-size:0.95em;\">Simülasyon Girdileri (Canlı Yan Etki Yoktur)</strong>\
-                       <button type=\"button\" onclick=\"execDryRun({id}, '{trigger_code}', '{guild_id}')\" style=\"background:#5865F2;color:#fff;border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:0.85em;font-weight:600;\">Simülasyonu Çalıştır</button>\
+                       <button type=\"button\" onclick=\"execDryRun({id}, '{trigger_code}', '{guild_id}')\" style=\"background:var(--accent);color:var(--on-accent);border:none;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:0.85em;font-weight:600;\">Simülasyonu Çalıştır</button>\
                      </div>\
                      <div style=\"display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:8px;font-size:0.85em;\">\
                        <div>\
-                         <label style=\"display:block;color:#b5bac1;margin-bottom:2px;\">Mesaj / İsim</label>\
-                         <input type=\"text\" id=\"dr-content-{id}\" placeholder=\"Örnek mesaj veya içerik\" style=\"width:100%;box-sizing:border-box;padding:4px 8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#fff;border-radius:4px;\">\
+                         <label style=\"display:block;color:var(--muted);margin-bottom:2px;\">Mesaj / İsim</label>\
+                         <input type=\"text\" id=\"dr-content-{id}\" placeholder=\"Örnek mesaj veya içerik\" style=\"width:100%;box-sizing:border-box;padding:4px 8px;background:color-mix(in srgb, var(--text) 5%, transparent);border:1px solid color-mix(in srgb, var(--text) 10%, transparent);color:var(--text-strong);border-radius:4px;\">\
                        </div>\
                        <div>\
-                         <label style=\"display:block;color:#b5bac1;margin-bottom:2px;\">Yayıncı / Platform</label>\
-                         <input type=\"text\" id=\"dr-streamer-{id}\" placeholder=\"elraenn veya twitch\" style=\"width:100%;box-sizing:border-box;padding:4px 8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#fff;border-radius:4px;\">\
+                         <label style=\"display:block;color:var(--muted);margin-bottom:2px;\">Yayıncı / Platform</label>\
+                         <input type=\"text\" id=\"dr-streamer-{id}\" placeholder=\"elraenn veya twitch\" style=\"width:100%;box-sizing:border-box;padding:4px 8px;background:color-mix(in srgb, var(--text) 5%, transparent);border:1px solid color-mix(in srgb, var(--text) 10%, transparent);color:var(--text-strong);border-radius:4px;\">\
                        </div>\
                        <div>\
-                         <label style=\"display:block;color:#b5bac1;margin-bottom:2px;\">Yayın Başlığı</label>\
-                         <input type=\"text\" id=\"dr-title-{id}\" placeholder=\"Canlı Yayın Başlığı\" style=\"width:100%;box-sizing:border-box;padding:4px 8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);color:#fff;border-radius:4px;\">\
+                         <label style=\"display:block;color:var(--muted);margin-bottom:2px;\">Yayın Başlığı</label>\
+                         <input type=\"text\" id=\"dr-title-{id}\" placeholder=\"Canlı Yayın Başlığı\" style=\"width:100%;box-sizing:border-box;padding:4px 8px;background:color-mix(in srgb, var(--text) 5%, transparent);border:1px solid color-mix(in srgb, var(--text) 10%, transparent);color:var(--text-strong);border-radius:4px;\">\
                        </div>\
                      </div>\
-                     <div style=\"margin-top:8px;display:flex;align-items:center;gap:6px;font-size:0.85em;color:#b5bac1;\">\
+                     <div style=\"margin-top:8px;display:flex;align-items:center;gap:6px;font-size:0.85em;color:var(--muted);\">\
                        <input type=\"checkbox\" id=\"dr-probe-{id}\">\
                        <label for=\"dr-probe-{id}\" style=\"cursor:pointer;\">Webhook uç noktasını canlı yokla (Probe POST, 4sn timeout)</label>\
                      </div>\
@@ -183,7 +183,7 @@ pub async fn automation_fields(state: &WebState, guild_id: GuildId, options: &Op
               var probe = document.getElementById('dr-probe-' + id).checked;\
               var resBox = document.getElementById('dr-res-' + id);\
               resBox.style.display = 'block';\
-              resBox.innerHTML = '<span style=\"color:#b5bac1;\">Simülasyon çalıştırılıyor...</span>';\
+              resBox.innerHTML = '<span style=\"color:var(--muted);\">Simülasyon çalıştırılıyor...</span>';\
               var payload = {\
                 automation_id: id,\
                 input: {\
@@ -202,19 +202,19 @@ pub async fn automation_fields(state: &WebState, guild_id: GuildId, options: &Op
               })\
               .then(function(r) { return r.json(); })\
               .then(function(data) {\
-                var html = '<div style=\"background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:10px;font-size:0.85em;\">';\
+                var html = '<div style=\"background:var(--sunken);border:1px solid color-mix(in srgb, var(--text) 10%, transparent);border-radius:6px;padding:10px;font-size:0.85em;\">';\
                 var badge = data.matched\
-                  ? '<span style=\"color:#23a55a;font-weight:bold;\">● Koşullar Eşleşti (Eylemler Çalıştırılır)</span>'\
-                  : '<span style=\"color:#ed4245;font-weight:bold;\">○ Koşullar Eşleşmedi (Eylemler Çalıştırılmaz)</span>';\
+                  ? '<span style=\"color:var(--ok);font-weight:bold;\">● Koşullar Eşleşti (Eylemler Çalıştırılır)</span>'\
+                  : '<span style=\"color:var(--err);font-weight:bold;\">○ Koşullar Eşleşmedi (Eylemler Çalıştırılmaz)</span>';\
                 html += '<div style=\"margin-bottom:8px;\">' + badge + '</div>';\
                 html += '<div style=\"margin-bottom:8px;\"><strong>Koşul Kontrolleri:</strong><ul style=\"margin:4px 0 0 16px;padding:0;\">';\
                 data.condition_results.forEach(function(c) {\
-                  var icon = c.passed ? '<span style=\"color:#23a55a;\">✓</span> ' : '<span style=\"color:#ed4245;\">✗</span> ';\
+                  var icon = c.passed ? '<span style=\"color:var(--ok);\">✓</span> ' : '<span style=\"color:var(--err);\">✗</span> ';\
                   html += '<li style=\"margin-bottom:2px;\">' + icon + '<strong>' + c.name + ':</strong> ' + c.reason + '</li>';\
                 });\
                 html += '</ul></div>';\
                 if (data.rendered_message) {\
-                  html += '<div style=\"margin-bottom:6px;\"><strong>Mesaj Önizleme:</strong> <code style=\"background:rgba(255,255,255,0.1);padding:2px 6px;border-radius:3px;\">' + data.rendered_message + '</code></div>';\
+                  html += '<div style=\"margin-bottom:6px;\"><strong>Mesaj Önizleme:</strong> <code style=\"background:color-mix(in srgb, var(--text) 10%, transparent);padding:2px 6px;border-radius:3px;\">' + data.rendered_message + '</code></div>';\
                 }\
                 if (data.planned_actions && data.planned_actions.length > 0) {\
                   html += '<div style=\"margin-bottom:6px;\"><strong>Planlanan Eylemler:</strong><ul style=\"margin:4px 0 0 16px;padding:0;\">';\
@@ -228,9 +228,9 @@ pub async fn automation_fields(state: &WebState, guild_id: GuildId, options: &Op
                   html += '<div><strong>Webhook Denetimi:</strong> ' + wc.ssrf_status;\
                   if (wc.probe_attempted) {\
                     if (wc.probe_status_code) {\
-                      html += ' | <span style=\"color:#23a55a;\">Probe Yanıtı: HTTP ' + wc.probe_status_code + ' (' + wc.probe_latency_ms + 'ms)</span>';\
+                      html += ' | <span style=\"color:var(--ok);\">Probe Yanıtı: HTTP ' + wc.probe_status_code + ' (' + wc.probe_latency_ms + 'ms)</span>';\
                     } else if (wc.probe_error) {\
-                      html += ' | <span style=\"color:#ed4245;\">Probe Hatası: ' + wc.probe_error + '</span>';\
+                      html += ' | <span style=\"color:var(--err);\">Probe Hatası: ' + wc.probe_error + '</span>';\
                     }\
                   }\
                   html += '</div>';\
@@ -239,7 +239,7 @@ pub async fn automation_fields(state: &WebState, guild_id: GuildId, options: &Op
                 resBox.innerHTML = html;\
               })\
               .catch(function(err) {\
-                resBox.innerHTML = '<span style=\"color:#ed4245;\">Simülasyon isteği başarısız: ' + err + '</span>';\
+                resBox.innerHTML = '<span style=\"color:var(--err);\">Simülasyon isteği başarısız: ' + err + '</span>';\
               });\
             }\
             </script>"

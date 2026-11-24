@@ -126,18 +126,18 @@ pub async fn list_page(
             let desc = tmpl.description.as_deref().unwrap_or("Açıklama yok");
             let _ = write!(
                 body,
-                "<div style=\"background:var(--bg-tertiary, #1e1f22);border:1px solid var(--border, #3f4147);border-radius:6px;padding:14px;\">\
+                "<div style=\"background:var(--sunken);border:1px solid var(--line);border-radius:6px;padding:14px;\">\
                  <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;\">\
                  <h4 style=\"margin:0;\">{}</h4>\
-                 <span class=\"badge\" style=\"background:rgba(88,101,242,0.2);color:#5865f2;padding:2px 6px;border-radius:4px;font-size:11px;\">{}</span>\
+                 <span class=\"badge\" style=\"background:color-mix(in srgb, var(--accent) 20%, transparent);color:var(--accent);padding:2px 6px;border-radius:4px;font-size:11px;\">{}</span>\
                  </div>\
-                 <p style=\"font-size:13px;color:var(--text-muted, #949ba4);margin-bottom:10px;\">{}</p>\
+                 <p style=\"font-size:13px;color:var(--muted);margin-bottom:10px;\">{}</p>\
                  <div style=\"font-size:12px;margin-bottom:10px;\">\
                  • <b>{}</b> Rol · <b>{}</b> Kanal (İzinler dahil)<br>\
                  • Kullanım: <b>{}</b> kez\
                  </div>\
                  <div style=\"display:flex;align-items:center;justify-content:space-between;gap:8px;\">\
-                 <code style=\"background:#000;padding:3px 8px;border-radius:4px;font-size:13px;color:#57f287;\">{}</code>\
+                 <code style=\"background:var(--sunken);padding:3px 8px;border-radius:4px;font-size:13px;color:var(--ok);\">{}</code>\
                  <span class=\"note\" style=\"font-size:11px;\">Discord: /yedek şablon-yükle kod:{}</span>\
                  </div>\
                  </div>",

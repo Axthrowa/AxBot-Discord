@@ -7,7 +7,7 @@ use std::time::Duration;
 use poise::serenity_prelude::{ChannelId, ChannelType, CreateAllowedMentions, CreateMessage, CreatePoll, CreatePollAnswer, GuildId, RoleId};
 use tracing::warn;
 
-use super::plugins::{checkbox, checklist, field, radios, section, Input, Options};
+use super::plugins::{checkbox, field, section, Input, Options};
 use crate::antinuke::{self, AntiNukeSettings, Punishment};
 use crate::guild_config::Setting;
 use crate::modmail::{self, ModmailSettings};
@@ -592,76 +592,96 @@ pub async fn application_save(state: &WebState, guild_id: GuildId, input: &Input
 
 // ---------------------------------------------------------------- ModMail
 
-pub async fn modmail_fields(state: &WebState, guild_id: GuildId, options: &Options) -> anyhow::Result<(String, bool)> {
-    let settings = state.settings.get::<ModmailSettings>(&state.db, guild_id).await?;
-    let out = section(
-        "ModMail",
-        field(
-            "Yetkili kanalı",
-            &channel_opt(options, "channel", settings.channel, "— Kapalı —"),
-            "Bir üye bota özelden yazınca bu kanalda o üyeye ait bir alt başlık açılır. Kanalı yalnızca yetkililerin görebildiğinden emin ol; \
-             botun bu kanalda 'Herkese Açık Alt Başlık Oluştur' ve 'Alt Başlıklarda Mesaj Gönder' izni olmalı.",
-        ) + &field(
-            "Üyeye ilk mesajında gönderilecek karşılama",
-            &big_textarea("greeting", settings.greeting.as_deref().unwrap_or_default(), modmail::MAX_GREETING, 3, "Boşsa hazır metin kullanılır"),
-            "",
-        ) + "<p class=\"note\">Yetkililer alt başlığa yazarak cevaplar; cevap üyeye “yetkili ekibi” adına gider (kimin yazdığı görünmez). \
-             <code>.</code> ile başlayan mesajlar iç nottur, üyeye gitmez. Konuşmayı bitirmek için alt başlığa <code>!kapat</code> yazılır.</p>",
-    );
-    Ok((out, settings.channel.is_some()))
-}
+use super::schema::{store, Field, Kind, Schema};
 
-pub async fn modmail_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Result<(), &'static str> {
-    let greeting = input.raw("greeting");
-    if greeting.chars().count() > modmail::MAX_GREETING {
-        return Err("metin");
-    }
-    let settings = ModmailSettings { channel: input.channel("channel")?.map(ChannelId::get), greeting: (!greeting.is_empty()).then(|| greeting.to_owned()) };
-    state.settings.set(&state.db, guild_id, settings).await.map_err(failed(guild_id, "ModMail"))
-}
+pub static MODMAIL: Schema = Schema {
+    title: "ModMail",
+    fields: &[
+        Field {
+            key: "channel",
+            label: "Yetkili kanalı",
+            hint: "Bir üye bota özelden yazınca bu kanalda o üyeye ait bir alt başlık açılır. Kanalı yalnızca yetkililerin görebildiğinden emin ol; \
+                   botun bu kanalda 'Herkese Açık Alt Başlık Oluştur' ve 'Alt Başlıklarda Mesaj Gönder' izni olmalı.",
+            kind: Kind::Channel,
+        },
+        Field {
+            key: "greeting",
+            label: "Üyeye ilk mesajında gönderilecek karşılama",
+            hint: "",
+            kind: Kind::Text { max: modmail::MAX_GREETING, rows: 3, placeholder: "Boşsa hazır metin kullanılır" },
+        },
+        Field {
+            key: "",
+            label: "Yetkililer alt başlığa yazarak cevaplar; cevap üyeye “yetkili ekibi” adına gider (kimin yazdığı görünmez). \
+                    <code>.</code> ile başlayan mesajlar iç nottur, üyeye gitmez. Konuşmayı bitirmek için alt başlığa <code>!kapat</code> yazılır.",
+            hint: "",
+            kind: Kind::Note,
+        },
+    ],
+    store: store::<ModmailSettings>(),
+    enabled_by: Some("channel"),
+    extra: None,
+};
 
 // ---------------------------------------------------------------- Yıkım koruması
 
-pub async fn antinuke_fields(state: &WebState, guild_id: GuildId, options: &Options) -> anyhow::Result<(String, bool)> {
-    let settings = state.settings.get::<AntiNukeSettings>(&state.db, guild_id).await?;
-    let choices: Vec<(&str, &str)> = Punishment::ALL.iter().map(|(_, key, label)| (*key, *label)).collect();
-    let out = section(
-        "Yıkım koruması",
-        checkbox("enabled", settings.enabled, "Kısa sürede çok sayıda kanal / rol silen ya da açan, üye yasaklayan / atan yetkiliyi durdur")
-            + &checkbox("guard_webhooks", settings.guard_webhooks, "Güvenilmeyen birinin açtığı webhook'u anında sil (webhook'la toplu spam / etiketlemeye karşı)")
-            + &checkbox("guard_bots", settings.guard_bots, "Güvenilmeyen birinin eklediği botu anında at")
-            + &checkbox(
-                "guard_permissions",
-                settings.guard_permissions,
-                "Güvenilmeyen birinin bir role verdiği yönetici / moderasyon yetkisini ve bir üyeye verdiği yetkili rolü geri al",
-            )
-            + &field("Kaç işlemde tetiklensin", &number_input("limit", settings.limit, antinuke::MIN_LIMIT, antinuke::MAX_LIMIT), "")
-            + &field("Kaç saniye içinde", &number_input("window", settings.window_secs, antinuke::MIN_WINDOW, antinuke::MAX_WINDOW), "Örn. 30 saniyede 3 işlem. Kanal açmada sınır iki katıdır (30 saniyede 6 kanal).")
-            + &field("Ne yapılsın", &radios("punishment", &choices, settings.punishment.key()), "")
-            + &field(
-                "Güvenilen roller",
-                &checklist("trusted_role", &options.all_roles, "@ ", &settings.trusted_roles),
-                "Bu rollerdeki üyeler sayılmaz. Sunucu sahibi ve botun kendisi hiçbir zaman sayılmaz. <b>Yönetici ekibinin rolünü buraya ekleyin</b>; yoksa onların yaptığı meşru yetki değişiklikleri, webhook ve bot eklemeleri de geri alınır.",
-            )
-            + "<p class=\"note\">Botun 'Denetim Kaydını Görüntüle' izni olmalı ve rolü yetkili rollerinin ÜSTÜNDE durmalı; yoksa kimin yaptığını göremez \
-               ya da cezayı uygulayamaz. Tetiklenince olay kayıtları kanalına uyarı yazılır.</p>",
-    );
-    Ok((out, settings.enabled))
+fn punishment_choices() -> Vec<(&'static str, &'static str)> {
+    Punishment::ALL.iter().map(|(_, key, label)| (*key, *label)).collect()
 }
 
-pub async fn antinuke_save(state: &WebState, guild_id: GuildId, input: &Input<'_>) -> Result<(), &'static str> {
-    let settings = AntiNukeSettings {
-        enabled: input.checked("enabled"),
-        limit: input.number("limit", antinuke::MIN_LIMIT, antinuke::MAX_LIMIT)?,
-        window_secs: input.number("window", antinuke::MIN_WINDOW, antinuke::MAX_WINDOW)?,
-        punishment: Punishment::parse(input.raw("punishment")).ok_or("hata")?,
-        trusted_roles: input.ids("trusted_role", &input.options.all_roles, "rol")?,
-        guard_webhooks: input.checked("guard_webhooks"),
-        guard_bots: input.checked("guard_bots"),
-        guard_permissions: input.checked("guard_permissions"),
-    };
-    state.settings.set(&state.db, guild_id, settings).await.map_err(failed(guild_id, "yıkım koruması"))
-}
+pub static ANTINUKE: Schema = Schema {
+    title: "Yıkım koruması",
+    fields: &[
+        Field {
+            key: "enabled",
+            label: "Kısa sürede çok sayıda kanal / rol silen ya da açan, üye yasaklayan / atan yetkiliyi durdur",
+            hint: "",
+            kind: Kind::Bool,
+        },
+        Field {
+            key: "guard_webhooks",
+            label: "Güvenilmeyen birinin açtığı webhook'u anında sil (webhook'la toplu spam / etiketlemeye karşı)",
+            hint: "",
+            kind: Kind::Bool,
+        },
+        Field { key: "guard_bots", label: "Güvenilmeyen birinin eklediği botu anında at", hint: "", kind: Kind::Bool },
+        Field {
+            key: "guard_permissions",
+            label: "Güvenilmeyen birinin bir role verdiği yönetici / moderasyon yetkisini ve bir üyeye verdiği yetkili rolü geri al",
+            hint: "",
+            kind: Kind::Bool,
+        },
+        Field {
+            key: "limit",
+            label: "Kaç işlemde tetiklensin",
+            hint: "",
+            kind: Kind::Number { min: antinuke::MIN_LIMIT, max: antinuke::MAX_LIMIT },
+        },
+        Field {
+            key: "window_secs",
+            label: "Kaç saniye içinde",
+            hint: "Örn. 30 saniyede 3 işlem. Kanal açmada sınır iki katıdır (30 saniyede 6 kanal).",
+            kind: Kind::Number { min: antinuke::MIN_WINDOW, max: antinuke::MAX_WINDOW },
+        },
+        Field { key: "punishment", label: "Ne yapılsın", hint: "", kind: Kind::Choice(punishment_choices) },
+        Field {
+            key: "trusted_roles",
+            label: "Güvenilen roller",
+            hint: "Bu rollerdeki üyeler sayılmaz. Sunucu sahibi ve botun kendisi hiçbir zaman sayılmaz. <b>Yönetici ekibinin rolünü buraya ekleyin</b>; yoksa onların yaptığı meşru yetki değişiklikleri, webhook ve bot eklemeleri de geri alınır.",
+            kind: Kind::Roles,
+        },
+        Field {
+            key: "",
+            label: "Botun 'Denetim Kaydını Görüntüle' izni olmalı ve rolü yetkili rollerinin ÜSTÜNDE durmalı; yoksa kimin yaptığını göremez \
+                    ya da cezayı uygulayamaz. Tetiklenince olay kayıtları kanalına uyarı yazılır.",
+            hint: "",
+            kind: Kind::Note,
+        },
+    ],
+    store: store::<AntiNukeSettings>(),
+    enabled_by: Some("enabled"),
+    extra: None,
+};
 
 #[cfg(test)]
 mod tests {

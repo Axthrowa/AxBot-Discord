@@ -93,12 +93,29 @@ async fn reward(ctx: Context<'_>, user: UserId, amount: i64) -> String {
 #[poise::command(
     slash_command,
     guild_only,
-    subcommands("xox", "dort_bagla", "adam_asmaca", "bilgi_yarismasi", "muzik_yarismasi"),
+    subcommands("oyun_panel", "xox", "dort_bagla", "adam_asmaca", "bilgi_yarismasi", "muzik_yarismasi"),
     subcommand_required,
     category = "Eğlence"
 )]
 pub async fn oyun(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
+}
+
+/// Oyun seçmek için düğmeli panel (seçilen oyun bu kanalda başlar).
+#[poise::command(slash_command, guild_only, rename = "panel", category = "Eğlence")]
+async fn oyun_panel(ctx: Context<'_>) -> Result<(), Error> {
+    let intro = crate::ui::Message::new().accent(serenity::Colour::DARK_GREEN).text(
+        "## 🎮 Oyunlar\nBir oyun seç, bu kanalda başlasın. XOX ve 4'lü bağla benimle oynanır; \
+         bir arkadaşınla oynamak için `/oyun xox rakip:…` yaz.",
+    );
+    let items = [
+        ("❌", "XOX", "xox"),
+        ("🔴", "4'lü bağla", "dort_bagla"),
+        ("🪢", "Adam asmaca", "adam_asmaca"),
+        ("🧠", "Bilgi yarışması", "bilgi_yarismasi"),
+        ("🎧", "Müzik yarışması", "muzik_yarismasi"),
+    ];
+    super::hub::run(ctx, intro, &items, true).await
 }
 
 /// İki oyunculu sıra tabanlı oyunlarda oyuncular.

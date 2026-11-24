@@ -135,11 +135,13 @@ pub async fn yardim(ctx: Context<'_>) -> Result<(), Error> {
         )]
     };
 
-    let intro = CreateEmbed::new()
-        .title(if admin { "📖 AxBot rehberi — üye + yönetici" } else { "📖 AxBot rehberi" })
-        .description(if admin { crate::help::ADMIN_INTRO } else { crate::help::USER_INTRO })
-        .colour(serenity::Colour::BLURPLE);
-    ctx.send(CreateReply::default().embed(intro).components(menu("")).ephemeral(true)).await?;
+    let intro = crate::ui::Message::new().accent(serenity::Colour::BLURPLE).text(format!(
+        "## {}
+{}",
+        if admin { "📖 AxBot rehberi — üye + yönetici" } else { "📖 AxBot rehberi" },
+        if admin { crate::help::ADMIN_INTRO } else { crate::help::USER_INTRO },
+    ));
+    crate::ui::reply(ctx, &intro.clone().separator().rows(menu("")).ephemeral(true)).await?;
 
     // Menü arka planda 10 dakika dinlenir; komut burada biter. Sadece komutu yazan kullanabilir.
     let all_commands = command_list(ctx);
@@ -150,6 +152,7 @@ pub async fn yardim(ctx: Context<'_>) -> Result<(), Error> {
         Context::Prefix(_) => None,
     };
     tokio::spawn(async move {
+        let mut shown = intro;
         while let Some(press) = serenity::ComponentInteractionCollector::new(&sctx)
             .author_id(author)
             .filter({
@@ -163,75 +166,76 @@ pub async fn yardim(ctx: Context<'_>) -> Result<(), Error> {
                 serenity::ComponentInteractionDataKind::StringSelect { values } => values.first().cloned().unwrap_or_default(),
                 _ => continue,
             };
-            let embed = if key == "all" {
+            shown = if key == "all" {
                 all_commands.clone()
             } else {
                 match crate::help::page(&key).filter(|p| admin || !p.admin) {
-                    Some(page) => CreateEmbed::new()
-                        .title(format!("{} {}", page.emoji, page.label))
-                        .description(page.body)
-                        .colour(if page.admin { serenity::Colour::ORANGE } else { serenity::Colour::BLURPLE })
-                        .footer(serenity::CreateEmbedFooter::new("Başka bir konu için menüyü kullan · Komut seçenekleri / yazınca görünür")),
+                    Some(page) => crate::ui::Message::new()
+                        .accent(if page.admin { serenity::Colour::ORANGE } else { serenity::Colour::BLURPLE })
+                        .text(format!("## {} {}
+{}", page.emoji, page.label, page.body))
+                        .text("-# Başka bir konu için menüyü kullan · Komut seçenekleri / yazınca görünür"),
                     None => continue,
                 }
             };
-            let update = serenity::CreateInteractionResponse::UpdateMessage(
-                serenity::CreateInteractionResponseMessage::new().embed(embed).components(menu(&key)),
-            );
-            if let Err(e) = press.create_response(&sctx.http, update).await {
+            if let Err(e) = crate::ui::update(&sctx.http, &press, &shown.clone().separator().rows(menu(&key))).await {
                 tracing::debug!(error = %e, "Yardım menüsü güncellenemedi");
             }
         }
         // Süre doldu: menü kaldırılır, son sayfa kalır.
         if let Some(interaction) = interaction {
-            let _ = interaction.edit_response(&sctx.http, serenity::EditInteractionResponse::new().components(Vec::new())).await;
+            let _ = crate::ui::edit_original(&sctx.http, &interaction.token, &shown).await;
         }
     });
     Ok(())
 }
 
-/// Bütün slash komutları kategorilere göre.
-fn command_list(ctx: Context<'_>) -> CreateEmbed {
-    let mut groups: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    for command in &ctx.framework().options().commands {
-        // Sağ tık menüsü komutları (`/` ile yazılmayanlar) listelenmez.
-        if command.hide_in_help || (command.slash_action.is_none() && command.subcommands.is_empty()) {
-            continue;
-        }
-        let mut line = format!("`/{}`", command.name);
-        if !command.subcommands.is_empty() {
-            let subs: Vec<&str> = command.subcommands.iter().map(|s| s.name.as_str()).collect();
-            line.push_str(&format!(" {}", subs.join(" · ")));
-        } else if let Some(desc) = command.description.as_deref().filter(|d| !d.is_empty()) {
-            // Kısa ipucu: ne işe yaradığı tek bakışta görünsün.
-            let short: String = desc.chars().take(60).collect();
-            line.push_str(&format!(" — {short}{}", if desc.chars().count() > 60 { "…" } else { "" }));
-        }
-        groups.entry(command.category.as_deref().unwrap_or("Diğer")).or_default().push(line);
-    }
-    let mut embed = CreateEmbed::new()
-        .title("📜 Tüm komutlar")
-        .description(
-            "💡 **İpuçları**\n\
-             • `/` yazıp komut adını seç; her seçeneğin açıklaması orada görünür.\n\
-             • Gruplu komutlarda önce grup, sonra alt komut seçilir (örn. `/müzik sıra`, `/davetler sıralama`).\n\
-             • Yanlış değer girersen bot sana doğru kullanımı gösterir.",
-        )
-        .colour(serenity::Colour::BLURPLE);
-    for (category, mut names) in groups {
-        names.sort();
-        // Discord alan sınırı 1024 karakter.
-        let mut text = String::new();
-        for name in names {
-            if text.len() + name.len() + 1 > 1000 {
-                break;
+/// Bütün slash komutları kategorilere göre (V2 mesajının 4000 karakter sınırına sığacak şekilde).
+fn command_list(ctx: Context<'_>) -> crate::ui::Message {
+    const BUDGET: usize = 3500;
+    let build = |with_hints: bool| {
+        let mut groups: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        for command in &ctx.framework().options().commands {
+            // Sağ tık menüsü komutları (`/` ile yazılmayanlar) listelenmez.
+            if command.hide_in_help || (command.slash_action.is_none() && command.subcommands.is_empty()) {
+                continue;
             }
-            if !text.is_empty() {
-                text.push('\n');
+            let mut line = format!("`/{}`", command.name);
+            if !command.subcommands.is_empty() {
+                let subs: Vec<&str> = command.subcommands.iter().map(|s| s.name.as_str()).collect();
+                line.push_str(&format!(" {}", subs.join(" · ")));
+            } else if let Some(desc) = command.description.as_deref().filter(|d| with_hints && !d.is_empty()) {
+                // Kısa ipucu: ne işe yaradığı tek bakışta görünsün.
+                let short: String = desc.chars().take(60).collect();
+                line.push_str(&format!(" — {short}{}", if desc.chars().count() > 60 { "…" } else { "" }));
             }
-            text.push_str(&name);
+            groups.entry(command.category.as_deref().unwrap_or("Diğer")).or_default().push(line);
         }
-        embed = embed.field(category, text, false);
+        groups
+            .into_iter()
+            .map(|(category, mut names)| {
+                names.sort();
+                format!("**{category}**
+{}", names.join("
+"))
+            })
+            .collect::<Vec<_>>()
+    };
+    let size = |groups: &[String]| groups.iter().map(|g| g.chars().count()).sum::<usize>();
+    let mut groups = build(true);
+    if size(&groups) > BUDGET {
+        groups = build(false);
     }
-    embed
+    // Hâlâ sığmıyorsa sondaki gruplar atılır.
+    while size(&groups) > BUDGET && groups.len() > 1 {
+        groups.pop();
+    }
+    let mut message = crate::ui::Message::new().accent(serenity::Colour::BLURPLE).text(
+        "## 📜 Tüm komutlar
+         💡 `/` yazıp komut adını seç; her seçeneğin açıklaması orada görünür. Gruplu komutlarda önce grup,          sonra alt komut seçilir (örn. `/müzik sıra`).",
+    );
+    for group in groups {
+        message = message.separator().text(group);
+    }
+    message
 }

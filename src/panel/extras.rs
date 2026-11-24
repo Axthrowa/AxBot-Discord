@@ -496,7 +496,7 @@ pub async fn embed_fields(state: &WebState, guild_id: GuildId, options: &Options
         let f_inline = shown.fields.get(i).is_some_and(|f| f.inline);
         let _ = write!(
             fields_html,
-            "<div style=\"display:flex;gap:8px;align-items:center;background:rgba(255,255,255,0.03);padding:8px;border-radius:4px;\">\
+            "<div style=\"display:flex;gap:8px;align-items:center;background:color-mix(in srgb, var(--text) 3%, transparent);padding:8px;border-radius:4px;\">\
              <input type=\"text\" name=\"embed_fn_{i}\" value=\"{}\" placeholder=\"Alan Başlığı {}\" style=\"flex:1;\">\
              <input type=\"text\" name=\"embed_fv_{i}\" value=\"{}\" placeholder=\"Alan Değeri {}\" style=\"flex:2;\">\
              <label style=\"display:flex;align-items:center;gap:4px;font-size:0.85em;cursor:pointer;\"><input type=\"checkbox\" name=\"embed_fi_{i}\"{}> Yan yana</label>\
@@ -513,7 +513,7 @@ pub async fn embed_fields(state: &WebState, guild_id: GuildId, options: &Options
          <h4>Canlı Önizleme (Discord Görünümü)</h4>\
          <div id=\"embed-preview\" style=\"border-left: 4px solid {colour}; background: #2b2d31; padding: 14px 16px; border-radius: 4px; max-width: 520px; font-family: sans-serif;\">\
            <div id=\"prev-author\" style=\"font-size:0.85em; font-weight:600; color:#dbdee1; margin-bottom:4px; display:{author_display};\">{}</div>\
-           <div id=\"prev-title\" style=\"font-weight:700; font-size:1.05em; color:#fff; margin-bottom:6px;\">{}</div>\
+           <div id=\"prev-title\" style=\"font-weight:700; font-size:1.05em; color:var(--text-strong); margin-bottom:6px;\">{}</div>\
            <div id=\"prev-desc\" style=\"font-size:0.9em; color:#dbdee1; line-height:1.4; white-space:pre-wrap;\">{}</div>\
            <div id=\"prev-footer\" style=\"font-size:0.75em; color:#949ba4; margin-top:8px; display:{footer_display};\">{}</div>\
          </div>\

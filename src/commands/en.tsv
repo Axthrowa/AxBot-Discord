@@ -222,6 +222,7 @@ C | başvuru itiraz-kanalı | appeal-channel | Channel where ban appeals arrive 
 P | başvuru itiraz-kanalı | kanal | channel | Channel seen by staff
 P | başvuru itiraz-kanalı | itiraz_sunucusu_daveti | appeal_server_invite | Permanent invite to a separate appeal server the bot is in (needed for banned users)
 C | oyun | game | Games: tic-tac-toe, connect four, hangman, trivia.
+C | oyun panel | panel | Button panel to pick a game.
 C | oyun xox | tic-tac-toe | Tic-tac-toe. Without an opponent you play against the bot.
 P | oyun xox | rakip | opponent | Opponent (empty = play against me)
 C | oyun dört-bağla | connect-four | Connect four. Without an opponent you play against the bot.
@@ -541,6 +542,7 @@ K | akış haber-özeti | kategori | Sinema | Movies
 K | akış haber-özeti | kategori | Dizi | TV series
 K | akış haber-özeti | kategori | Ücretsiz oyunlar | Free games
 C | ekonomi | economy | Economy commands (balance, daily reward, work, games, shop, stock market).
+C | ekonomi panel | panel | Button panel for quick economy actions.
 C | ekonomi bakiye | balance | Wallet and bank balance.
 P | ekonomi bakiye | kullanıcı | user | Member to look at (empty = you)
 C | ekonomi günlük | daily | Claim your daily reward (claiming every day grows your streak bonus).

@@ -30,6 +30,7 @@ mod events;
 mod modules;
 mod perms;
 mod timings;
+mod ui;
 mod feeds;
 mod catalog;
 mod feelm;

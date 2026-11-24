@@ -40,14 +40,6 @@ impl Punishment {
         (Self::Kick, "kick", "Sunucudan at"),
         (Self::Ban, "ban", "Yasakla"),
     ];
-
-    pub fn key(self) -> &'static str {
-        Self::ALL.iter().find(|(p, ..)| *p == self).map_or("strip", |(_, key, _)| key)
-    }
-
-    pub fn parse(raw: &str) -> Option<Self> {
-        Self::ALL.iter().find(|(_, key, _)| *key == raw).map(|(p, ..)| *p)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -390,11 +382,10 @@ mod tests {
 
     #[test]
     fn punishments_round_trip_and_defaults_are_safe() {
+        // Panel şeması anahtarı doğrudan JSON'a yazar; serde adıyla aynı olmalı.
         for (punishment, key, _) in Punishment::ALL {
-            assert_eq!(Punishment::parse(key), Some(punishment));
-            assert_eq!(punishment.key(), key);
+            assert_eq!(serde_json::to_value(punishment).unwrap(), serde_json::json!(key));
         }
-        assert_eq!(Punishment::parse("sil"), None);
         let defaults = AntiNukeSettings::default();
         assert!(!defaults.enabled && defaults.punishment == Punishment::Strip && defaults.limit >= MIN_LIMIT);
     }

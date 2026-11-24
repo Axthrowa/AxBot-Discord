@@ -689,6 +689,7 @@ async fn eko_sifirla(
     guild_only,
     rename = "ekonomi",
     subcommands(
+        "ekonomi_panel",
         "bakiye",
         "gunluk",
         "calis",
@@ -710,6 +711,24 @@ async fn eko_sifirla(
 )]
 pub async fn ekonomi(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
+}
+
+/// Sık kullanılan ekonomi işlemleri için düğmeli panel.
+#[poise::command(slash_command, guild_only, rename = "panel", category = "Ekonomi")]
+pub async fn ekonomi_panel(ctx: Context<'_>) -> Result<(), Error> {
+    let intro = crate::ui::Message::new().accent(COLOUR).text(
+        "## 🪙 Ekonomi\nBir düğmeye bas, işlem hemen yapılır. Para göndermek, bankaya yatırmak ya da oyun oynamak için \
+         `/ekonomi` komutlarını kullan.",
+    );
+    let items = [
+        ("👛", "Bakiye", "bakiye"),
+        ("🎁", "Günlük", "gunluk"),
+        ("💼", "Çalış", "calis"),
+        ("🏆", "Zenginler", "zenginler"),
+        ("🛒", "Mağaza", "magaza"),
+        ("🎒", "Envanter", "envanter"),
+    ];
+    super::hub::run(ctx, intro, &items, false).await
 }
 
 #[cfg(test)]

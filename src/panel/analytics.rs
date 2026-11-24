@@ -419,7 +419,7 @@ fn render_html(data: &AnalyticsData, guild_id: GuildId, guild_name: &str, days: 
         };
         let _ = write!(
             voice_bars,
-            "<div class=\"col\"><b>{dur_short}</b><div class=\"bar\" style=\"height:{pct}%;background:linear-gradient(180deg,#22c55e 0%,#15803d 100%)\" title=\"{}: {dur_full} ses\"></div><small>{}</small></div>",
+            "<div class=\"col\"><b>{dur_short}</b><div class=\"bar\" style=\"height:{pct}%;background:var(--ok)\" title=\"{}: {dur_full} ses\"></div><small>{}</small></div>",
             point.full_date,
             point.date_str,
         );

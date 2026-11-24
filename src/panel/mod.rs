@@ -13,21 +13,18 @@ mod analytics;
 mod auth;
 mod automation;
 mod botpage;
-mod community;
+pub(crate) mod community;
+mod components;
 mod extras;
 mod health;
 mod levels;
-mod manage;
+pub(crate) mod manage;
 mod media;
 mod moderation;
 mod pages;
 mod plugins;
+pub(crate) mod schema;
 
-/// Panelde bu adla bir eklenti sayfası var mı?
-#[cfg(test)]
-pub fn plugin_exists(slug: &str) -> bool {
-    plugins::find(slug).is_some()
-}
 mod welcome;
 mod templates;
 mod transcripts;
@@ -209,6 +206,13 @@ pub fn router() -> Router<WebState> {
         .route("/panel/sunucu/{guild}/ayarlar-disa-aktar", get(transfer::export))
         .route("/panel/sunucu/{guild}/otomasyon/test", post(automation::dry_run_handler))
         .route("/panel/panel.js", get(pages::script))
+        .route("/panel/theme.js", get(pages::theme_script))
+        .route("/panel/gorunum", get(components::page))
+        // Eski ve elle yazılabilecek adresler aynı sayfaya gider.
+        .route("/panel/g%C3%B6r%C3%BCn%C3%BCm", get(components::page))
+        .route("/panel/_bilesenler", get(components::page))
+        .route("/panel/bilesenler", get(components::page))
+        .route("/panel/bile%C5%9Fenler", get(components::page))
         .route("/panel/ws", get(ws::ws_handler))
 }
 

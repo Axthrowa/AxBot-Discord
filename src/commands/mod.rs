@@ -16,6 +16,7 @@ mod fun;
 mod giveaway;
 mod heist;
 mod highlight;
+mod hub;
 mod leveling;
 mod mod_tools;
 mod moderation;

@@ -114,9 +114,9 @@ pub async fn list_page(
 
             let _ = write!(
                 body,
-                "<tr style=\"border-bottom:1px solid var(--border, #3f4147);\">\
+                "<tr style=\"border-bottom:1px solid var(--line);\">\
                  <td style=\"padding:8px;\"><b>#{:04}</b></td>\
-                 <td style=\"padding:8px;\"><span class=\"badge\" style=\"background:rgba(88,101,242,0.2);color:#5865f2;padding:2px 6px;border-radius:4px;\">{}</span></td>\
+                 <td style=\"padding:8px;\"><span class=\"badge\" style=\"background:color-mix(in srgb, var(--accent) 20%, transparent);color:var(--accent);padding:2px 6px;border-radius:4px;\">{}</span></td>\
                  <td style=\"padding:8px;\">{}</td>\
                  <td style=\"padding:8px;\">{}</td>\
                  <td style=\"padding:8px;\">{}</td>\
